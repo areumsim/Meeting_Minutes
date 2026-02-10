@@ -1,0 +1,12 @@
+# ─── 필수 ───
+openai>=1.30.0          # OpenAI API (STT + GPT-4o)
+httpx>=0.27.0           # HTTP 클라이언트 (SSL 우회용, openai 내부 의존성)
+
+# ─── 선택 (폴백용) ───
+anthropic>=0.30.0       # Claude API (GPT 실패 시 자동 폴백)
+
+# ─── 시스템 요구사항 (pip 외) ───
+# ffmpeg: https://ffmpeg.org
+#   Windows: https://www.gyan.dev/ffmpeg/builds/ → PATH에 추가
+#   macOS:   brew install ffmpeg
+#   Linux:   sudo apt install ffmpeg

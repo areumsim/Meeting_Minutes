@@ -1,0 +1,1 @@
+{"root":["./src/app.tsx","./src/main.tsx","./src/components/dashboard.tsx","./src/components/fileupload.tsx","./src/components/modeselector.tsx","./src/components/recorder.tsx","./src/components/sessiondetail.tsx","./src/components/settings.tsx","./src/components/textinput.tsx","./src/lib/api.ts","./src/lib/db.ts","./src/lib/format.ts","./src/lib/types.ts"],"version":"5.9.3"}

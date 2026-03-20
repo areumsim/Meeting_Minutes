@@ -44,6 +44,20 @@ C_RESET  = "\033[0m"
 WS_SAMPLE_RATE = 24000   # Realtime API: 24kHz PCM16 mono 필수
 CHANNELS       = 1
 
+# ── CJK 환각 필터 ──
+import re as _re
+_CJK_RANGES = (
+    r'\u3000-\u303F\u3040-\u309F\u30A0-\u30FF'
+    r'\u4E00-\u9FFF\uF900-\uFAFF'
+)
+_RE_CJK = _re.compile(f'[{_CJK_RANGES}]')
+
+
+def _is_cjk_hallucination(text: str, threshold: float = 0.3) -> bool:
+    if not text or len(text.strip()) < 2:
+        return False
+    return (len(_RE_CJK.findall(text)) / len(text)) >= threshold
+
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 #  공유 번역 유틸리티
@@ -70,7 +84,8 @@ def translate_and_log(
             messages=[
                 {"role": "system",
                  "content": (f"전문 영한 번역가. 회의/세미나 발화를 자연스러운 한국어로 번역.{topic_hint}\n"
-                             "번역문만 출력. Markdown·설명 없이.")},
+                             "번역문만 출력. Markdown·설명 없이.\n"
+                             "반드시 한국어로만 출력. 중국어·일본어·기타 언어로 절대 출력하지 마세요.")},
                 {"role": "user", "content": text},
             ],
         )
@@ -335,8 +350,8 @@ class WebSocketTranscriber:
         item_id = getattr(event, "item_id", None) or ""
         final_text = (getattr(event, "transcript", "") or "").strip()
 
-        if not final_text:
-            # 빈 전사 — delta 중이었으면 indicator release 후 정리
+        if not final_text or _is_cjk_hallucination(final_text):
+            # 빈 전사 또는 CJK 환각 — delta 중이었으면 indicator release 후 정리
             if item_id in self._delta_started and self._indicator:
                 print(flush=True)  # 줄바꿈으로 라인 마무리
                 self._indicator.release()

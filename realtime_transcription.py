@@ -91,6 +91,7 @@ try:
         make_openai_client, get_api_key,
         LLMClient, generate_minutes, generate_summary, refine_script,
         save, TYPE_LABELS,
+        build_script_md, infer_speaker_names, _parse_diarized,
     )
     import meeting_minutes as _mm
 except ImportError as e:
@@ -137,6 +138,28 @@ C_RED    = "\033[31m"
 C_GRAY   = "\033[90m"
 C_RESET  = "\033[0m"
 C_BOLD   = "\033[1m"
+
+# ── CJK 환각 필터 (중국어·일본어 텍스트 제거) ──────────
+import re as _re
+# 한글·영문·숫자·기본 문장부호·공백 이외의 CJK 문자 비율이 높으면 환각으로 판정
+_CJK_RANGES = (
+    r'\u3000-\u303F'   # CJK 기호
+    r'\u3040-\u309F'   # 히라가나
+    r'\u30A0-\u30FF'   # 가타카나
+    r'\u4E00-\u9FFF'   # CJK 통합 한자
+    r'\uF900-\uFAFF'   # CJK 호환 한자
+)
+_RE_CJK = _re.compile(f'[{_CJK_RANGES}]')
+_RE_ALLOWED = _re.compile(r'[가-힣a-zA-Z0-9\s.,!?\'\"()\-:;/&@#%+*=\[\]{}~`]')
+
+
+def _is_cjk_hallucination(text: str, threshold: float = 0.3) -> bool:
+    """텍스트 내 CJK(중국어/일본어) 문자 비율이 threshold 이상이면 True."""
+    if not text or len(text.strip()) < 2:
+        return False
+    cjk_count = len(_RE_CJK.findall(text))
+    return (cjk_count / len(text)) >= threshold
+
 
 # 상단 고정 헤더 줄 수 (row 1: 상태, row 2: 구분선)
 _HEADER_LINES = 2
@@ -553,20 +576,38 @@ def cmd_recover(log_path: str, output_dir: str, llm_preferred: str,
     save(summary, summary_path, "요약본(md)")
     save(summary, summary_txt_path, "요약본(txt)")
 
-    # 전사 원문
+    # 화자 구분 포함 스크립트 (script.md)
+    script_md = build_script_md(segments)
+    script_path = os.path.join(output_dir, f"{stem}_script.md")
+    save(script_md, script_path, "스크립트")
+
+    # 번역된 스크립트 (번역 세그먼트가 있을 때)
+    has_translation = any(
+        s.get("text") != s.get("text_original") and s.get("text_original")
+        for s in segments
+    )
+    if has_translation:
+        script_ko_path = os.path.join(output_dir, f"{stem}_script_ko.md")
+        script_ko = build_script_md(segments, include_original=True)
+        save(script_ko, script_ko_path, "스크립트 (한국어)")
+
+    # 전사 원문 (화자 포함)
     lines = []
     for s in segments:
         sm, ss2 = divmod(int(s["start"]), 60)
+        spk = s.get("speaker", "")
+        spk_prefix = f" {spk}:" if spk else ""
         orig = s.get("text_original", s["text"])
         ko   = s["text"] if s["text"] != orig else None
-        lines.append(f"[{sm:02d}:{ss2:02d}] {orig}")
+        lines.append(f"[{sm:02d}:{ss2:02d}]{spk_prefix} {orig}")
         if ko:
-            lines.append(f"         → {ko}")
+            pad = " " * (8 + len(spk_prefix))
+            lines.append(f"{pad}→ {ko}")
     transcript_path = os.path.join(output_dir, f"{stem}_transcript.txt")
     save("\n".join(lines), transcript_path, "전사 원문")
 
     if send_email:
-        attach = [p for p in [minutes_path, summary_txt_path, transcript_path]
+        attach = [p for p in [minutes_path, summary_txt_path, script_path, transcript_path]
                   if os.path.isfile(p)]
         _send_report_email(stem, summary, attach)
 
@@ -825,7 +866,8 @@ class RealtimeTranscriber:
         # 번역을 STT와 병렬 실행하기 위한 스레드 풀
         self._translator_pool = ThreadPoolExecutor(max_workers=2)
 
-    def _run_stt(self, wav_bytes: bytes) -> str:
+    def _run_stt(self, wav_bytes: bytes):
+        """STT API 호출. diarize 모델이면 List[Dict] (화자+텍스트), 아니면 str 반환."""
         params: Dict[str, Any] = {"model": self.stt_model}
 
         if self._use_diarize:
@@ -848,6 +890,13 @@ class RealtimeTranscriber:
                 resp = self.client.audio.transcriptions.create(
                     file=audio_file, **params
                 )
+                # diarize 모델: 화자 정보 포함 세그먼트 리스트 반환
+                if self._use_diarize:
+                    data = resp if isinstance(resp, dict) else (
+                        resp.model_dump() if hasattr(resp, "model_dump") else json.loads(resp)
+                    )
+                    return _parse_diarized(data, 0)  # offset은 process()에서 보정
+
                 if isinstance(resp, dict):
                     return resp.get("text", "").strip()
                 if hasattr(resp, "text"):
@@ -869,15 +918,60 @@ class RealtimeTranscriber:
     def process(self, float_audio: np.ndarray) -> Optional[str]:
         wav = AudioRecorder.to_wav_bytes(float_audio)
         try:
-            text = self._run_stt(wav)
+            result = self._run_stt(wav)
         except Exception as e:
             print(f"\n  {C_RED}[STT 오류 - 청크 폐기]{C_RESET} {e}", file=sys.stderr)
             return None
 
-        if not text:
+        elapsed = time.time() - self._session_start
+        chunk_end = elapsed + len(float_audio) / SAMPLE_RATE
+
+        # diarize 모델: result가 List[Dict] (화자별 세그먼트)
+        if self._use_diarize and isinstance(result, list):
+            if not result or all(not s.get("text", "").strip() for s in result):
+                return None
+            combined_text = ""
+            for ds in result:
+                txt = ds.get("text", "").strip()
+                if not txt or _is_cjk_hallucination(txt):
+                    continue
+                spk = ds.get("speaker", "")
+                mm, ss = divmod(int(elapsed), 60)
+                spk_label = f" {spk}:" if spk else ""
+                line = f"\n{C_CYAN}[{mm:02d}:{ss:02d}]{C_RESET}{spk_label} {txt}"
+                if self._indicator and self._indicator._scroll_locked:
+                    self._indicator.buffer_line(line)
+                else:
+                    if self._indicator:
+                        self._indicator.claim()
+                    print(line, flush=True)
+                    if self._indicator:
+                        self._indicator.release(suppress_draw=bool(self.translate))
+
+                seg = {
+                    "start":         elapsed,
+                    "end":           chunk_end,
+                    "text":          txt,
+                    "text_original": txt,
+                    "speaker":       spk,
+                }
+                self.segments.append(seg)
+                if self._indicator:
+                    self._indicator.increment_seg()
+
+                if self.translate:
+                    self._translator_pool.submit(self._translate_and_log, txt, seg)
+                else:
+                    if self.logger:
+                        self.logger.append(seg)
+                combined_text += (" " if combined_text else "") + txt
+            return combined_text or None
+
+        # 일반 모델: result가 str
+        text = result if isinstance(result, str) else ""
+        if not text or _is_cjk_hallucination(text):
             return None
 
-        elapsed = time.time() - self._session_start
         mm, ss  = divmod(int(elapsed), 60)
 
         # ① 영어 즉시 출력 — indicator 하단 고정 영역과 충돌 방지
@@ -898,7 +992,7 @@ class RealtimeTranscriber:
 
         seg = {
             "start":         elapsed,
-            "end":           elapsed + len(float_audio) / SAMPLE_RATE,
+            "end":           chunk_end,
             "text":          text,
             "text_original": text,
             "speaker":       "",
@@ -1665,6 +1759,22 @@ class RealtimeSession:
         mm, ss  = divmod(int(total_s), 60)
         print(f"\n  총 {len(segments)}개 세그먼트 / {mm}분 {ss}초")
 
+        # ── 화자 이름 LLM 추론 (diarize 모델 사용 시) ──
+        import re as _re
+        unique_spks = {s.get("speaker", "") for s in segments if s.get("speaker")}
+        has_generic = any(_re.match(r'[Ss]peaker[\s_]?[A-Za-z0-9]', spk) for spk in unique_spks)
+        if has_generic:
+            try:
+                inferred = infer_speaker_names(segments, self.llm)
+                if inferred:
+                    print(f"  화자 추론 결과: {inferred}")
+                    for seg in segments:
+                        orig = seg.get("speaker", "")
+                        if orig in inferred:
+                            seg["speaker"] = inferred[orig]
+            except Exception as e:
+                print(f"  {C_YELLOW}화자 이름 추론 실패 ({e}) → 원본 레이블 유지{C_RESET}")
+
         stem = f"realtime_{self.logger.session_ts}"
 
         print(f"\n{'═'*60}")
@@ -1674,6 +1784,7 @@ class RealtimeSession:
         summary_path        = os.path.join(self.output_dir, f"{stem}_summary.md")
         summary_txt_path    = os.path.join(self.output_dir, f"{stem}_summary.txt")
         transcript_path     = os.path.join(self.output_dir, f"{stem}_transcript.txt")
+        script_path         = os.path.join(self.output_dir, f"{stem}_script.md")
         refined_script_path = os.path.join(self.output_dir, f"{stem}_refined_script.txt")
         summary_text        = ""
 
@@ -1722,24 +1833,41 @@ class RealtimeSession:
             print(f"\n  나중에 복구 가능:")
             print(f"    python realtime_transcription.py --recover {self.logger.log_path}")
 
-        # 전사 원문
+        # 화자 구분 포함 스크립트 (script.md)
+        script_md = build_script_md(segments)
+        save(script_md, script_path, "스크립트")
+
+        # 번역된 스크립트 (translate 모드일 때)
+        has_translation = any(
+            s.get("text") != s.get("text_original") and s.get("text_original")
+            for s in segments
+        )
+        if has_translation:
+            script_ko_path = os.path.join(self.output_dir, f"{stem}_script_ko.md")
+            script_ko = build_script_md(segments, include_original=True)
+            save(script_ko, script_ko_path, "스크립트 (한국어)")
+
+        # 전사 원문 (화자 포함)
         lines = []
         for s in segments:
             sm, ss2 = divmod(int(s["start"]), 60)
+            spk = s.get("speaker", "")
+            spk_prefix = f" {spk}:" if spk else ""
             orig = s.get("text_original", s["text"])
             ko   = s["text"] if s["text"] != orig else None
-            lines.append(f"[{sm:02d}:{ss2:02d}] {orig}")
+            lines.append(f"[{sm:02d}:{ss2:02d}]{spk_prefix} {orig}")
             if ko:
-                lines.append(f"         → {ko}")
+                pad = " " * (8 + len(spk_prefix))
+                lines.append(f"{pad}→ {ko}")
         save("\n".join(lines), transcript_path, "전사 원문")
 
         # 메타데이터 저장
         meta_path = os.path.join(self.output_dir, f"{stem}_meta.json")
         self._save_meta(meta_path, len(segments), total_s)
 
-        # 이메일 발송 — minutes.md + summary.txt + transcript.txt 첨부
+        # 이메일 발송 — minutes.md + summary.txt + script.md + transcript.txt 첨부
         if self.do_email and summary_text:
-            attach = [p for p in [minutes_path, summary_txt_path, transcript_path]
+            attach = [p for p in [minutes_path, summary_txt_path, script_path, transcript_path]
                       if os.path.isfile(p)]
             _send_report_email(stem, summary_text, attach, self.args)
 
@@ -1779,9 +1907,9 @@ def main():
     )
     parser.add_argument("--type", default=_c("realtime.type", "meeting"),
                         choices=["meeting", "seminar", "lecture"])
-    parser.add_argument("--language", default=_c("realtime.language", "en"),
-                        choices=["en", "ko", "auto"],
-                        help="입력 언어 (en=영어, ko=한국어, auto=자동)")
+    parser.add_argument("--language", default=_c("realtime.language", "ko"),
+                        choices=["en", "ko"],
+                        help="입력 언어 (en=영어, ko=한국어)")
     parser.add_argument("--model", default=DEFAULT_STT_MODEL, choices=STT_MODELS)
     parser.add_argument("--translate", action="store_true",
                         default=_c("realtime.translate", False),

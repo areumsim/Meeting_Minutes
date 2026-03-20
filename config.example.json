@@ -27,7 +27,7 @@
       "gpt-4o-transcribe-diarize",
       "whisper-1"
     ],
-    "stt": "gpt-4o-mini-transcribe",
+    "stt": "gpt-4o-mini-transcribe-2025-12-15",
 
     "_llm_options": ["gpt", "claude"],
     "llm": "gpt",

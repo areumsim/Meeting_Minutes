@@ -9,6 +9,23 @@ output/
 # ── 빌드 산출물 ──────────────────────────────────
 build/
 dist/
+*.tsbuildinfo
+
+# ── Node ─────────────────────────────────────────
+node_modules/
+
+# ── iOS / Capacitor ──────────────────────────────
+*.xcworkspace
+xcuserdata/
+DerivedData/
+*.ipa
+.swiftpm/
+web/frontend/ios/App/App/public/
+web/frontend/ios/App/Pods/
+
+# ── 플랫폼별 바이너리 (esbuild, rollup 등) ──────
+*.exe
+*.node
 
 # ── Python ────────────────────────────────────────
 __pycache__/

@@ -119,6 +119,10 @@ const callWhisperAPI = async (file: File | Blob, apikey: string, topic?: string,
     headers: { "Authorization": `Bearer ${apikey}` },
     body: fd
   });
+  if (!res.ok) {
+    const errText = await res.text().catch(() => res.statusText);
+    throw new Error(`Whisper API failed (${res.status}): ${errText}`);
+  }
   const data = await res.json();
   if (data.error) throw new Error(data.error.message);
   return data.text || "";
@@ -271,11 +275,31 @@ export function createRealtimeWS(): WebSocket {
   if (!apiKey) throw new Error("OpenAI API Key is missing. Please configure it in Settings.");
 
   const url = "wss://api.openai.com/v1/realtime?model=gpt-4o-realtime-preview-2024-10-01";
-  return new WebSocket(url, [
+  const ws = new WebSocket(url, [
     "realtime",
     `openai-insecure-api-key.${apiKey}`,
     "openai-beta.realtime-v1"
   ]);
+
+  // 모바일 WebView 연결 타임아웃 감지
+  const timeout = setTimeout(() => {
+    if (ws.readyState !== WebSocket.OPEN) {
+      console.error("[RealtimeWS] Connection timeout (10s). readyState:", ws.readyState);
+      ws.close();
+    }
+  }, 10000);
+
+  ws.addEventListener('open', () => {
+    clearTimeout(timeout);
+    console.log("[RealtimeWS] Connected successfully");
+  });
+
+  ws.addEventListener('error', (e) => {
+    clearTimeout(timeout);
+    console.error("[RealtimeWS] WebSocket error:", e);
+  });
+
+  return ws;
 }
 
 export const saveCompleteSession = async (sessionData: any, segments: any[]) => {
@@ -304,6 +328,10 @@ const callOpenAIWithFallback = async (prompt: string, apikey: string, primaryMod
         headers: { "Content-Type": "application/json", "Authorization": `Bearer ${apikey}` },
         body: JSON.stringify({ model, messages: [{ role: "user", content: prompt }] })
      });
+     if (!res.ok) {
+       const errText = await res.text().catch(() => res.statusText);
+       throw new Error(`OpenAI API failed (${res.status}): ${errText}`);
+     }
      const data = await res.json();
      if (data.error) throw new Error(data.error.message || JSON.stringify(data.error));
      return data.choices[0].message.content;

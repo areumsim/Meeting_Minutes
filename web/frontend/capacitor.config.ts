@@ -5,7 +5,13 @@ const config: CapacitorConfig = {
   appName: 'AI 회의록',
   webDir: 'dist',
   server: {
-    androidScheme: 'https'
+    androidScheme: 'https',
+    iosScheme: 'https',
+    hostname: 'localhost',
+    allowNavigation: [
+      'api.openai.com',
+      '*.openai.com',
+    ],
   },
   ios: {
     contentInset: 'automatic',

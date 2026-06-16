@@ -354,7 +354,13 @@ class BrowserRealtimeSession:
             self._send_to_browser({"type": "error", "message": msg})
 
     def _translate_segment(self, text, seg, openai_client, translate_model, topic):
-        """세그먼트 번역 (백그라운드 스레드)."""
+        """세그먼트 번역 (백그라운드 스레드).
+
+        주의: 이는 실시간 '스트리밍' 번역(발화 1건씩 즉시)로, 배치용
+        meeting_minutes.translate_segments(전체 세그먼트를 컨텍스트 윈도우로 일괄 번역)와는
+        실행 맥락이 다른 **의도된 별도 구현**이다. 둘을 통합하면 실시간 지연·스트리밍이 깨지므로
+        합치지 말 것. (회의록 본문 생성 LLM은 config.models.llm을 따름 — 번역만 OpenAI 고정)
+        """
         topic_hint = f"\n주제 맥락: {topic}" if topic else ""
         try:
             r = openai_client.chat.completions.create(
@@ -499,7 +505,8 @@ class BrowserRealtimeSession:
         try:
             import meeting_minutes as mm
 
-            llm = mm.LLMClient(preferred="gpt")
+            # 회의록 생성 LLM은 config.json(models.llm)을 따른다 (gpt 하드코딩 제거)
+            llm = mm.LLMClient(preferred=mm._c("models.llm", "gpt") or "gpt")
 
             # 교정 스크립트
             refined_text = None
@@ -557,6 +564,29 @@ class BrowserRealtimeSession:
                         db.upsert_document(self.session_id, "actions", actions, "json")
                 except Exception:
                     pass
+
+            # 후처리: 용어 보완 + Obsidian 노트 기록 (+옵션 이메일)
+            try:
+                _minutes = locals().get("minutes") or ""
+                _summary = locals().get("summary") or ""
+                _actions_md = ""
+                if doc_type == "meeting":
+                    _aj = locals().get("actions")
+                    if _aj:
+                        try:
+                            _actions_md = mm.format_actions_md(_aj)
+                        except Exception:
+                            pass
+                if _minutes:
+                    mm.enrich_and_publish(
+                        title=title or f"실시간 {session_dt}",
+                        doc_type=doc_type, minutes_md=_minutes, llm=llm,
+                        summary_md=_summary, actions_md=_actions_md,
+                        topic=topic, session_dt=session_dt, attendees=[],
+                        notify=("email" if mm._c("realtime.email_on_finish", False) else None),
+                    )
+            except Exception as e:
+                print(f"[finalize] enrich/obsidian error: {e}")
 
             duration = self.segments[-1]["end"] - self.segments[0]["start"] if self.segments else 0
             db.update_session_status(

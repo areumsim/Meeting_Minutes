@@ -1,0 +1,19 @@
+{
+  "_readme": [
+    "Claude Code / Cowork ↔ Obsidian 볼트 연결용 MCP 설정.",
+    "이 파일을 .mcp.json 으로 복사하고 Bearer 토큰을 실제 값으로 채우세요.",
+    "복사(Windows): copy .mcp.json.example .mcp.json",
+    ".mcp.json 은 .gitignore 에 포함되어 git에 올라가지 않습니다 (토큰 보호).",
+    "토큰 발급: Obsidian → 설정 → Local REST API → 'API Key' 복사",
+    "토큰은 config.json 의 obsidian.api_key 와 동일한 값입니다."
+  ],
+  "mcpServers": {
+    "obsidian": {
+      "type": "http",
+      "url": "https://127.0.0.1:27124/mcp/",
+      "headers": {
+        "Authorization": "Bearer <OBSIDIAN_LOCAL_REST_API_KEY>"
+      }
+    }
+  }
+}

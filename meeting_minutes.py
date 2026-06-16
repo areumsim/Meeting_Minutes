@@ -466,6 +466,56 @@ class LLMClient:
             "  → SSL 에러라면: --ssl-no-verify 또는 config.json ssl.verify: false"
         )
 
+    def web_research(self, query: str, max_uses: int = 3,
+                     max_tokens: int = 1500) -> Dict[str, Any]:
+        """Anthropic 웹 검색 도구로 외부 자료를 보완해 설명을 생성.
+        반환: {"text": 설명, "sources": [{"title","url"}], "searched": bool}
+        웹 검색 불가(키 없음/도구 미지원/회사망 차단) 시 모델 지식 기반으로 폴백(searched=False).
+        """
+        system = (
+            "당신은 회의·세미나 기록을 보완하는 리서치 어시스턴트입니다.\n"
+            "주어진 용어/기술/인물/기업에 대해 정확하고 간결한 한국어 설명(2~4문장)을 제공하세요.\n"
+            "가능하면 웹 검색으로 최신·정확한 사실을 확인하고, 모르면 모른다고 하세요. 추측 금지."
+        )
+        # 1) Anthropic 웹 검색 도구 시도
+        if self.anthropic:
+            try:
+                r = self.anthropic.messages.create(
+                    model=CLAUDE_MODEL, max_tokens=max_tokens, system=system,
+                    messages=[{"role": "user", "content": query}],
+                    tools=[{"type": "web_search_20250305",
+                            "name": "web_search", "max_uses": max_uses}],
+                )
+                text_parts: List[str] = []
+                sources: List[Dict[str, str]] = []
+                for block in r.content:
+                    btype = getattr(block, "type", "")
+                    if btype == "text":
+                        text_parts.append(getattr(block, "text", "") or "")
+                    elif btype == "web_search_tool_result":
+                        for item in (getattr(block, "content", None) or []):
+                            url = getattr(item, "url", None)
+                            if url:
+                                sources.append({"title": getattr(item, "title", None) or url,
+                                                "url": url})
+                text = "\n".join(t for t in text_parts if t).strip()
+                if text:
+                    seen = set(); uniq = []
+                    for s in sources:
+                        if s["url"] not in seen:
+                            seen.add(s["url"]); uniq.append(s)
+                    self._call_count += 1
+                    return {"text": text, "sources": uniq[:5], "searched": True}
+            except Exception as e:
+                logger.warning(f"[web_research] 웹검색 실패 → 폴백: {type(e).__name__}: {e}")
+
+        # 2) 폴백: 일반 LLM (라이브 검색 없음)
+        try:
+            text = self.chat(system, query, temp=0.2, max_tokens=max_tokens)
+            return {"text": text or "", "sources": [], "searched": False}
+        except Exception:
+            return {"text": "", "sources": [], "searched": False}
+
     def stats(self) -> str:
         return f"LLM 호출 {self._call_count}회  토큰 {self._total_tokens:,}개 (추정)"
 
@@ -1760,6 +1810,116 @@ def _send_notification(
 
 
 # ──────────────────────────────────────────────
+#  후처리: 용어 보완 + Obsidian 기록 (+ 옵션 이메일)
+# ──────────────────────────────────────────────
+def _gather_attendees(segments: List[Dict]) -> List[str]:
+    """세그먼트 화자에서 실명/역할만 추출(‘Speaker A’ 류 제외)."""
+    names: List[str] = []
+    seen = set()
+    for s in segments or []:
+        spk = (s.get("speaker") or "").strip()
+        if not spk or re.match(r'[Ss]peaker[\s_]?[A-Za-z0-9]', spk):
+            continue
+        if spk.lower() not in seen:
+            seen.add(spk.lower())
+            names.append(spk)
+    return names[:10]
+
+
+def enrich_and_publish(
+    *,
+    title: str,
+    doc_type: str,
+    minutes_md: str,
+    llm: "LLMClient",
+    summary_md: str = "",
+    actions_md: str = "",
+    topic: str = "",
+    session_dt: str = "",
+    attendees: Optional[List[str]] = None,
+    notify: Optional[str] = None,
+    email_summary_path: str = "",
+    email_files: Optional[List[str]] = None,
+) -> Dict[str, Any]:
+    """배치/실시간/화자수정 경로가 공유하는 후처리:
+       1) 용어·인물·기업 외부검색 보완(enrichment)
+       2) Obsidian 볼트에 회의록 노트 기록(+참고노트 백링크)
+       3) (옵션) 이메일 발송
+    반환: {"glossary_md","obsidian_path","related_notes","sources"}
+    """
+    result: Dict[str, Any] = {"glossary_md": "", "obsidian_path": None,
+                              "related_notes": [], "sources": []}
+
+    # Obsidian 클라이언트 (설정 없거나 연결 실패 시 None → 볼트 기록만 생략)
+    obs = None
+    try:
+        from obsidian import ObsidianClient
+        obs = ObsidianClient.from_config()
+        if obs is not None and not obs.ping():
+            warn("Obsidian 연결 실패 → 볼트 기록 건너뜀")
+            obs.close(); obs = None
+    except Exception as e:
+        logger.warning(f"[publish] Obsidian 초기화 실패: {e}")
+        obs = None
+
+    # 1) 용어 보완
+    enr = {"glossary_md": "", "related_notes": [], "sources": []}
+    try:
+        import enrichment
+        enr = enrichment.enrich(minutes_md, llm, obs=obs, topic=topic)
+        result.update(enr)
+    except Exception as e:
+        warn(f"용어 보완 실패: {e}")
+
+    # 2) Obsidian 노트 기록
+    if obs is not None:
+        try:
+            path = obs.write_meeting_note(
+                title=title, body_md=minutes_md, doc_type=doc_type,
+                topic=topic, attendees=attendees or [], session_dt=session_dt,
+                glossary_md=enr.get("glossary_md", ""),
+                related_notes=enr.get("related_notes", []),
+                external_refs=enr.get("sources", []),
+                summary_md=summary_md, actions_md=actions_md,
+            )
+            result["obsidian_path"] = path
+            if path:
+                ok(f"Obsidian 노트 기록 → {path}")
+        except Exception as e:
+            warn(f"Obsidian 노트 기록 실패: {e}")
+        finally:
+            obs.close()
+
+    # 3) 이메일(옵션) — 배치는 main 루프가 일괄 발송하므로 보통 None.
+    #    실시간 경로는 .md 파일이 없으므로(DB 저장), 회의록을 임시파일로 만들어 본문/첨부에 실어 보냄.
+    if notify:
+        tmp_dir = None
+        try:
+            summary_path = email_summary_path
+            files = list(email_files or [])
+            if not summary_path and (summary_md or minutes_md):
+                body = minutes_md or summary_md
+                glossary = result.get("glossary_md", "")
+                if glossary and glossary not in body:
+                    body = f"{body}\n\n## 용어·배경\n\n{glossary}\n"
+                tmp_dir = tempfile.mkdtemp(prefix="mtg_mail_")
+                safe = re.sub(r'[\\/:*?"<>|]', "_", title)[:40].strip() or "회의록"
+                tmp_path = os.path.join(tmp_dir, f"{safe}_회의록.md")
+                with open(tmp_path, "w", encoding="utf-8") as f:
+                    f.write(body)
+                summary_path = tmp_path
+                files.append(tmp_path)
+            _send_notification(notify, title, summary_path or "", files)
+        except Exception as e:
+            warn(f"이메일 발송 실패: {e}")
+        finally:
+            if tmp_dir:
+                shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    return result
+
+
+# ──────────────────────────────────────────────
 #  단일 파일 처리 파이프라인
 # ──────────────────────────────────────────────
 def process_single(
@@ -1919,6 +2079,24 @@ def process_single(
         save(format_actions_md(actions_json),
              os.path.join(output_dir, f"{pfx}actions.md"), "액션 아이템 (마크다운)")
 
+    # 9. 후처리: 용어 보완 + Obsidian 기록 (이메일은 main 루프가 일괄 발송)
+    try:
+        actions_md = format_actions_md(actions_json) if actions_json else ""
+        enr = enrich_and_publish(
+            title=title, doc_type=args.type, minutes_md=minutes, llm=llm,
+            summary_md=summary, actions_md=actions_md,
+            topic=topic_str, session_dt=session_dt,
+            attendees=_gather_attendees(segments_for_doc),
+        )
+        # 로컬 minutes.md 에도 용어·배경 추가(이메일 첨부/오프라인 보존)
+        glossary = enr.get("glossary_md", "")
+        if glossary:
+            with open(os.path.join(output_dir, f"{pfx}minutes.md"),
+                      "a", encoding="utf-8") as f:
+                f.write(f"\n\n## 용어·배경\n\n{glossary}\n")
+    except Exception as e:
+        warn(f"후처리(용어/Obsidian) 실패 → 본문은 정상 저장됨: {e}")
+
     return summary
 
 
@@ -2016,6 +2194,11 @@ def main():
         except Exception as e:
             err(f"프로필 오류: {e}")
             sys.exit(1)
+
+    # ── 완료 알림 기본값 (config.json notify.on_finish) ──
+    # --notify(및 프로필) 미지정 시 config의 notify.on_finish(email/slack/teams) 자동 적용
+    if not getattr(args, "notify", None):
+        args.notify = _c("notify.on_finish", None) or None
 
     # ── 로깅 ─────────────────────────────────────────────
     setup_logging(args.debug, args.output_dir)
@@ -2161,6 +2344,17 @@ def main():
             summary = generate_summary(minutes, llm, args.type, debug_dir)
             save(summary, os.path.join(out_dir, f"{stem}_summary.md"), "요약본")
             ok("화자 수정 및 재생성 완료!")
+
+            # 후처리: 용어 보완 + Obsidian 기록
+            try:
+                enrich_and_publish(
+                    title=title, doc_type=args.type, minutes_md=minutes, llm=llm,
+                    summary_md=summary,
+                    topic=getattr(args, "topic", "") or "",
+                    attendees=_gather_attendees(segments),
+                )
+            except Exception as e:
+                warn(f"후처리(용어/Obsidian) 실패: {e}")
 
             if args.notify:
                 _send_notification(

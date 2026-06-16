@@ -4,6 +4,9 @@
 실시간 마이크 녹취(`realtime_transcription.py`)와 파일 배치 처리(`meeting_minutes.py`) 모두 지원합니다.
 **웹 UI**(`run_ui.bat`)로도 동일한 기능을 브라우저에서 사용할 수 있습니다.
 
+> 🆕 **Obsidian + Claude 연동**: 회의록을 Claude로 작성하고, 전문용어·인물·기업을 자동 검색해
+> Obsidian 볼트에 정리한 뒤 메일로 발송합니다. → **쉬운 사용법: [`docs/GUIDE_Obsidian_Claude.md`](docs/GUIDE_Obsidian_Claude.md)**
+
 ---
 
 ## 빠른 시작 (5분)

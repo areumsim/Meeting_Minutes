@@ -34,13 +34,20 @@ def _build_args(
     """CLI 모드 번호로부터 argparse.Namespace를 구성."""
     preset = MODE_PRESETS.get(mode, MODE_PRESETS[2])
 
+    # 회의록 생성 LLM은 config.json(models.llm)을 따른다 (gpt 하드코딩 제거)
+    try:
+        import config_loader as _cfg
+        _llm = _cfg.get("models.llm", "gpt") or "gpt"
+    except Exception:
+        _llm = "gpt"
+
     return argparse.Namespace(
         type=doc_type or preset["type"],
         language=language or preset["language"],
         translate=translate if translate else preset["translate"],
         translate_script=preset.get("translate", False),
         model=None,
-        llm="gpt",
+        llm=_llm,
         speakers=speakers,
         topic=topic,
         title=title,

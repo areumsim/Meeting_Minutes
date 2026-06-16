@@ -9,20 +9,16 @@ echo  ║  Meeting Minutes - EXE Build              ║
 echo  ╚════════════════════════════════════════════╝
 echo.
 
-:: 1. 프론트엔드 빌드 확인
+:: 1. 프론트엔드 빌드 (EXE 배포용이므로 항상 새로 빌드)
+echo  [1/3] Building frontend...
+cd web\frontend
+call npm install
+call npm run build
+cd ..\..
 if not exist "web\frontend\dist\index.html" (
-    echo  [1/3] Building frontend...
-    cd web\frontend
-    call npm install
-    call npm run build
-    cd ..\..
-    if not exist "web\frontend\dist\index.html" (
-        echo  [ERROR] Frontend build failed.
-        pause
-        exit /b 1
-    )
-) else (
-    echo  [1/3] Frontend already built. OK
+    echo  [ERROR] Frontend build failed.
+    pause
+    exit /b 1
 )
 
 :: 2. PyInstaller 확인

@@ -55,12 +55,23 @@ def check_node_deps():
 
 
 def build_frontend():
-    """프론트엔드 빌드."""
-    if not DIST_DIR.exists():
+    """프론트엔드 빌드 (항상 최신 상태로)."""
+    check_node_deps()
+
+    # src 파일이 dist보다 새로우면 빌드 (dist 없으면 무조건 빌드)
+    src_dir = FRONTEND_DIR / "src"
+    needs_build = not DIST_DIR.exists()
+    if not needs_build and src_dir.exists():
+        dist_mtime = max((f.stat().st_mtime for f in DIST_DIR.rglob("*") if f.is_file()), default=0)
+        src_mtime  = max((f.stat().st_mtime for f in src_dir.rglob("*")  if f.is_file()), default=0)
+        needs_build = src_mtime > dist_mtime
+
+    if needs_build:
         print("\n  프론트엔드 빌드 중...")
-        check_node_deps()
         subprocess.check_call(["npm", "run", "build"], cwd=str(FRONTEND_DIR), shell=True)
         print("  빌드 완료.\n")
+    else:
+        print("  프론트엔드 최신 상태 (빌드 스킵)\n")
 
 
 def main():

@@ -98,11 +98,16 @@
   "email": {
     "_comment": [
       "Gmail 앱 비밀번호: https://myaccount.google.com/apppasswords (2단계 인증 먼저)",
-      "Naver: 메일 설정 → POP3/SMTP 사용 → 비밀번호 발급"
+      "Naver: 메일 설정 → POP3/SMTP 사용 → 비밀번호 발급",
+      "Outlook/Microsoft365(회사메일): smtp_host=smtp.office365.com, smtp_port=587.",
+      "  → 회사 비밀번호 또는 앱 비밀번호 사용. 테넌트가 SMTP AUTH 차단 시 IT에 허용 요청.",
+      "smtp_host 가 비어있으면 발신자 도메인으로 자동 추정(gmail/naver/outlook 인식)."
     ],
     "sender":    "sender@naver.com",
     "password":  "",
-    "recipient": "recipient@company.com"
+    "recipient": "recipient@company.com",
+    "smtp_host": "",
+    "smtp_port": 0
   },
 
   "notify": {
@@ -126,6 +131,7 @@
     "enabled":      false,
     "api_url":      "https://127.0.0.1:27124",
     "api_key":      "",
+    "vault_path":   "",
     "notes_subdir": "00_Meetings",
     "refs_subdir":  "01_References",
     "_project_comment": "프로젝트명. 회의록·용어가 같은 도메인 폴더로 묶임(00_Meetings/<도메인>/, 01_References/<도메인>/). 비우면 기타/·공통/",
@@ -135,5 +141,56 @@
     "verify_ssl":   false
   },
 
-  "output_dir": "./output"
+  "output_dir": "./output",
+
+  "vault_watcher": {
+    "_comment": "음성 파일 폴더 자동 감시 및 처리 파이프라인. enabled:true 로 활성화.",
+    "enabled": false,
+    "watch_folders": [],
+    "output_folder": "Inbox/Processed Recordings",
+    "processed_state_path": "data/processed_audio.json",
+    "supported_extensions": ["mp3", "m4a", "wav", "webm", "mp4"],
+    "poll_interval": 10,
+    "stability_checks": 3,
+    "stability_interval": 2.0,
+    "_min_size_mb_comment": "이 크기 미만 파일은 건너뜀",
+    "min_size_mb": 0.5
+  },
+
+  "indexing": {
+    "_comment": "볼트 .md 파일 키워드 인덱스 — wiki_ask 및 관련 노트 자동 링크에 사용.",
+    "enabled": true,
+    "index_path": "data/vault_index.json",
+    "auto_reindex_on_start": false,
+    "_vault_path_comment": "비우면 obsidian.vault_path 를 공유. 직접 파일시스템 접근 경로.",
+    "vault_path": ""
+  },
+
+  "wiki": {
+    "_comment": "LLM Wiki Q&A 및 실시간 사실 검증 설정.",
+    "citation_required": true,
+    "max_context_notes": 5,
+    "unverified_marker": "확인 불가",
+    "conflict_marker": "⚠️ 충돌",
+    "context_max_chars": 2000,
+    "_online_search_comment": "true 시 vault에 없는 내용을 웹 검색으로 보완(Claude web_research 사용, 비용 발생)",
+    "online_search_enabled": false,
+    "_online_search_trigger_comment": "technical=기술 용어 감지 시만, always=항상, never=사용 안 함",
+    "online_search_trigger": "technical",
+    "_realtime_comment": "실시간 전사 중 세그먼트별 vault 검색 on/off",
+    "realtime_vault_search": false,
+    "_realtime_interval_comment": "N개 세그먼트마다 1회 검색 (0=매 세그먼트, throttle)",
+    "realtime_search_interval": 3,
+    "_realtime_fact_check_comment": "실시간 전사 중 발화 내용을 vault 노트와 비교해 충돌·검증 필요 항목 표시 (향후 구현)",
+    "realtime_fact_check": false,
+    "_realtime_web_search_interval_comment": "웹 검색을 트리거할 세그먼트 간격 (0=사용 안 함)",
+    "realtime_web_search_interval": 0
+  },
+
+  "analysis": {
+    "_comment": "분석 프롬프트 템플릿 설정. prompts/ 폴더의 .md 파일로 교체 가능.",
+    "templates_dir": "prompts",
+    "_default_type_options": ["meeting", "seminar", "lecture", "memo"],
+    "default_type": "meeting"
+  }
 }

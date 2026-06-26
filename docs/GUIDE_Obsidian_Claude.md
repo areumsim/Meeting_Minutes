@@ -8,17 +8,17 @@
 
 ---
 
-## ✅ 지금 상태 — 이미 다 켜져 있습니다
+## ✅ 사용 전 확인
 
-이 PC는 설정이 끝나 있습니다. **바로 쓰면 됩니다.**
+아래 항목이 설정되어 있으면 녹음 파일 처리 후 Obsidian 저장과 메일 발송까지 자동으로 이어집니다.
 
-| 기능 | 상태 |
+| 기능 | 확인할 설정 |
 |------|------|
-| Claude로 회의록 작성 | ✅ 켜짐 |
-| 용어·인물·기업 자동 검색·설명 | ✅ 켜짐 |
-| Obsidian 볼트에 자동 저장 | ✅ 켜짐 (`00_Meetings`, `01_References`) |
-| 완료 후 메일 자동 발송 | ✅ 켜짐 |
-| STT(음성→글) | ✅ OpenAI |
+| Claude로 회의록 작성 | `models.llm = "claude"` 및 Anthropic API 키 |
+| 용어·인물·기업 자동 검색·설명 | Obsidian 연결 및 후처리 설정 |
+| Obsidian 볼트에 자동 저장 | `obsidian.enabled`, `obsidian.api_key`, `obsidian.vault_path` |
+| 완료 후 메일 자동 발송 | `notify.on_finish = "email"` 및 `email` 섹션 |
+| STT(음성→글) | OpenAI API 키 및 `models.stt` |
 
 > 연결만 확인하고 싶으면: `python obsidian.py --ping` → `✓ 연결 성공` 이면 끝.
 
@@ -43,7 +43,8 @@ python realtime_transcription.py --language ko
 ```
 → 말이 끝나고 `q`+Enter 누르면 회의록이 만들어집니다.
 
-**셋 다** 끝나면 자동으로 Obsidian에 저장되고 메일이 갑니다. 추가 옵션 필요 없습니다.
+설정이 켜져 있으면 세 경로 모두 처리 후 Obsidian 저장과 메일 발송을 시도합니다. Obsidian 연결이 없으면
+파일 출력은 유지되고, 저장 단계만 건너뜁니다.
 
 ---
 

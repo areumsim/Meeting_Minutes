@@ -18,6 +18,11 @@ requests>=2.31.0
 # File watcher
 watchdog>=4.0.0
 
+# Web UI (FastAPI backend)
+fastapi>=0.110.0
+uvicorn[standard]>=0.29.0
+python-multipart>=0.0.9
+
 # Optional (VAD mode - faster response on short utterances)
 # Windows: pip install webrtcvad-wheels
 # Mac/Linux: pip install webrtcvad

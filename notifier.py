@@ -103,7 +103,7 @@ class Notifier:
         password: str = "",
         recipients: Optional[list[str]] = None,
         smtp_host: str = "",
-        smtp_port: int = 587,
+        smtp_port: int = 0,
         **kwargs,
     ) -> "Notifier":
         sender = sender or os.getenv("EMAIL_SENDER", "") or _c("email.sender")
@@ -113,14 +113,23 @@ class Notifier:
             r.strip() for r in os.getenv("EMAIL_RECIPIENTS", recip_str).split(",")
             if r.strip()
         ]
+        # SMTP 서버: 인자 > config(email.smtp_host) > 발신자 도메인 자동추정
+        smtp_host = smtp_host or os.getenv("EMAIL_SMTP_HOST", "") or _c("email.smtp_host", "")
+        smtp_port = smtp_port or int(os.getenv("EMAIL_SMTP_PORT", "") or _c("email.smtp_port", 0) or 0)
         if not smtp_host:
-            if "naver" in sender:
+            low = sender.lower()
+            if "naver" in low:
                 smtp_host = "smtp.naver.com"
-            elif "gmail" in sender:
+            elif "gmail" in low or "googlemail" in low:
                 smtp_host = "smtp.gmail.com"
+            elif any(k in low for k in ("outlook", "hotmail", "live.", "office365", "onmicrosoft")):
+                # Outlook 개인 / Microsoft 365
+                smtp_host = "smtp.office365.com"
             else:
                 domain = sender.split("@")[-1] if "@" in sender else ""
                 smtp_host = f"smtp.{domain}" if domain else "smtp.gmail.com"
+        if not smtp_port:
+            smtp_port = 587
         self._channels.append({
             "type": "email",
             "sender": sender,
@@ -181,7 +190,12 @@ class Notifier:
     def has_channels(self) -> bool:
         """유효한 채널이 있는지 확인."""
         for ch in self._channels:
-            if ch["type"] == "email" and ch.get("sender") and ch.get("password"):
+            if (
+                ch["type"] == "email"
+                and ch.get("sender")
+                and ch.get("password")
+                and ch.get("recipients")
+            ):
                 return True
             if ch["type"] in ("slack", "teams") and ch.get("webhook_url"):
                 return True

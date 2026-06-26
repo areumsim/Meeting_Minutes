@@ -119,6 +119,35 @@ PC 백엔드(FastAPI) 없이 **완전 독립형(Serverless)** 으로 동작하�
 
 ## 아키텍처
 
+### 전체 프로세스 지도
+
+```text
+입력
+  ├─ 파일 업로드/배치: meeting_minutes.py, meeting_assistant.py process
+  ├─ 마이크 실시간: realtime_transcription.py, run_realtime.py, meeting_assistant.py record
+  ├─ Obsidian 임베드 녹음: meeting_assistant.py vault-audio
+  └─ 폴더 자동 감시: meeting_assistant.py watch → ingestion_pipeline.py
+
+공통 처리
+  오디오 준비(ffmpeg) → STT → 화자 추론/교정 → 회의록/요약/액션 생성
+  → 관련 노트 검색/사전 리서치 반영 → Obsidian 발행 또는 output/ fallback
+  → 이메일/Slack/Teams 알림(경로별 지원 범위 상이)
+
+회의 생애주기
+  prep(계획 노트 사전 리서치) → record/process/ingest/vault-audio
+  → schedule/status(일정·충돌·병합 대기) → merge(확인 후 계획 노트 병합)
+  → reindex/ask(Vault 지식 검색)
+```
+
+| 진입점 | 목적 | 저장/병합 기준 |
+| --- | --- | --- |
+| `meeting_minutes.py` / `meeting_assistant.py process` | 기존 배치 처리 | `output/` 저장, 설정 시 Obsidian 발행 및 계획 매칭 |
+| `realtime_transcription.py` / `record` | 마이크 실시간 녹취 | 종료 시 회의록/요약 생성, 설정 시 Obsidian/메일 |
+| `vault-audio` | Obsidian 노트에 임베드된 녹음 처리 | 해당 노트에 `## 회의 기록`으로 직접 병합 |
+| `ingest` / `watch` | 자동 수집용 오디오 처리 | 관련 노트 링크 포함 recording note 생성, 실패 시 `output/` 저장 |
+| `prep` / `schedule` / `merge` | 계획 회의 운영 | 계획 노트 사전 리서치, 충돌 점검, 병합 대기 처리 |
+| `reindex` / `ask` | Vault 지식 검색 | `data/vault_index.json` 기반 Q&A와 관련 노트 검색 |
+
 ### 배치 처리 흐름 (meeting_minutes.py)
 
 ```mermaid
@@ -322,12 +351,39 @@ cp   config.example.json config.json   # Mac/Linux
     "recipient": "recipient@company.com"
   },
   "notify": {
+    "on_finish": "email",
     "slack": { "webhook_url": "https://hooks.slack.com/services/..." },
     "teams": { "webhook_url": "https://...webhook.office.com/..." }
+  },
+  "obsidian": {
+    "enabled": false,
+    "api_url": "https://127.0.0.1:27124",
+    "api_key": "",
+    "vault_path": "",
+    "notes_subdir": "00_Meetings",
+    "refs_subdir": "01_References"
+  },
+  "vault_watcher": {
+    "watch_folders": [],
+    "processed_state_path": "data/processed_audio.json"
+  },
+  "indexing": {
+    "index_path": "data/vault_index.json",
+    "vault_path": ""
   },
   "output_dir": "./output"
 }
 ```
+
+| 설정 영역 | 쓰는 곳 |
+| --- | --- |
+| `api`, `models`, `ssl` | STT, 번역, 회의록/요약 생성, SSL 검증 |
+| `realtime` | `realtime_transcription.py`, `run_realtime.py`, 웹 Recorder |
+| `email`, `notify` | 배치/실시간/자동 처리 완료 알림. `notify.on_finish`가 있으면 기본 알림으로 사용 |
+| `obsidian` | Local REST API 발행, 계획 노트 매칭/병합, Vault 폴더 경로 |
+| `vault_watcher` | `meeting_assistant.py watch`, `audio_watcher.py`, 자동 처리 상태 파일 |
+| `indexing`, `wiki` | `vault_indexer.py`, `wiki_ask.py`, 관련 노트 검색과 Q&A |
+| `analysis` | `prompts/` 템플릿 기반 문서 유형별 분석 |
 
 환경변수도 지원합니다 (환경변수 > config.json 순으로 우선):
 

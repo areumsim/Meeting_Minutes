@@ -292,7 +292,8 @@ def _run_script(extra_args: list) -> int:
     cmd = [sys.executable, str(SCRIPT)] + extra_args
     log.info("실행: %s", subprocess.list2cmdline(cmd))
     try:
-        result = subprocess.run(cmd, cwd=str(BASE_DIR))
+        with open(str(LOG_FILE), "a", encoding="utf-8") as _lf:
+            result = subprocess.run(cmd, cwd=str(BASE_DIR), stderr=_lf)
         log.info("종료 코드: %d", result.returncode)
         return result.returncode
     except FileNotFoundError:

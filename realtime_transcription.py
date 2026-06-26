@@ -94,9 +94,12 @@ try:
         build_script_md, infer_speaker_names, _parse_diarized,
     )
     import meeting_minutes as _mm
-except ImportError as e:
+except (ImportError, Exception) as e:
+    import traceback as _tb
     print(f"❌ meeting_minutes.py 임포트 실패: {e}")
+    _tb.print_exc()
     print("   meeting_minutes.py 와 같은 폴더에서 실행하세요.")
+    print("   또는: python -m pip install -r requirements.txt")
     sys.exit(1)
 
 
@@ -563,7 +566,17 @@ def cmd_recover(log_path: str, output_dir: str, llm_preferred: str,
     except Exception:
         session_dt = ""
 
-    minutes = generate_minutes(segments, llm, doc_type, memo=memo,
+    # [공용] 계획 매칭 + 사전 자료 주입 (batch/web 와 동일 로직)
+    _plan_match = None
+    _gen_memo = memo
+    try:
+        _plan_match, _gen_memo = _mm.plan_context_memo(topic or stem, session_dt, memo)
+        if _plan_match:
+            print(f"  계획 회의 매칭: {_plan_match.get('path')} (사유: {_plan_match.get('reason','')})")
+    except Exception as _pe:
+        print(f"  계획 매칭/사전자료 주입 건너뜀: {_pe}")
+
+    minutes = generate_minutes(segments, llm, doc_type, memo=_gen_memo,
                                topic=topic, session_dt=session_dt)
     header  = (f"<!-- Recovered: {datetime.now().isoformat()} -->\n"
                f"<!-- Source: {log_path} | Type: {doc_type} -->\n\n")
@@ -575,6 +588,25 @@ def cmd_recover(log_path: str, output_dir: str, llm_preferred: str,
     summary_txt_path = os.path.join(output_dir, f"{stem}_summary.txt")
     save(summary, summary_path, "요약본(md)")
     save(summary, summary_txt_path, "요약본(txt)")
+
+    # [공용] Obsidian 발행 + 계획 매칭/병합 확인 (batch/web 와 동일)
+    try:
+        _ra_md = ""
+        try:
+            _raj = _mm.extract_action_items(minutes, llm, doc_type)
+            if _raj:
+                _ra_md = _mm.format_actions_md(_raj)
+        except Exception:
+            pass
+        _mm.enrich_and_publish(
+            title=(topic or f"복구 {session_dt}"),
+            doc_type=doc_type, minutes_md=minutes, llm=llm,
+            summary_md=summary, actions_md=_ra_md,
+            topic=topic, session_dt=session_dt, attendees=[],
+            planned_match=_plan_match,
+        )
+    except Exception as _pubE:
+        print(f"  Obsidian 발행 실패(로컬 파일은 정상 저장됨): {_pubE}")
 
     # 화자 구분 포함 스크립트 (script.md)
     script_md = build_script_md(segments)
@@ -1759,13 +1791,29 @@ class RealtimeSession:
         mm, ss  = divmod(int(total_s), 60)
         print(f"\n  총 {len(segments)}개 세그먼트 / {mm}분 {ss}초")
 
+        # 세션 날짜 + 계획 매칭(화자 힌트·사전자료 공통, 1회 탐색)
+        try:
+            _p0 = datetime.strptime(self.logger.session_ts, "%Y%m%d_%H%M%S")
+            session_dt = _p0.strftime("%Y년 %m월 %d일 %H:%M")
+        except Exception:
+            session_dt = ""
+        _plan_match = None
+        try:
+            _plan_match = _mm._lookup_plan(self.topic or f"realtime_{self.logger.session_ts}", session_dt)
+        except Exception:
+            _plan_match = None
+        _known = (_mm._clean_attendee_names((_plan_match.get("meta") or {}).get("attendees"))
+                  if _plan_match else None)
+        if _known:
+            print(f"  화자 추론 힌트(참석자): {', '.join(_known)}")
+
         # ── 화자 이름 LLM 추론 (diarize 모델 사용 시) ──
         import re as _re
         unique_spks = {s.get("speaker", "") for s in segments if s.get("speaker")}
         has_generic = any(_re.match(r'[Ss]peaker[\s_]?[A-Za-z0-9]', spk) for spk in unique_spks)
         if has_generic:
             try:
-                inferred = infer_speaker_names(segments, self.llm)
+                inferred = infer_speaker_names(segments, self.llm, known_names=_known)
                 if inferred:
                     print(f"  화자 추론 결과: {inferred}")
                     for seg in segments:
@@ -1788,12 +1836,15 @@ class RealtimeSession:
         refined_script_path = os.path.join(self.output_dir, f"{stem}_refined_script.txt")
         summary_text        = ""
 
-        # 세션 타임스탬프 → 한국어 날짜 문자열
+
+        # [공용] 사전 자료 주입 (계획 매칭은 화자추론 단계에서 1회 탐색해 재사용)
+        _gen_memo = self.memo
         try:
-            _parsed = datetime.strptime(self.logger.session_ts, "%Y%m%d_%H%M%S")
-            session_dt = _parsed.strftime("%Y년 %m월 %d일 %H:%M")
-        except Exception:
-            session_dt = ""
+            _, _gen_memo = _mm.plan_context_memo(self.topic or stem, session_dt, self.memo, match=_plan_match)
+            if _plan_match:
+                print(f"  계획 회의 매칭: {_plan_match.get('path')} (사유: {_plan_match.get('reason','')})")
+        except Exception as _pe:
+            print(f"  계획 매칭/사전자료 주입 건너뜀: {_pe}")
 
         try:
             # STT 교정 — 회의록 생성 전에 실행하여 교정본을 입력으로 사용
@@ -1810,7 +1861,7 @@ class RealtimeSession:
             minutes = generate_minutes(
                 refined_text if refined_text else segments,
                 self.llm, self.doc_type,
-                memo=self.memo, topic=self.topic, session_dt=session_dt,
+                memo=_gen_memo, topic=self.topic, session_dt=session_dt,
             )
             header  = (f"<!-- Generated: {datetime.now().isoformat()} -->\n"
                        f"<!-- Mode: realtime | Type: {self.doc_type} | "
@@ -1825,6 +1876,27 @@ class RealtimeSession:
             )
             save(summary_text, summary_path, "요약본(md)")
             save(summary_text, summary_txt_path, "요약본(txt)")
+
+            # [공용] Obsidian 발행 + 계획 매칭/병합 확인 (batch/web 와 동일)
+            _pub = None
+            try:
+                _ra_md = ""
+                try:
+                    _raj = _mm.extract_action_items(minutes, self.llm, self.doc_type)
+                    if _raj:
+                        _ra_md = _mm.format_actions_md(_raj)
+                        save(_raj, os.path.join(self.output_dir, f"{stem}_actions.json"), "액션 아이템(JSON)")
+                except Exception:
+                    pass
+                _pub = _mm.enrich_and_publish(
+                    title=(self.topic or f"실시간 {session_dt}"),
+                    doc_type=self.doc_type, minutes_md=minutes, llm=self.llm,
+                    summary_md=summary_text, actions_md=_ra_md,
+                    topic=self.topic, session_dt=session_dt, attendees=[],
+                    planned_match=_plan_match,
+                )
+            except Exception as _pubE:
+                print(f"  Obsidian 발행 실패(로컬 파일은 정상 저장됨): {_pubE}")
 
         except Exception as e:
             print(f"  회의록 생성 실패: {e}")
@@ -1865,10 +1937,23 @@ class RealtimeSession:
         meta_path = os.path.join(self.output_dir, f"{stem}_meta.json")
         self._save_meta(meta_path, len(segments), total_s)
 
-        # 이메일 발송 — minutes.md + summary.txt + script.md + transcript.txt 첨부
+        # 이메일 발송 — minutes.md + summary.txt + script.md + transcript.txt + Obsidian 노트 첨부
         if self.do_email and summary_text:
             attach = [p for p in [minutes_path, summary_txt_path, script_path, transcript_path]
                       if os.path.isfile(p)]
+            # Obsidian 노트가 있으면 추가 (vault-relative → 풀 경로 변환)
+            _obs_rel = (_pub or {}).get("obsidian_path")
+            if _obs_rel:
+                _vault_root = _c("obsidian.vault_path", "") or ""
+                if not _vault_root:
+                    try:
+                        from obsidian import _detect_obsidian_config as _dOC2
+                        _vault_root = _dOC2().get("vault_path", "")
+                    except Exception:
+                        pass
+                _obs_abs = os.path.join(_vault_root, str(_obs_rel)) if _vault_root else str(_obs_rel)
+                if os.path.isfile(_obs_abs) and _obs_abs not in attach:
+                    attach.append(_obs_abs)
             _send_report_email(stem, summary_text, attach, self.args)
 
         # 완료 요약

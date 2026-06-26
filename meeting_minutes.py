@@ -49,6 +49,18 @@ import math
 import re
 import time
 import traceback
+
+# Windows cp949 터미널에서 이모지 출력 시 UnicodeEncodeError 방지
+if sys.stdout.encoding and sys.stdout.encoding.lower() in ("cp949", "euc-kr", "ansi"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+if sys.stderr.encoding and sys.stderr.encoding.lower() in ("cp949", "euc-kr", "ansi"):
+    try:
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
 import logging
 import glob
 from pathlib import Path
@@ -92,6 +104,7 @@ ANTHROPIC_API_KEY  = _c("api.anthropic_api_key", "") or ""
 SSL_VERIFY         = _c("ssl.verify", False)
 
 MAX_FILE_SIZE_MB = 25
+MAX_CHUNK_DURATION_SEC = 1200  # gpt-4o-transcribe* 최대 1400s → 안전 마진 포함
 
 # API 직접 업로드 가능 포맷
 UPLOAD_FORMATS = {".flac", ".mp3", ".mp4", ".mpeg", ".mpga", ".m4a",
@@ -507,9 +520,30 @@ class LLMClient:
                     self._call_count += 1
                     return {"text": text, "sources": uniq[:5], "searched": True}
             except Exception as e:
-                logger.warning(f"[web_research] 웹검색 실패 → 폴백: {type(e).__name__}: {e}")
+                logger.warning(f"[web_research] Anthropic 웹검색 실패 → GPT 폴백: {type(e).__name__}: {e}")
 
-        # 2) 폴백: 일반 LLM (라이브 검색 없음)
+        # 2) GPT responses API 웹검색 폴백 (openai SDK 1.x/2.x responses 모듈 지원 시)
+        if self.openai and hasattr(self.openai, "responses"):
+            try:
+                resp = self.openai.responses.create(
+                    model=GPT_MODEL,
+                    tools=[{"type": "web_search_preview"}],
+                    input=query,
+                )
+                text_parts: List[str] = []
+                for item in (resp.output or []):
+                    if getattr(item, "type", "") == "message":
+                        for c in (item.content or []):
+                            if getattr(c, "type", "") == "output_text":
+                                text_parts.append(getattr(c, "text", "") or "")
+                text = "\n".join(t for t in text_parts if t).strip()
+                if text:
+                    self._call_count += 1
+                    return {"text": text, "sources": [], "searched": True}
+            except Exception as e:
+                logger.warning(f"[web_research] GPT 웹검색 실패 → 최종 폴백: {e}")
+
+        # 3) 최종 폴백: 일반 LLM (라이브 검색 없음)
         try:
             text = self.chat(system, query, temp=0.2, max_tokens=max_tokens)
             return {"text": text or "", "sources": [], "searched": False}
@@ -587,16 +621,20 @@ def prepare_audio(input_path: str, work_dir: str) -> str:
 
 
 def split_audio(audio_path: str, work_dir: str) -> List[Tuple[str, float]]:
-    """25MB 초과 시 청크 분할."""
+    """파일 크기(25MB) 또는 길이(1200s) 초과 시 청크 분할."""
     size = file_mb(audio_path)
     dur  = audio_duration(audio_path)
     logger.debug(f"오디오: {size:.2f}MB, {dur:.1f}s ({ts(dur)})")
 
-    if size <= MAX_FILE_SIZE_MB:
+    if size <= MAX_FILE_SIZE_MB and dur <= MAX_CHUNK_DURATION_SEC:
         return [(audio_path, 0.0)]
 
-    info(f"파일 {size:.1f}MB > {MAX_FILE_SIZE_MB}MB → 분할")
-    n         = math.ceil(size / (MAX_FILE_SIZE_MB * 0.85))
+    # 크기 기준과 시간 기준 중 더 많은 청크 수 사용
+    n_by_size = math.ceil(size / (MAX_FILE_SIZE_MB * 0.85)) if size > MAX_FILE_SIZE_MB else 1
+    n_by_dur  = math.ceil(dur / MAX_CHUNK_DURATION_SEC) if dur > MAX_CHUNK_DURATION_SEC else 1
+    n         = max(n_by_size, n_by_dur)
+
+    info(f"파일 {size:.1f}MB, {dur:.0f}s → {n}개 청크 분할")
     chunk_dur = dur / n
     stem      = Path(audio_path).stem
     chunks    = []
@@ -647,7 +685,8 @@ def transcribe_chunk(
         else:
             params["response_format"] = "json"
 
-        if language:
+        # language 가 "auto"/빈값이면 파라미터 생략 → 모델이 자동 감지(한국어·영어 모두 처리)
+        if language and str(language).strip().lower() != "auto":
             params["language"] = language
 
         t0   = time.time()
@@ -811,6 +850,12 @@ def run_stt(
     all_segments: List[Dict] = []
     total_time   = 0.0
 
+    # 청크가 2개 이상이면 diarize 모델은 프록시 차단 위험 → 즉시 fallback 모델 사용
+    effective_model = model
+    if len(chunks) > 1 and "diarize" in model:
+        warn(f"  청크 분할 필요({len(chunks)}개): {model} → {FALLBACK_STT_MODEL} 자동 전환 (프록시 우회)")
+        effective_model = FALLBACK_STT_MODEL
+
     for i, (cp, chunk_offset) in enumerate(chunks):
         if len(chunks) > 1:
             info(f"  청크 {i+1}/{len(chunks)} 처리 중...")
@@ -818,7 +863,7 @@ def run_stt(
         t0 = time.time()
         try:
             segs = transcribe_chunk(
-                client, cp, model, language, speaker_names,
+                client, cp, effective_model, language, speaker_names,
                 chunk_offset, debug_dir, i,
             )
             all_segments.extend(segs)
@@ -826,7 +871,7 @@ def run_stt(
             logger.error(f"[STT FAIL] chunk {i}: {type(e).__name__}: {e}")
             if DEBUG:
                 logger.debug(traceback.format_exc())
-            if model != FALLBACK_STT_MODEL:
+            if effective_model != FALLBACK_STT_MODEL:
                 warn(f"  {model} 실패 ({e})")
                 warn(f"  → {FALLBACK_STT_MODEL} 로 폴백")
                 segs = transcribe_chunk(
@@ -959,9 +1004,11 @@ _MINUTES_MEETING = """\
 2. 개별 발언을 시간순으로 나열하지 말고, **주제별로 종합·정리** (타임스탬프 표기 금지)
 3. 수치·일정·고유명사·제품명은 원문 그대로 유지 (의역 금지)
 4. 핵심 사실·숫자·결정은 **굵게** 강조
-5. 화자별 발언 귀속(attribution)은 하지 않음 — 조직명·역할 단위로 맥락상 필요할 때만 언급
+5. 화자·조직·역할을 **추측하거나 지어내지 말 것**. 참석자 명단이 제공되면 그 이름만 사용하고, 특정할 수 없으면 귀속하지 않음. 스크립트에 명시되지 않은 소속·팀·직책·발언자(예: "발언자 A", 가상의 팀명)는 만들지 말 것
 6. 메모(추가 메모)가 있으면 논의 내용과 적극 연결하여 반영
 7. 전문적·격식 문체, 한국어
+8. 인사·잡담·여담·진행상 군더더기 등 비중요 발언은 회의록에 싣지 말 것 — 핵심 논의·결정·액션만 정리
+9. **스크립트·메모에 없는 사실/인물/조직/수치/기한은 절대 생성하지 말 것.** 불명확하면 "미정"으로 표기
 
 ## 출력 형식 (이 구조를 정확히 따를 것)
 
@@ -969,9 +1016,7 @@ _MINUTES_MEETING = """\
 
 - **일시**: YYYY.MM.DD(요일) HH:MM ~
 - **장소**: (언급된 경우 기재, 없으면 항목 생략)
-- **참석자**
-    - [조직/팀명]: 이름1, 이름2(역할)
-    - [조직/팀명]: 이름3, 이름4
+- **참석자**: (제공된 참석자 명단을 그대로 기재. 명단이 없으면 "미정")
 - **안건**
     1. 안건 제목
     2. 안건 제목
@@ -1007,12 +1052,9 @@ _MINUTES_MEETING = """\
 
 ### Action Item (담당/기한)
 
-- **[담당 조직/팀명]**
-    - 구체적 업무 내용 (기한 있으면 명시)
-    - 구체적 업무 내용
-
-- **[담당 조직/팀명]**
-    - 구체적 업무 내용
+- 구체적 업무 내용 — 담당: (제공된 명단 내 인물, 특정 불가 시 "미정") · 기한: (스크립트에 있으면 명시, 없으면 생략)
+- 구체적 업무 내용 — 담당: 미정
+  ※ 담당자를 임의의 조직/팀명으로 지어내지 말 것
 
 ## 세부 작성 규칙
 
@@ -1021,9 +1063,9 @@ _MINUTES_MEETING = """\
 - 주제는 스크립트 도입부·메모·topic 메타정보에서 추론
 
 ### 참석자
-- 스크립트의 자기소개·호칭·맥락에서 조직/팀 소속을 추론하여 그룹핑
-- 조직을 추론할 수 없으면 "참석자: 발언자 A, B, C" 형식으로 단순 나열
-- 이름을 알 수 없으면 "발언자 A" 등 사용
+- **제공된 참석자 명단(메타데이터/메모)을 그대로 사용.** 명단에 없는 이름·조직·팀·역할을 새로 만들지 말 것
+- 명단이 없거나 화자를 특정할 수 없으면 **"미정"** 으로 표기 ("발언자 A/B/C"나 가상의 팀명 생성 금지)
+- 화자 분리(diarization) 정보가 없으면 발언별로 담당자를 추정하지 말 것
 
 ### 안건
 - 스크립트 전체 흐름에서 주요 주제를 식별하여 번호 목록으로 정리
@@ -1072,8 +1114,8 @@ _MINUTES_SEMINAR = """\
 
 - **일시**: YYYY.MM.DD(요일) HH:MM ~
 - **장소**: (언급된 경우 기재, 없으면 항목 생략)
-- **발표자**: 이름 (역할/소속)
-- **참석자**: (파악 가능한 경우 기재)
+- **발표자**: 명단·스크립트에 명시된 이름만 기재 (불명확하면 "미정", 소속·역할 임의 생성 금지)
+- **참석자**: 제공된 명단을 그대로 기재 (없으면 "미정")
 - **주제**: 한줄 요약
 
 ---
@@ -1260,7 +1302,7 @@ _SUMMARY_MEETING = """\
 
 • 일시: (회의록에 명시된 값 사용)
 • 장소: (언급된 경우, 없으면 생략)
-• 참석자: (역할·소속 포함, 확인 불가 시 "발언자 A/B/C" 형식)
+• 참석자: 제공된 명단을 그대로 기재 (명단 없거나 확인 불가 시 "미정". "발언자 A/B/C"나 가상 팀명·역할 생성 금지)
 • 주요 논의 항목: (번호 목록)
 
 ────────────────────────────────────────
@@ -1731,6 +1773,9 @@ def infer_speaker_names(
     unique_speakers = list({s.get("speaker", "") for s in segments if s.get("speaker")})
     if not unique_speakers:
         return {}
+    # 알려진 참석자 명단이 없으면 추론하지 않음 — 화자 레이블(화자1/2…) 그대로 유지(지어내기 방지)
+    if not known_names:
+        return {}
 
     # 각 화자별 대표 발언 최대 5개 샘플링
     samples: Dict[str, List[str]] = {}
@@ -1743,13 +1788,14 @@ def infer_speaker_names(
         return {}
 
     system = (
-        "회의 발화 분석 전문가입니다.\n"
-        "각 화자 레이블에 대한 대표 발언을 분석하여 가능한 실명·역할·직책을 추론하세요.\n"
-        "힌트: 호칭(님, 씨, 대리, 팀장, 선생님 등), 자기소개 문구, 발화 스타일을 활용.\n"
-        '출력 형식: {"Speaker A": "추론된 이름 또는 역할", ...}\n'
-        "추론 불가 시 해당 키를 출력에서 생략. 설명 없이 순수 JSON만."
+        "회의 발화 분석가입니다. 각 화자 레이블이 '알려진 참석자 명단' 중 누구인지만 판단하세요.\n"
+        "규칙:\n"
+        "- 자기소개·명시적 호명 등으로 명단 속 인물과 **확실히** 일치할 때만 그 실명으로 매핑.\n"
+        "- 불확실하거나 명단에 없으면 해당 키를 **출력에서 생략**(화자 레이블 그대로 유지).\n"
+        "- 이름·역할·직책·소속을 **추측하거나 지어내지 말 것.** 명단에 없는 새 이름 생성 절대 금지.\n"
+        '출력: {"Speaker A": "명단속이름", ...} 형식의 순수 JSON만. 설명 금지.'
     )
-    known_hint = f"\n알려진 이름 힌트: {', '.join(known_names)}" if known_names else ""
+    known_hint = f"\n알려진 참석자 명단(이 안의 이름만 사용): {', '.join(known_names)}"
     user = json.dumps(samples, ensure_ascii=False) + known_hint
 
     try:
@@ -1758,7 +1804,10 @@ def infer_speaker_names(
         if not m:
             return {}
         mapping = json.loads(m.group())
-        return {k: v for k, v in mapping.items() if v and isinstance(v, str)}
+        kn = {n.strip() for n in known_names}
+        # 명단에 있는 이름으로 매핑된 것만 인정(그 외는 화자 레이블 유지 → 지어내기 차단)
+        return {k: v.strip() for k, v in mapping.items()
+                if v and isinstance(v, str) and v.strip() in kn}
     except Exception as e:
         logger.debug(f"[infer_speaker_names] 실패: {e}")
         return {}
@@ -1785,6 +1834,8 @@ def _send_notification(
         "password":   _c("email.password",  ""),
         "recipients": [r.strip() for r in
                        _c("email.recipient", "").split(",") if r.strip()],
+        "smtp_host":  _c("email.smtp_host", ""),
+        "smtp_port":  int(_c("email.smtp_port", 0) or 0),
     }
     slack_cfg = {"webhook_url": os.environ.get("SLACK_WEBHOOK_URL", "") or _c("notify.slack.webhook_url", "")}
     teams_cfg = {"webhook_url": os.environ.get("TEAMS_WEBHOOK_URL", "") or _c("notify.teams.webhook_url", "")}
@@ -1826,6 +1877,55 @@ def _gather_attendees(segments: List[Dict]) -> List[str]:
     return names[:10]
 
 
+def _detect_meeting_scope(title: str = "", topic: str = "") -> str:
+    """내부/외부 회의 구분을 보수적으로 추론한다."""
+    text = f"{title} {topic}".lower()
+    external_terms = (
+        "외부", "고객", "클라이언트", "파트너", "협력사", "벤더", "후원",
+        "제안", "계약", "mou", "po", "견적", "미팅",
+    )
+    internal_terms = (
+        "내부", "팀회의", "주간보고", "데일리", "사내", "1on1", "원온원",
+    )
+    if any(term in text for term in external_terms):
+        return "external"
+    if any(term in text for term in internal_terms):
+        return "internal"
+    return "unknown"
+
+
+_PLAN_UNSET = object()   # enrich_and_publish planned_match 미지정 센티넬
+
+
+def _confirm_plan_merge(match: Dict[str, Any], title: str) -> bool:
+    """계획 회의 매칭 시, 회의록을 그 노트에 '병합'할지 사용자에게 확인.
+    - config obsidian.auto_merge=true 면 묻지 않고 병합
+    - 비대화형(웹/워처 등 TTY 아님)에서는 절대 자동 병합하지 않음(원칙: 합병 전 확인)
+    - 그 외에는 대화형 프롬프트. 기본값 Y(병합)."""
+    if _c("obsidian.auto_merge", False):
+        return True
+    meta = match.get("meta") or {}
+    is_tty = bool(getattr(sys, "stdin", None)) and sys.stdin.isatty()
+    print(f"\n  ── 계획된 회의와 일치하는 노트를 찾았습니다 ──")
+    print(f"     노트   : {match.get('path')}")
+    print(f"     제목   : {meta.get('title','')}  (녹음 제목: {title})")
+    print(f"     날짜   : {meta.get('date','')} {meta.get('time','')}".rstrip())
+    if match.get("reason"):
+        print(f"     매칭사유: {match.get('reason')}")
+    att = meta.get("attendees")
+    if att:
+        print(f"     참석자 : {', '.join(att) if isinstance(att, list) else att}")
+    if not is_tty:
+        warn("비대화형 환경 → 자동 병합하지 않고 새 노트로 생성합니다 "
+             "(나중에 직접 확인 후 병합하세요).")
+        return False
+    try:
+        ans = input("  이 계획 노트에 회의록을 병합할까요? [Y=병합 / n=새 노트] : ").strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        return False
+    return ans in ("", "y", "yes", "ㅛ")
+
+
 def enrich_and_publish(
     *,
     title: str,
@@ -1840,6 +1940,7 @@ def enrich_and_publish(
     notify: Optional[str] = None,
     email_summary_path: str = "",
     email_files: Optional[List[str]] = None,
+    planned_match: Any = _PLAN_UNSET,
 ) -> Dict[str, Any]:
     """배치/실시간/화자수정 경로가 공유하는 후처리:
        1) 용어·인물·기업 외부검색 보완(enrichment)
@@ -1849,6 +1950,8 @@ def enrich_and_publish(
     """
     result: Dict[str, Any] = {"glossary_md": "", "obsidian_path": None,
                               "related_notes": [], "sources": []}
+    meeting_scope = _detect_meeting_scope(title, topic)
+    result["meeting_scope"] = meeting_scope
 
     # Obsidian 클라이언트 (설정 없거나 연결 실패 시 None → 볼트 기록만 생략)
     obs = None
@@ -1871,20 +1974,56 @@ def enrich_and_publish(
     except Exception as e:
         warn(f"용어 보완 실패: {e}")
 
-    # 2) Obsidian 노트 기록
+    # 2) Obsidian 노트 기록 — 계획(planned) 노트와 매칭되면 '확인 후 병합'
     if obs is not None:
         try:
-            path = obs.write_meeting_note(
-                title=title, body_md=minutes_md, doc_type=doc_type,
-                topic=topic, attendees=attendees or [], session_dt=session_dt,
-                glossary_md=enr.get("glossary_md", ""),
-                related_notes=enr.get("related_notes", []),
-                external_refs=enr.get("sources", []),
-                summary_md=summary_md, actions_md=actions_md,
-            )
-            result["obsidian_path"] = path
-            if path:
-                ok(f"Obsidian 노트 기록 → {path}")
+            # 2-1) 계획 회의 매칭 — 호출자가 이미 찾았으면 재사용, 아니면 직접 탐색
+            if planned_match is not _PLAN_UNSET:
+                match = planned_match
+            else:
+                match = None
+                try:
+                    match = obs.find_planned_note(title, session_dt)
+                except Exception as e:
+                    logger.warning(f"[publish] 계획 노트 탐색 실패: {e}")
+            result["planned_match"] = match.get("path") if match else None
+
+            # 2-2) 매칭 시 병합 여부 확인(합병 전 사용자 확인 원칙)
+            do_merge = _confirm_plan_merge(match, title) if match else False
+            result["merged"] = do_merge
+
+            if match and do_merge:
+                path = obs.update_planned_note(
+                    match, title=title, body_md=minutes_md, doc_type=doc_type,
+                    topic=topic, attendees=attendees or [], session_dt=session_dt,
+                    glossary_md=enr.get("glossary_md", ""),
+                    related_notes=enr.get("related_notes", []),
+                    external_refs=enr.get("sources", []),
+                    summary_md=summary_md, actions_md=actions_md,
+                    meeting_scope=meeting_scope,
+                )
+                result["obsidian_path"] = path
+                if path:
+                    ok(f"계획 회의에 병합 → {path}  (status: planned → done)")
+            else:
+                if match:
+                    info(f"계획 회의 매칭됨(병합 보류): {match.get('path')} → 새 노트로 생성")
+                path = obs.write_meeting_note(
+                    title=title, body_md=minutes_md, doc_type=doc_type,
+                    topic=topic, attendees=attendees or [], session_dt=session_dt,
+                    glossary_md=enr.get("glossary_md", ""),
+                    related_notes=enr.get("related_notes", []),
+                    external_refs=enr.get("sources", []),
+                    summary_md=summary_md, actions_md=actions_md,
+                    meeting_scope=meeting_scope,
+                    # 매칭됐지만 병합 보류 → 계획 경로 기록(대시보드 '병합 대기' 표시용)
+                    extra_meta=({"matched_plan": match["path"]} if match else None),
+                )
+                result["obsidian_path"] = path
+                if path:
+                    ok(f"Obsidian 노트 기록 → {path}")
+                    if match:
+                        ok(f"→ 계획 '{match['path']}' 와(과) 매칭됨. 확인 후 병합하려면 Cowork에서 요청하세요.")
         except Exception as e:
             warn(f"Obsidian 노트 기록 실패: {e}")
         finally:
@@ -1897,6 +2036,23 @@ def enrich_and_publish(
         try:
             summary_path = email_summary_path
             files = list(email_files or [])
+            # Obsidian 노트 경로가 있으면 자동 첨부
+            # obsidian_path는 vault 상대경로(예: "Inbox/note.md") → 풀 경로로 변환
+            _obs_note = result.get("obsidian_path")
+            if _obs_note:
+                _vault_root = _c("obsidian.vault_path", "") or ""
+                if not _vault_root:
+                    try:
+                        from obsidian import _detect_obsidian_config as _dOC
+                        _vault_root = _dOC().get("vault_path", "")
+                    except Exception:
+                        pass
+                _obs_full = (
+                    os.path.join(_vault_root, str(_obs_note))
+                    if _vault_root else str(_obs_note)
+                )
+                if os.path.isfile(_obs_full) and _obs_full not in files:
+                    files.append(_obs_full)
             if not summary_path and (summary_md or minutes_md):
                 body = minutes_md or summary_md
                 glossary = result.get("glossary_md", "")
@@ -1922,6 +2078,75 @@ def enrich_and_publish(
 # ──────────────────────────────────────────────
 #  단일 파일 처리 파이프라인
 # ──────────────────────────────────────────────
+def _lookup_plan(title: str, session_dt: str):
+    """계획(planned) 노트를 1회만 탐색해 match dict(or None) 반환. Obsidian 미연결시 None."""
+    try:
+        from obsidian import ObsidianClient
+        obs = ObsidianClient.from_config()
+        if obs is None or not obs.ping():
+            if obs:
+                obs.close()
+            return None
+        try:
+            return obs.find_planned_note(title, session_dt)
+        finally:
+            obs.close()
+    except Exception as e:
+        logger.warning(f"[plan] 계획 노트 탐색 실패: {e}")
+        return None
+
+
+def _plan_context_text(match) -> str:
+    """match 본문에서 회의록 정리에 참고할 '사전 자료'(병합 전 부분)를 추출.
+    자동 리서치 내용은 참고용으로 유지하고 마커 주석만 제거한다."""
+    if not match:
+        return ""
+    body = match.get("body") or ""
+    cut = re.split(r"^##\s+회의 기록", body, maxsplit=1, flags=re.MULTILINE)[0]
+    try:
+        import plan_research
+        cut = cut.replace(plan_research.MARKER_BEGIN, "").replace(plan_research.MARKER_END, "")
+    except Exception:
+        pass
+    return cut.strip()
+
+
+def _clean_attendee_names(attendees):
+    """['최민석(팀장)','정하윤 수석','심아름 책임(나)'] → ['최민석','정하윤','심아름'] (화자 힌트용 이름만)."""
+    out = []
+    for a in (attendees or []):
+        nm = re.sub(r"\(.*?\)", "", str(a)).strip()                 # 괄호 직책/메모 제거
+        nm = re.sub(r"\s+(팀장|수석|책임|주임|선임|대표|이사|부장|과장|차장|사원|연구원|매니저)$", "", nm).strip()
+        if nm and nm not in out:
+            out.append(nm)
+    return out
+
+
+def plan_context_memo(title, session_dt, base_memo=None, match=_PLAN_UNSET):
+    """[모든 진입점 공용] 계획 매칭(+사전 자료)을 회의록 생성용 memo 에 주입.
+    match 를 넘기면 재탐색하지 않고 재사용한다. 반환: (match_or_None, memo_or_None)."""
+    if match is _PLAN_UNSET:
+        match = _lookup_plan(title, session_dt)
+    ctx = _plan_context_text(match)
+    directives = []
+    if match:
+        names = _clean_attendee_names((match.get("meta") or {}).get("attendees"))
+        if names:
+            directives.append(
+                "[참석자 참고 명단] 아래는 계획상 참석 예정자입니다. 화자가 이 중 누구인지 "
+                "분명한 경우에만 그 실명으로 표기하세요('발언자 A/B'보다 우선). 확실하지 않으면 "
+                "억지로 맞추지 말고, 명단에 없어도 실제 발언자가 있으면 들은 대로 두세요: "
+                + ", ".join(names))
+    if ctx:
+        directives.append(
+            "[회의 전 사전 자료 \u2014 맥락 참고용. 실제 회의에서 다뤄진 경우에만 반영하고, "
+            "다뤄지지 않은 항목을 억지로 넣지 말 것]:\n" + ctx)
+    memo = base_memo or ""
+    if directives:
+        memo = ("\n\n".join(directives) + ("\n\n" + memo if memo else "")).strip()
+    return match, (memo or None)
+
+
 def process_single(
     input_path: str,
     args,
@@ -1932,7 +2157,7 @@ def process_single(
     file_prefix: str = "",
     memo: Optional[str] = None,
     debug_dir: Optional[str] = None,
-) -> str:
+) -> Tuple[str, Optional[str]]:
     """
     단일 파일 처리 파이프라인.
     Returns: summary 텍스트 (알림 본문용)
@@ -1988,17 +2213,29 @@ def process_single(
             pass
 
     # 3b. 화자 이름 LLM 추론 (diarize 모델 사용 시 'Speaker A' → 실명/역할)
+    # 계획 매칭 1회 탐색 — 화자 추론(참석자 힌트)·사전자료·발행에 공통 사용
+    session_dt = getattr(args, 'session_dt', '') or parse_session_dt_from_filename(input_path)
+    _plan_match = None
+    try:
+        _plan_match = _lookup_plan(title, session_dt)
+    except Exception as _e:
+        logger.warning(f"[plan] 계획 노트 탐색 실패: {_e}")
+
     unique_spks = {s.get("speaker", "") for s in segments if s.get("speaker")}
     has_generic_labels = any(
         re.match(r'[Ss]peaker[\s_]?[A-Za-z0-9]', spk) for spk in unique_spks
     )
     if has_generic_labels:
-        known_names_arg = (
-            [n.strip() for n in args.speakers.split(",") if n.strip()]
-            if getattr(args, "speakers", None) else None
-        )
+        known_names_arg = ([n.strip() for n in args.speakers.split(",") if n.strip()]
+                           if getattr(args, "speakers", None) else [])
+        if _plan_match:  # 계획 노트 참석자(직책 제거)를 화자 추론 힌트로 자동 주입
+            for nm in _clean_attendee_names((_plan_match.get("meta") or {}).get("attendees")):
+                if nm not in known_names_arg:
+                    known_names_arg.append(nm)
+        if known_names_arg:
+            info(f"화자 추론 힌트(참석자): {', '.join(known_names_arg)}")
         try:
-            inferred = infer_speaker_names(segments, llm, known_names=known_names_arg)
+            inferred = infer_speaker_names(segments, llm, known_names=known_names_arg or None)
             if inferred:
                 info(f"화자 추론 결과: {inferred}")
                 for seg in segments:
@@ -2047,9 +2284,13 @@ def process_single(
     if getattr(args, "custom_prompt", None):
         full_memo = (full_memo + f"\n\n[추가 지시]: {args.custom_prompt}").strip()
 
-    # 날짜 자동 파싱 (CLI에서 지정하지 않은 경우 파일명에서 추출)
-    session_dt = getattr(args, 'session_dt', '') or \
-                 parse_session_dt_from_filename(input_path)
+    # 6-0. [공용] 사전 자료 주입 (계획 매칭은 위에서 1회 탐색해 화자 추론에도 사용)
+    try:
+        _, full_memo = plan_context_memo(title, session_dt, full_memo, match=_plan_match)
+        if _plan_match:
+            info(f"계획 회의 매칭: {_plan_match.get('path')} (사유: {_plan_match.get('reason','')})")
+    except Exception as e:
+        warn(f"계획 매칭/사전자료 주입 실패: {e}")
 
     minutes = generate_minutes(
         refined_text if refined_text else segments_for_doc,
@@ -2080,6 +2321,7 @@ def process_single(
              os.path.join(output_dir, f"{pfx}actions.md"), "액션 아이템 (마크다운)")
 
     # 9. 후처리: 용어 보완 + Obsidian 기록 (이메일은 main 루프가 일괄 발송)
+    _obs_path: Optional[str] = None
     try:
         actions_md = format_actions_md(actions_json) if actions_json else ""
         enr = enrich_and_publish(
@@ -2087,7 +2329,9 @@ def process_single(
             summary_md=summary, actions_md=actions_md,
             topic=topic_str, session_dt=session_dt,
             attendees=_gather_attendees(segments_for_doc),
+            planned_match=_plan_match,   # 1회 탐색 결과 재사용(중복 탐색 방지)
         )
+        _obs_path = enr.get("obsidian_path") or None
         # 로컬 minutes.md 에도 용어·배경 추가(이메일 첨부/오프라인 보존)
         glossary = enr.get("glossary_md", "")
         if glossary:
@@ -2097,7 +2341,7 @@ def process_single(
     except Exception as e:
         warn(f"후처리(용어/Obsidian) 실패 → 본문은 정상 저장됨: {e}")
 
-    return summary
+    return summary, _obs_path
 
 
 # ──────────────────────────────────────────────
@@ -2168,6 +2412,8 @@ def main():
                         help="비용 추정만 수행 (실제 처리 안 함)")
     parser.add_argument("--notify", choices=["email", "slack", "teams"],
                         help="완료 알림 채널")
+    parser.add_argument("--no-notify", action="store_true",
+                        help="config notify.on_finish 자동 알림까지 포함해 이번 실행에서는 알림을 보내지 않음")
     parser.add_argument("--output-dir", default=_c("output_dir", "./output"),
                         help="출력 디렉토리 (기본: ./output)")
     parser.add_argument("--debug", action="store_true",
@@ -2197,7 +2443,9 @@ def main():
 
     # ── 완료 알림 기본값 (config.json notify.on_finish) ──
     # --notify(및 프로필) 미지정 시 config의 notify.on_finish(email/slack/teams) 자동 적용
-    if not getattr(args, "notify", None):
+    if args.no_notify:
+        args.notify = None
+    elif not getattr(args, "notify", None):
         args.notify = _c("notify.on_finish", None) or None
 
     # ── 로깅 ─────────────────────────────────────────────
@@ -2282,7 +2530,7 @@ def main():
     pipeline_start = time.time()
     success        = 0
     fail           = 0
-    processed: List[Tuple[str, str, str]] = []  # (filepath, out_dir, summary)
+    processed: List[Tuple[str, str, str, Optional[str]]] = []  # (filepath, out_dir, summary, obs_path)
 
     work_dir = tempfile.mkdtemp(prefix="mm_")
     try:
@@ -2346,8 +2594,9 @@ def main():
             ok("화자 수정 및 재생성 완료!")
 
             # 후처리: 용어 보완 + Obsidian 기록
+            _enr_edit = {}
             try:
-                enrich_and_publish(
+                _enr_edit = enrich_and_publish(
                     title=title, doc_type=args.type, minutes_md=minutes, llm=llm,
                     summary_md=summary,
                     topic=getattr(args, "topic", "") or "",
@@ -2357,11 +2606,20 @@ def main():
                 warn(f"후처리(용어/Obsidian) 실패: {e}")
 
             if args.notify:
+                _edit_attach = [p for p in [
+                    os.path.join(out_dir, f"{stem}_minutes.md"),
+                    os.path.join(out_dir, f"{stem}_summary.md"),
+                ] if os.path.isfile(p)]
+                _obs_edit = _enr_edit.get("obsidian_path") if _enr_edit else None
+                if _obs_edit:
+                    _vr = _c("obsidian.vault_path", "") or ""
+                    _obs_abs = os.path.join(_vr, _obs_edit) if _vr else _obs_edit
+                    if os.path.isfile(_obs_abs):
+                        _edit_attach.append(_obs_abs)
                 _send_notification(
                     args.notify, title,
                     os.path.join(out_dir, f"{stem}_summary.md"),
-                    [os.path.join(out_dir, f"{stem}_minutes.md"),
-                     os.path.join(out_dir, f"{stem}_summary.md")],
+                    _edit_attach,
                 )
             return
 
@@ -2373,11 +2631,11 @@ def main():
                 pfx = f"{i+1:02d}_{Path(fp).stem}_"
                 step(f"[{i+1}/{len(valid_files)}] {Path(fp).name}")
                 try:
-                    summary = process_single(
+                    summary, obs_path = process_single(
                         fp, args, llm, out_dir, args.title, work_dir, pfx, memo, debug_dir
                     )
                     success += 1
-                    processed.append((fp, out_dir, summary))
+                    processed.append((fp, out_dir, summary, obs_path))
                 except Exception as e:
                     err(f"{Path(fp).name}: {type(e).__name__}: {e}")
                     if args.debug:
@@ -2395,11 +2653,11 @@ def main():
                 if multi:
                     step(f"[{valid_files.index(fp)+1}/{len(valid_files)}] {Path(fp).name}")
                 try:
-                    summary = process_single(
+                    summary, obs_path = process_single(
                         fp, args, llm, out_dir, title, work_dir, "", memo, debug_dir
                     )
                     success += 1
-                    processed.append((fp, out_dir, summary))
+                    processed.append((fp, out_dir, summary, obs_path))
                 except Exception as e:
                     err(f"{Path(fp).name}: {type(e).__name__}: {e}")
                     err_str = str(e)
@@ -2416,18 +2674,24 @@ def main():
 
     # ── 알림 발송 ──────────────────────────────────────────
     if args.notify and processed:
-        for fp, out_dir, summary in processed:
+        for fp, out_dir, summary, obs_path in processed:
             title    = args.title or Path(fp).stem
             stem     = Path(fp).stem
             pfx      = ""
             if multi and args.title:
-                pfx = f"{processed.index((fp, out_dir, summary))+1:02d}_{stem}_"
+                pfx = f"{processed.index((fp, out_dir, summary, obs_path))+1:02d}_{stem}_"
             summary_path = os.path.join(out_dir, f"{pfx}summary.md")
             minutes_path = os.path.join(out_dir, f"{pfx}minutes.md")
             script_path  = os.path.join(out_dir, f"{pfx}script.md")
             print(f"\n  알림 발송 중 → {args.notify} ...")
             attach_files = [p for p in [minutes_path, summary_path, script_path]
                             if os.path.isfile(p)]
+            # Obsidian 노트가 저장됐으면 첨부 (vault-relative → 풀 경로 변환)
+            if obs_path:
+                _vr = _c("obsidian.vault_path", "") or ""
+                _obs_abs = os.path.join(_vr, obs_path) if _vr else obs_path
+                if os.path.isfile(_obs_abs) and _obs_abs not in attach_files:
+                    attach_files.append(_obs_abs)
             _send_notification(
                 args.notify, title, summary_path,
                 attach_files,
@@ -2441,7 +2705,7 @@ def main():
         print(f"  성공: {success}개  |  실패: {fail}개")
     print(f"  {llm.stats()}")
 
-    for fp, out_dir, _ in processed:
+    for fp, out_dir, _, _obs in processed:
         out_files = sorted(p for p in Path(out_dir).glob("*")
                            if p.is_file() and p.suffix in (".md", ".txt", ".json"))
         if out_files:

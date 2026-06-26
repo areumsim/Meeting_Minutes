@@ -89,6 +89,7 @@ def enrich(minutes: str, llm, obs=None, topic: str = "",
         "related_notes": [basename, ...],   # Obsidian 위키링크 대상(노트 생성된 것)
         "sources": [{"title","url"}, ...],  # 외부 출처(상위)
         "entity_count": int,
+        "entities": {"terms":[...],"people":[...],"orgs":[...]},  # 추출 원본(재사용용)
       }
     """
     entities = extract_entities(minutes, llm, topic=topic)
@@ -101,7 +102,8 @@ def enrich(minutes: str, llm, obs=None, topic: str = "",
     flat = flat[:max_items]
 
     if not flat:
-        return {"glossary_md": "", "related_notes": [], "sources": [], "entity_count": 0}
+        return {"glossary_md": "", "related_notes": [], "sources": [],
+                "entity_count": 0, "entities": entities}
 
     # 각 항목을 병렬로 외부검색·노트생성 (웹검색이 항목당 수~십초라 직렬이면 느림).
     # 결과는 원래 순서(중요도순)로 재조립한다.
@@ -135,6 +137,7 @@ def enrich(minutes: str, llm, obs=None, topic: str = "",
         "related_notes": related_notes,
         "sources": all_sources[:8],
         "entity_count": len(glossary_lines),
+        "entities": entities,
     }
 
 

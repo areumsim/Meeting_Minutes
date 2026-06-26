@@ -65,6 +65,14 @@ class BrowserRealtimeSession:
         # 번역 스레드풀
         self._translator_pool = ThreadPoolExecutor(max_workers=2)
 
+        # Vault 검색 (실시간 사실 검증) — config.wiki.realtime_vault_search 로 활성화
+        self._related_notes: List[Dict] = []
+        self._web_findings: List[Dict] = []
+        self._notes_lock = threading.Lock()
+        self._vault_pool = ThreadPoolExecutor(max_workers=1)
+        self._segment_counter = 0  # throttle용
+        self._obs_client = None  # ObsidianClient 캐시 (세션당 1회 생성)
+
     async def run(self):
         """메인 실행 루프."""
         import config_loader as cfg
@@ -251,6 +259,12 @@ class BrowserRealtimeSession:
                 consumer_task.cancel()
                 event_thread.join(timeout=10)
                 self._translator_pool.shutdown(wait=True)
+                self._vault_pool.shutdown(wait=False, cancel_futures=True)
+                if self._obs_client:
+                    try:
+                        self._obs_client.close()
+                    except Exception:
+                        pass
 
         except Exception as e:
             traceback.print_exc()
@@ -346,6 +360,30 @@ class BrowserRealtimeSession:
                     "end": elapsed,
                 })
 
+            # 실시간 Vault/웹 검색 (설정된 경우, 비차단)
+            self._segment_counter += 1
+            try:
+                import config_loader as _rc
+                vault_search_on = bool(_rc.get("wiki.realtime_vault_search", False))
+                search_interval = int(_rc.get("wiki.realtime_search_interval", 3) or 3)
+                online_search_on = bool(_rc.get("wiki.online_search_enabled", False))
+                web_interval = int(_rc.get("wiki.realtime_web_search_interval", 0) or 0)
+            except Exception:
+                vault_search_on = False
+                search_interval = 3
+                online_search_on = False
+                web_interval = 0
+            if vault_search_on and self._segment_counter % max(search_interval, 1) == 0:
+                self._vault_pool.submit(
+                    self._search_vault_segment,
+                    final_text, topic,
+                )
+            if online_search_on and web_interval > 0 and self._segment_counter % web_interval == 0:
+                self._vault_pool.submit(
+                    self._web_research_segment,
+                    final_text,
+                )
+
             self._cleanup_item(item_id)
 
         elif etype == "error":
@@ -393,6 +431,69 @@ class BrowserRealtimeSession:
                 "end": seg["end"],
                 "translateError": str(e),
             })
+
+    def _get_obs(self):
+        """ObsidianClient 세션 싱글톤 (최초 호출 시 생성, 이후 재사용)."""
+        if self._obs_client is None:
+            try:
+                from obsidian import ObsidianClient
+                obs = ObsidianClient.from_config()
+                if obs and obs.ping():
+                    self._obs_client = obs
+            except Exception:
+                pass
+        return self._obs_client
+
+    def _search_vault_segment(self, text: str, topic: str) -> None:
+        """세그먼트 텍스트로 Vault 검색 (백그라운드 스레드, 비차단).
+        결과는 self._related_notes 에 축적되고 브라우저로도 전송된다."""
+        try:
+            obs = self._get_obs()
+            if obs:
+                query = (text[:60] + (" " + topic if topic else "")).strip()
+                results = obs.search_simple(query, context_length=150, limit=5)
+                if results:
+                    with self._notes_lock:
+                        for r in results:
+                            self._related_notes.append({
+                                "filename": r.get("filename", ""),
+                                "score": r.get("score", 0),
+                                "matches": r.get("matches", [])[:2],
+                                "segment_text": text[:80],
+                            })
+                    # 브라우저에 관련 노트 힌트 전송
+                    top = sorted(results, key=lambda x: -x.get("score", 0))[:3]
+                    self._send_to_browser({
+                        "type": "related_notes",
+                        "notes": [
+                            {
+                                "filename": r.get("filename", ""),
+                                "score": round(r.get("score", 0), 3),
+                                "matches": r.get("matches", [])[:2],
+                            }
+                            for r in top
+                        ],
+                        "elapsed": time.time() - self._session_start,
+                    })
+        except Exception:
+            pass  # 검색 실패는 무시 (실시간 스트림에 영향 없어야 함)
+
+    def _web_research_segment(self, text: str) -> None:
+        """세그먼트 텍스트로 웹 검색 보완 (백그라운드 스레드, 비차단)."""
+        try:
+            import config_loader as _rc
+            import meeting_minutes as mm
+            llm = mm.LLMClient(preferred=_rc.get("models.llm", "gpt") or "gpt")
+            result = llm.web_research(text[:60])
+            if result and result.get("text"):
+                with self._notes_lock:
+                    self._web_findings.append({
+                        "segment_text": text[:80],
+                        "result": result.get("text", "")[:500],
+                        "sources": result.get("sources", [])[:3],
+                    })
+        except Exception:
+            pass
 
     def _send_to_browser(self, data: dict):
         """스레드 안전한 WebSocket 전송. 큐에 넣으면 메인 루프에서 처리."""
@@ -522,11 +623,38 @@ class BrowserRealtimeSession:
             # 세션 날짜 문자열
             session_dt = datetime.now().strftime("%Y년 %m월 %d일 %H:%M")
 
+            # [공용] 계획 매칭 + 사전 자료 주입 (batch/realtime CLI 와 동일 로직)
+            _plan_match = None
+            _gen_memo = None
+            try:
+                _plan_match, _gen_memo = mm.plan_context_memo(title or topic, session_dt, None)
+            except Exception as _pe:
+                print(f"[finalize] plan-context skip: {_pe}")
+
+            # 실시간 Vault 검색 결과를 memo에 주입
+            with self._notes_lock:
+                _vault_notes = list(self._related_notes)
+                _web_findings = list(self._web_findings)
+            if _vault_notes:
+                unique_files = list(dict.fromkeys(
+                    n["filename"] for n in _vault_notes if n.get("filename")
+                ))[:10]
+                vault_block = "\n[실시간 관련 노트(Vault 검색)]:\n" + "\n".join(
+                    f"- [[{f.replace('.md', '')}]]" for f in unique_files
+                )
+                _gen_memo = (_gen_memo or "") + vault_block
+            if _web_findings:
+                web_block = "\n[웹 검색 보완]:\n" + "\n".join(
+                    f"- {f['result'][:200]}" for f in _web_findings[:3]
+                )
+                _gen_memo = (_gen_memo or "") + web_block
+
             # 회의록
             try:
                 minutes = mm.generate_minutes(
                     refined_text if refined_text else self.segments,
                     llm, doc_type, topic=topic, session_dt=session_dt,
+                    memo=_gen_memo,
                 )
                 if minutes:
                     db.upsert_document(self.session_id, "minutes", minutes)
@@ -584,6 +712,7 @@ class BrowserRealtimeSession:
                         summary_md=_summary, actions_md=_actions_md,
                         topic=topic, session_dt=session_dt, attendees=[],
                         notify=("email" if mm._c("realtime.email_on_finish", False) else None),
+                        planned_match=_plan_match,
                     )
             except Exception as e:
                 print(f"[finalize] enrich/obsidian error: {e}")

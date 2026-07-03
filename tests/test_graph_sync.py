@@ -38,6 +38,24 @@ class TestNormalization:
         assert graph_sync.strip_wikilink(None) == ""
 
 
+class TestEntityResolver:
+    def test_underscore_and_space_separator_merge(self):
+        # 실제 vault 데이터에서 발견된 케이스: "260627_5" vs "260627 5"가 별개 노드로 남던 버그
+        assert graph_sync.resolve_canonical_key("meeting", "260627_5") == \
+            graph_sync.resolve_canonical_key("meeting", "260627 5")
+
+    def test_person_title_suffix_stripped(self):
+        assert graph_sync.resolve_canonical_key("person", "홍길동 팀장") == \
+            graph_sync.resolve_canonical_key("person", "홍길동")
+        assert graph_sync.resolve_canonical_key("person", "김철수 매니저") == \
+            graph_sync.resolve_canonical_key("person", "김철수")
+
+    def test_title_suffix_not_stripped_for_other_types(self):
+        # person이 아닌 타입은 "팀장" 등을 라벨의 일부로 취급해야 한다 (topic/action 오탐 방지)
+        assert graph_sync.resolve_canonical_key("topic", "홍길동 팀장") != \
+            graph_sync.resolve_canonical_key("topic", "홍길동")
+
+
 # ━━━━━━━━━━━━━━━━━━━━ graph_db upsert idempotency ━━━━━━━━━━━━━━━━━━━━
 
 @pytest.fixture
@@ -45,6 +63,20 @@ def db_path(tmp_path):
     p = tmp_path / "test_wiki_graph.db"
     graph_db.init_graph_db(db_path=p)
     return p
+
+
+class TestUpsertEntityResolution:
+    def test_upsert_entity_merges_title_variant(self, db_path):
+        id1 = graph_sync._upsert_entity("person", "홍길동 팀장", db_path=db_path)
+        id2 = graph_sync._upsert_entity("person", "홍길동", db_path=db_path)
+        assert id1 == id2
+        assert len(graph_db.list_nodes(type="person", db_path=db_path)) == 1
+
+    def test_upsert_entity_merges_underscore_variant(self, db_path):
+        id1 = graph_sync._upsert_entity("meeting", "260627_5", db_path=db_path)
+        id2 = graph_sync._upsert_entity("meeting", "260627 5", db_path=db_path)
+        assert id1 == id2
+        assert len(graph_db.list_nodes(type="meeting", db_path=db_path)) == 1
 
 
 class TestUpsertIdempotency:

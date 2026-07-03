@@ -744,9 +744,12 @@ Meeting -[:USED_CONTEXT]-> Note
   후처리 지점에서 `wiki_core.graph_sync.sync_session_graph()` 호출 (registry JSON 갱신과 별개 로직,
   실패해도 세션 완료에 영향 없음).
 
-**엔티티 정규화**: v1은 `wiki_knowledge._norm_key()`(소문자화 + 공백/특수문자 제거) 기반 정확 일치만
-지원한다. 표기가 다르면(예: "260627_5" vs "260627 5") 별개 노드로 남는다 — 동명이인/약어 통합
-(Entity Resolver)은 여전히 미구현 상태로 남겨둔 향후 과제다.
+**엔티티 정규화 (`graph_sync.resolve_canonical_key()`)**: `wiki_knowledge._norm_key()` 기반
+정확 일치에 가벼운 규칙 기반 보정을 얹었다 — 구분자 통일(`_` vs 공백, 예: "260627_5"/"260627 5")과
+person 노드의 흔한 직함/존칭 접미사 제거("홍길동 팀장" vs "홍길동")를 지원한다. 세 채널
+(registry 백필/vault 백필/세션 실시간 동기화)이 모두 이 함수를 거치므로 어느 경로로 만들어졌든
+같은 사람·회의는 하나의 노드로 합쳐진다. 동명이인 구분, 오탈자 교정, LLM 기반 병합은 여전히
+범위 밖이다(향후 과제).
 
 **조회 API** (읽기 전용, `web/backend/api/graph.py`): `GET /api/graph/nodes`,
 `/api/graph/nodes/{id}`, `/api/graph/nodes/{id}/neighbors`, `/api/graph/edges`, `/api/graph/path`,
@@ -822,7 +825,7 @@ PyInstaller `.exe` 배포(`scripts/build/build_exe.spec`)는 비개발자용 1�
 | 섹션 단위 임베딩 + Reranker | — | 현재는 노트 단위 임베딩 + 섹션 단위 TF-IDF 조합 |
 | Graph DB / GraphRAG | `wiki_knowledge.graph_enabled` | 구현 완료 (경량 SQLite, `wiki_core/graph_db.py`) — "Wiki Knowledge Graph" 절 참고 |
 | Review Queue / Obsidian Bases 자동 생성 | — | `review_status`/`wiki_proposal.json v2`가 먼저 안정화된 뒤 도입 |
-| 엔티티 정규화 (Entity Resolver) | — | 동일 인물/조직/주제의 노트명 변형(약어·오탈자) 통합 |
+| 엔티티 정규화 (Entity Resolver) 고도화 | — | 구분자·직함 접미사 정규화는 구현 완료(`graph_sync.resolve_canonical_key()`) — 동명이인 구분, 오탈자·약어 교정, LLM 기반 병합은 여전히 미구현 |
 | 자동 Wiki 반영 (auto_apply_updates) | `wiki_knowledge.auto_apply_updates=false` | 회의 발언이 원본을 오염시킬 위험 |
 | 웹 전문가 검증 (proposal 단위) | — | 외부 API 비용 증가 |
 | 로컬 diarization 고도화 (pyannote 등) | — | 설치/운영 부담 별도 과제 |

@@ -114,14 +114,17 @@ def upsert_node(
     label: str,
     attributes: Optional[Dict[str, Any]] = None,
     *,
+    canonical_key: Optional[str] = None,
     conn: Optional[sqlite3.Connection] = None,
     db_path: Optional[Path] = None,
 ) -> str:
     """(type, canonical_key) 로 조회 → 없으면 INSERT, 있으면 attributes 병합 후 UPDATE.
-    conn이 주어지면 그 커넥션을 재사용(트랜잭션/드라이런 제어용), 아니면 자체 커넥션+commit."""
+    conn이 주어지면 그 커넥션을 재사용(트랜잭션/드라이런 제어용), 아니면 자체 커넥션+commit.
+    canonical_key를 생략하면 기본 wiki_knowledge._norm_key(label) — 표기 변형 흡수가 필요하면
+    (예: 직함 제거, 구분자 통일) graph_sync.resolve_canonical_key()로 계산해 넘긴다."""
     from meeting_minutes_app.wiki_core.wiki_knowledge import _norm_key
 
-    canonical = _norm_key(label or "")
+    canonical = canonical_key if canonical_key is not None else _norm_key(label or "")
     now = datetime.now().isoformat(timespec="seconds")
     attrs = attributes or {}
 

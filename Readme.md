@@ -1,11 +1,15 @@
 # 🎙️ Meeting Minutes Generator v2.1
 
-음성/영상 파일에서 자동으로 **스크립트 + 기록문서 + 요약본**을 생성합니다.
-실시간 마이크 녹취(`realtime_transcription.py`)와 파일 배치 처리(`meeting_minutes.py`) 모두 지원합니다.
-**웹 UI**(`run_ui.bat`)로도 동일한 기능을 브라우저에서 사용할 수 있습니다.
+음성/영상 파일에서 자동으로 **스크립트 + 회의록 + 요약본 + 사실검증 + Wiki 업데이트 후보**를 생성합니다.
+실시간 마이크 녹취와 파일 배치 처리를 모두 지원합니다. 사용자 실행은 root의 `run_meeting.bat` / `run_meeting.py`로 통일되어 있고, 구현 모듈은 `meeting_minutes_app/` 아래에 있습니다.
+**웹 UI**(`run_meeting.bat`)로도 동일한 기능을 브라우저에서 사용할 수 있습니다.
 
 > 🆕 **Obsidian + Claude 연동**: 회의록을 Claude로 작성하고, 전문용어·인물·기업을 자동 검색해
 > Obsidian 볼트에 정리한 뒤 메일로 발송합니다. → **쉬운 사용법: [`docs/GUIDE_Obsidian_Claude.md`](docs/GUIDE_Obsidian_Claude.md)**
+>
+> 🆕 **Supermemory 팩트 메모리**: Obsidian에 회의록을 저장할 때 동시에 Supermemory에도 저장 → 다음 회의 컨텍스트 빌딩 및 사실 검증 시 이전 회의 기억을 자동 참조합니다. `config.supermemory.enabled: true` 로 활성화. 자체 호스팅 가능 (`npx supermemory local`, MIT 라이선스).
+>
+> 저장 경로와 요약/회의록 구분 기준은 [`docs/출력_구조_저장경로_요약회의록.md`](docs/출력_구조_저장경로_요약회의록.md)를 기준으로 합니다.
 
 ---
 
@@ -28,28 +32,37 @@ cp   config.example.json config.json   # Mac/Linux
 
 `config.json`을 열어 OpenAI API 키(`openai_api_key`)를 입력합니다.
 
-### 3. 배치 처리 (파일 → 회의록)
+### 3. 통합 런처
 
 ```bash
-python meeting_minutes.py meeting.mp4
+run_meeting.bat
 ```
 
-→ `output/2025-02-20_meeting/` 폴더에 회의록·요약본 자동 저장
+메뉴에서 실시간 녹취, 파일 배치 처리, Obsidian 임베드 녹음 처리, Vault Q&A, 웹 UI를 한곳에서 실행합니다.
 
-### 4. 실시간 녹취 (Windows)
-
-`run_realtime.bat` 더블클릭 → 메뉴에서 모드 선택 → Enter 키로 종료
-
-또는:
+### 4. 직접 명령 실행
 
 ```bash
-python realtime_transcription.py --language ko   # 한국어 회의
-python realtime_transcription.py --translate     # 영어 → 한국어 실시간 번역
+python run_meeting.py batch meeting.mp4                              # 파일 → 회의록
+python run_meeting.py realtime                                       # 실시간 녹취
+python run_meeting.py ingest meeting.m4a --no-email
+python run_meeting.py prep-brief --title "회의 제목" --topic "주제"  # 회의 준비 브리프
+```
+
+→ `output/날짜_제목/` 폴더에 회의록·요약본 자동 저장
+
+기존 `scripts/windows/run_batch.bat`, `scripts/windows/run_realtime.bat`, `scripts/windows/run_ingest.bat`, `scripts/windows/run_vault_audio_email.bat`는 호환용으로 유지되며 내부적으로 `run_meeting.py`에 위임합니다.
+
+### 5. 실시간 녹취 (Windows)
+
+```bash
+python run_meeting.py realtime-raw --language ko   # 한국어 회의
+python run_meeting.py realtime-raw --translate     # 영어 → 한국어 실시간 번역
 ```
 
 ---
 
-## 웹 UI (run_ui.bat)
+## 웹 UI (run_meeting.bat)
 
 CLI와 동일한 기능을 브라우저에서 사용할 수 있는 웹 인터페이스입니다.
 
@@ -57,12 +70,12 @@ CLI와 동일한 기능을 브라우저에서 사용할 수 있는 웹 인터페
 
 ```bash
 # Windows — 더블클릭
-run_ui.bat
+run_meeting.bat
 
 # 또는 직접 실행
-python run_ui.py                    # 프로덕션 모드 (http://localhost:8501)
-python run_ui.py --dev              # 개발 모드 (Vite + FastAPI)
-python run_ui.py --port 9000        # 포트 변경
+python run_meeting.py web                    # 프로덕션 모드 (http://localhost:8501)
+python run_meeting.py web --dev              # 개발 모드 (Vite + FastAPI)
+python run_meeting.py web --port 9000        # 포트 변경
 ```
 
 > 최초 실행 시 `fastapi`, `uvicorn`, `python-multipart` 및 프론트엔드 의존성이 자동 설치됩니다.
@@ -72,33 +85,57 @@ python run_ui.py --port 9000        # 포트 변경
 | 페이지 | 기능 |
 | --- | --- |
 | **Dashboard** | 세션 목록, 검색/필터, 상태 배지, CLI로 생성한 세션도 자동 표시 |
-| **Recorder** | 브라우저 마이크 → 실시간 STT (OpenAI Realtime WebSocket API), 라이브 트랜스크립트, 볼륨 시각화 |
+| **Recorder** | 브라우저 마이크 → 실시간 STT, 라이브 트랜스크립트, 볼륨 시각화 |
 | **File Upload** | 드래그앤드롭 파일 업로드 → 배치 처리 (7가지 모드 지원) |
 | **Text Analysis** | 텍스트 붙여넣기 → AI 분석 |
 | **Settings** | STT/GPT/Claude 모델 설정, 실시간 녹음 설정 (VAD, 노이즈), 프로파일 CRUD |
-| **Session Detail** | 멀티탭 문서 뷰어 (회의록/요약/스크립트/액션아이템), 복사/다운로드, 세그먼트 타임라인 |
+| **Session Detail** | 멀티탭 문서 뷰어 (회의록/요약/사실검증/Wiki Context/Wiki Proposal/스크립트/액션아이템), 복사/다운로드, 세그먼트 타임라인 |
 
 ### CLI ↔ 웹 동기화
 
-- CLI(`run_batch.bat`, `run_realtime.bat`)로 생성한 결과는 웹 Dashboard에 자동 표시
+- CLI(`scripts/windows/run_batch.bat`, `scripts/windows/run_realtime.bat`)로 생성한 결과는 웹 Dashboard에 자동 표시
 - 웹에서 생성한 결과도 `./output/` 폴더에 파일로 저장
 - 서버 시작 시 `session_scanner.py`가 `./output/` 폴더를 스캔하여 DB에 임포트
 
 ### 실시간 녹음 아키텍처 (웹)
 
 ```text
-브라우저 마이크 → ScriptProcessorNode (PCM16 24kHz)
-    → WebSocket → FastAPI 서버
-        → OpenAI Realtime WebSocket API (서버 VAD + 전사)
-            → 실시간 트랜스크립트 → 브라우저에 표시
-    종료 시 → 회의록/요약/액션아이템 자동 생성
+현재 구현:
+브라우저/모바일 마이크 → OpenAI Realtime API 직접 연결
+    → 실시간 트랜스크립트 → 브라우저에 표시
+    → 종료 시 로컬 세션 저장 및 회의록/요약/액션아이템 생성
+
+목표 보안 구조:
+브라우저/모바일 → FastAPI 임시 토큰 발급
+    → OpenAI Realtime API 직접 연결
+    → FastAPI는 세션 저장, Obsidian 저장, 알림, audit log 담당
+
+서버 프록시 옵션:
+브라우저/서버 오디오 파이프라인 → FastAPI /ws/realtime
+    → OpenAI Realtime API WebSocket
+    → 중앙 로깅/회사망 통제용. 기본 웹 Recorder 경로는 아님.
 ```
 
-WebSocket 연결 실패 시 HTTP STT 폴백 (5초 청크 단위)이 자동 활성화됩니다.
+현재 프론트 구현은 `web/frontend/src/lib/api.ts`의 `createRealtimeWS()`가 OpenAI Realtime API에 직접 WebSocket으로 연결합니다. 이 standalone/mobile 경로는 지연은 낮지만 서버의 Obsidian/Wiki/사실검증 파이프라인을 우회합니다. 서버 기반 운영 품질이 필요하면 FastAPI `/ws/realtime` 경로를 사용해야 하며, 이 경로는 종료 시 회의록·요약·액션·사실검증·Wiki Context·Wiki Proposal을 DB와 output에 남깁니다. 공식 권장 목표는 브라우저/모바일에서 WebRTC + ephemeral credential을 사용하는 구조입니다.
+
+> 보안 TODO: 프론트엔드에 장기 OpenAI API Key를 저장하지 않고, 브라우저/모바일은 FastAPI가 발급한 ephemeral credential을 사용하도록 전환합니다.
+
+### 웹 오디오 입력 안정성
+
+현재 웹 Recorder는 `ScriptProcessorNode` 기반으로 PCM16 24kHz 오디오를 생성합니다. `ScriptProcessorNode`는 deprecated API이며 메인 스레드 처리로 지연, jank, audio glitch 위험이 있습니다.
+
+개선 목표:
+
+```text
+Browser mic → AudioWorkletProcessor
+    → RingBuffer/SharedArrayBuffer optional
+    → PCM16 24kHz
+    → OpenAI Realtime API 또는 FastAPI /ws/realtime
+```
 
 ### 기술 스택
 
-- **백엔드**: FastAPI + SQLite (기존 Python 모듈 직접 import)
+- **백엔드**: FastAPI + SQLite (`meeting_minutes_app/` 구현 모듈 import)
 - **프론트엔드**: React 19 + Vite 6 + TypeScript + Tailwind CSS 4 + Motion
 
 ---
@@ -123,10 +160,10 @@ PC 백엔드(FastAPI) 없이 **완전 독립형(Serverless)** 으로 동작하�
 
 ```text
 입력
-  ├─ 파일 업로드/배치: meeting_minutes.py, meeting_assistant.py process
-  ├─ 마이크 실시간: realtime_transcription.py, run_realtime.py, meeting_assistant.py record
-  ├─ Obsidian 임베드 녹음: meeting_assistant.py vault-audio
-  └─ 폴더 자동 감시: meeting_assistant.py watch → ingestion_pipeline.py
+  ├─ 파일 업로드/배치: run_meeting.py batch/process
+  ├─ 마이크 실시간: run_meeting.py realtime/record
+  ├─ Obsidian 임베드 녹음: run_meeting.py vault-audio
+  └─ 폴더 자동 감시: run_meeting.py watch → ingestion_pipeline.py
 
 공통 처리
   오디오 준비(ffmpeg) → STT → 화자 추론/교정 → 회의록/요약/액션 생성
@@ -141,14 +178,90 @@ PC 백엔드(FastAPI) 없이 **완전 독립형(Serverless)** 으로 동작하�
 
 | 진입점 | 목적 | 저장/병합 기준 |
 | --- | --- | --- |
-| `meeting_minutes.py` / `meeting_assistant.py process` | 기존 배치 처리 | `output/` 저장, 설정 시 Obsidian 발행 및 계획 매칭 |
-| `realtime_transcription.py` / `record` | 마이크 실시간 녹취 | 종료 시 회의록/요약 생성, 설정 시 Obsidian/메일 |
+| `run_meeting.bat` / `run_meeting.py` | 권장 통합 실행 메뉴 | 기존 배치/실시간/ingest/web 명령으로 안전하게 위임 |
+| `batch` / `process` | 기존 배치 처리 | `output/` 저장, 설정 시 Obsidian 발행 및 계획 매칭 |
+| `realtime` / `record` | 마이크 실시간 녹취 | 종료 시 회의록/요약/사실검증/Wiki Context/Proposal 생성, 설정 시 Obsidian/메일 |
 | `vault-audio` | Obsidian 노트에 임베드된 녹음 처리 | 해당 노트에 `## 회의 기록`으로 직접 병합 |
 | `ingest` / `watch` | 자동 수집용 오디오 처리 | 관련 노트 링크 포함 recording note 생성, 실패 시 `output/` 저장 |
 | `prep` / `schedule` / `merge` | 계획 회의 운영 | 계획 노트 사전 리서치, 충돌 점검, 병합 대기 처리 |
 | `reindex` / `ask` | Vault 지식 검색 | `data/vault_index.json` 기반 Q&A와 관련 노트 검색 |
 
-### 배치 처리 흐름 (meeting_minutes.py)
+### Wiki 지식 순환 (prep-brief)
+
+`prep-brief` 명령은 회의 **전**에 관련 Vault 노트·Registry 기반 준비 브리프를 LLM 없이 생성합니다.
+
+```bash
+python run_meeting.py prep-brief --title "Q3 계획 회의" --topic "OKR 점검"
+python run_meeting.py prep-brief --title "AI 세미나 준비" --no-email
+python run_meeting.py prep-brief --title "주간 회의" --reindex
+```
+
+- `output/{yymmdd} {제목} 준비브리프.md` 저장 (항상)
+- `obsidian.planning_path`(기본: `Planning/Prep Briefs`) 에 Obsidian 저장 (선택)
+- `notify.on_finish` 채널로 이메일/Slack/Teams 발송 (선택)
+- `data/action_registry.json` / `data/decision_registry.json` — 첫 실행 시 자동 생성, git 미포함
+- meeting 처리 후 `output/{날짜_제목}/wiki_context.json` 생성 (회의록 생성에 주입된 관련 노트·레지스트리 기록)
+- meeting 처리 후 `output/{yymmdd} {제목} wiki_proposal.json/.md` 생성 (관련 노트 있을 때, 수동 검토용)
+- 논문·학술자료는 별도 섹션(`## 관련 논문·학술자료`)으로 분리 출력
+
+| 옵션 | 설명 |
+|---|---|
+| `--title` | 회의 제목 (필수) |
+| `--topic` | 회의 주제 (선택, 관련 노트 검색 정확도 향상) |
+| `--no-obsidian` | Obsidian 저장 건너뜀 |
+| `--no-email` | 이메일/알림 발송 건너뜀 |
+| `--reindex` | 완료 후 Vault 인덱스 강제 재빌드 |
+| `--limit` | 관련 노트 최대 개수 (기본: 5) |
+
+### Obsidian Wiki 컨텍스트
+
+- 배치 처리와 자동 수집은 STT 세그먼트 내용으로 Vault 인덱스와 Obsidian REST 검색을 수행합니다.
+- 관련 노트 본문 일부는 회의록 생성 memo에 들어가며, 발행된 Obsidian 노트에는 관련 노트 링크로 남습니다.
+- CLI 실시간과 서버 `/ws/realtime`은 종료 후 누적 세그먼트를 기준으로 같은 컨텍스트를 한 번 주입합니다. 웹 standalone/mobile direct OpenAI 경로는 Vault/Wiki/사실검증을 우회하므로 운영 기록용 기본 경로로 보지 않습니다.
+- Obsidian은 로컬 Wiki입니다. 최신 인터넷 정보는 `wiki.online_search_enabled`가 켜진 경우 별도 웹 리서치 memo로 보완합니다.
+- `wiki.claim_verify=true`이면 회의록 생성 후 Vault 근거와 비교해 `## 사실 검증` 섹션을 추가합니다. 결과에는 판정, 신뢰도, 근거 노트가 포함됩니다.
+- 용어·배경 enrichment가 신뢰할 만한 설명을 찾지 못하면 챗봇식 사과문을 싣지 않고 `확인 불가`로 표시합니다.
+- 처리 결과 폴더의 `wiki_context.json`에는 회의 날짜, 원본 파일명, STT 재사용 여부, 관련 노트, 추출 용어/엔티티, 레지스트리 액션이 함께 저장됩니다.
+- Obsidian 연결 실패는 치명 오류가 아니며, 파일 출력은 계속 생성됩니다.
+
+### Wiki Q&A (wiki-ask)
+
+Obsidian 볼트에 쌓인 지식에 직접 질문합니다. 관련 노트/섹션을 근거로 모아 LLM이 답변하고,
+반드시 근거 링크와 함께 아래 고정 포맷으로 답합니다.
+
+```bash
+python run_meeting.py wiki-ask --question "M365 백업 검토 현황 알려줘"
+python run_meeting.py wiki-ask --question "지난 회의에서 결정된 사항만 정리해줘" --show-sources
+```
+
+답변 예시:
+
+```md
+## 요약 답변
+PoC 후보로 Veeam, Rubrik, AvePoint 3개 제품이 선정되었습니다.
+
+## 상세 답변
+260701 M365 백업 검토 회의에서... [출처: [[260701 M365 백업 검토 회의#주요 결정사항]]]
+
+## 근거
+- [[260701 M365 백업 검토 회의#주요 결정사항]]
+- [[M365 백업 솔루션 검토]]
+
+## 확실한 내용
+PoC 후보 3개 제품명은 회의록에 명시됨.
+
+## 불확실한 내용
+국내 구축 사례는 확인 불가.
+
+## 다음 액션 또는 업데이트 후보
+국내 구축 사례 확인 필요 — 담당자 배정 안 됨.
+```
+
+`indexing.enabled=true` + `wiki_knowledge.section_index_enabled=true`(기본값)일 때
+`## 근거`가 노트 전체가 아닌 `[[노트#헤딩]]` 단위로 표시됩니다. 새 노트를 추가했다면
+`python run_meeting.py reindex`로 먼저 인덱스를 갱신하세요.
+
+### 배치 처리 흐름 (`run_meeting.py batch`)
 
 ```mermaid
 flowchart LR
@@ -222,7 +335,8 @@ flowchart LR
 | **영→한 번역** | `--translate` 로 영어 음성 → 한국어 문서 |
 | **GPT + Claude 폴백** | GPT-4o 실패 시 Claude 자동 전환 |
 | **자동 재시도** | API 에러 시 3회 자동 재시도 |
-| **이어서 처리** | `--resume` 으로 STT 건너뛰고 문서만 재생성 |
+| **이어서 처리** | `--resume` 으로 기존 `segments.json`/`transcript.md`가 있을 때만 STT를 건너뛰고 문서만 재생성 |
+| **STT 강제 재실행** | `--force-stt` 로 기존 STT 결과가 있어도 새로 전사 |
 | **화자 사후 수정** | `--edit-speakers` 로 화자명 변경 → 재생성 |
 | **화자 이름 자동 추론** | "Speaker A/B" → LLM이 발화 내용 분석해 실명 추론 (`infer_speaker_names`) |
 | **화자 캐시** | 이전 화자 매핑 자동 저장·재사용 (`speaker_cache.py`) |
@@ -234,18 +348,22 @@ flowchart LR
 | **WebSocket 스트리밍** | `--mode ws` 로 ~1초 지연 실시간 전사 (서버 VAD + 노이즈 리덕션 내장) |
 | **회의 주제 입력** | 실행 시 주제를 입력하면 번역·회의록·요약 프롬프트에 맥락으로 반영 |
 | **화자 구분 스크립트** | 실시간 녹취 종료 후 화자별로 정리된 `*_script.md` 자동 생성 (번역 시 `*_script_ko.md` 추가) |
-| **실시간 화자 분리** | diarize 모델 사용 시 실시간 콘솔 출력·transcript에 화자 레이블 포함 |
+| **실시간 화자 보강** | Realtime 모드는 기본 화자분리 없음. 종료 후 발화 패턴 기반 화자 추론 또는 pyannote/WhisperX 후처리로 보강 |
 | **CJK 환각 필터** | STT 결과에서 중국어·일본어 환각 텍스트 자동 감지·제거 |
 | **STT 교정 (개선)** | 세션 종료 후 회의록 생성 **이전에** 맥락·주제 기반으로 오탈자·고유명사 교정 (`*_refined_script.txt`) |
 | **상세 회의록 프롬프트** | 스크립트 1분 분량당 200~400자 이상 기준 적용, 맥락 제거 금지 |
 | **긴 스크립트 자동 분할** | `MAX_LLM_CHARS` 초과 시 타임스탬프 기준 청크 분할 + 오버랩 처리 후 통합 |
-| **날짜 자동 추출** | 파일명의 날짜 패턴(YYYYMMDD)을 회의록 헤더에 자동 기재 |
+| **날짜 자동 추출** | 파일명의 `YYMMDD`, `YYYYMMDD`, `YYYY-MM-DD HH.MM` 패턴을 회의 날짜로 자동 기재 |
+| **Obsidian yymmdd 파일명** | 회의록/전사 노트를 `260627 제목.md`처럼 회의 날짜 prefix로 저장 |
+| **Vault 사실 검증** | 회의록 주장과 Vault 노트를 비교해 일치/충돌/확인불가 및 신뢰도 표시 |
+| **Wiki Context 기록** | 관련 노트·레지스트리·STT 품질 메타데이터를 `wiki_context.json`에 저장 |
+| **Supermemory 팩트 메모리** | Obsidian 저장 시 동시에 Supermemory에 팩트 카드 저장 → 다음 회의 컨텍스트·사실 검증 시 자동 참조 (`supermemory.enabled: true`, 자체 호스팅 지원) |
 | **번역 컨텍스트 윈도우** | 앞 5개 세그먼트를 힌트로 제공해 번역 용어 일관성 향상 |
 | **고정 헤더 UI** | 실시간 녹취 중 제목·경과시간·예상비용이 상단 2줄에 항상 표시 |
 | **스크롤 잠금** | `s+Enter` 로 화면 고정 — 이전 대화를 위로 스크롤하여 확인 가능 |
 | **요약 TXT 저장** | 요약본을 `.md`와 `.txt` 두 형식으로 저장, 이메일에 `.txt` 첨부 |
 | **크래시 복구** | JSONL + os.fsync + 오디오 PCM 백업으로 세션 보호 |
-| **디버그 로그** | `--debug` 시 `output/debug.log` 생성 / 실시간 런처는 `run_py.log` 항상 생성 |
+| **디버그 로그** | `--debug` 시 `output/debug.log` 생성 / 런처 로그는 `data/logs/run_py.log`에 저장 |
 | **설정 파일** | `config.json` 으로 반복 옵션 저장 |
 | **SSL 우회** | 회사/학교 네트워크 지원 |
 | **대용량 처리** | 170MB+ 영상도 자동 압축·분할 |
@@ -328,7 +446,7 @@ cp   config.example.json config.json   # Mac/Linux
     "verify": false    // 회사/학교 SSL 오류 시 false
   },
   "models": {
-    "stt":             "gpt-4o-transcribe",  // STT 기본 모델 (고품질)
+    "stt":             "gpt-4o-transcribe-diarize",  // 배치 파일 STT 예시(화자 분리)
     "llm":             "gpt",                // gpt | claude
     "gpt_model":       "gpt-4o",
     "minutes_model":   "gpt-4o",             // 회의록 생성 모델 (기본: gpt-4o)
@@ -348,7 +466,8 @@ cp   config.example.json config.json   # Mac/Linux
   "email": {
     "sender":    "sender@naver.com",
     "password":  "앱 비밀번호",
-    "recipient": "recipient@company.com"
+    "recipient": "recipient@company.com",
+    "markdown_attachment": "txt"
   },
   "notify": {
     "on_finish": "email",
@@ -361,6 +480,8 @@ cp   config.example.json config.json   # Mac/Linux
     "api_key": "",
     "vault_path": "",
     "notes_subdir": "00_Meetings",
+    "meetings_path": "",
+    "transcript_mode": "separate",
     "refs_subdir": "01_References"
   },
   "vault_watcher": {
@@ -369,7 +490,25 @@ cp   config.example.json config.json   # Mac/Linux
   },
   "indexing": {
     "index_path": "data/vault_index.json",
-    "vault_path": ""
+    "vault_path": "",
+    "auto_reindex_after_write": false
+  },
+  "wiki": {
+    "enabled": true,
+    "vault_enrich": true,
+    "claim_verify": true,
+    "claim_verify_max": 8,
+    "context_max_chars": 2000,
+    "online_search_enabled": false,
+    "claim_web_verify": false,
+    "realtime_vault_search": false
+  },
+  "wiki_knowledge": {
+    "enabled": true,
+    "update_proposals_enabled": true,
+    "section_index_enabled": true,
+    "proposal_llm_enabled": false,
+    "auto_apply_updates": false
   },
   "output_dir": "./output"
 }
@@ -381,9 +520,46 @@ cp   config.example.json config.json   # Mac/Linux
 | `realtime` | `realtime_transcription.py`, `run_realtime.py`, 웹 Recorder |
 | `email`, `notify` | 배치/실시간/자동 처리 완료 알림. `notify.on_finish`가 있으면 기본 알림으로 사용 |
 | `obsidian` | Local REST API 발행, 계획 노트 매칭/병합, Vault 폴더 경로 |
-| `vault_watcher` | `meeting_assistant.py watch`, `audio_watcher.py`, 자동 처리 상태 파일 |
+| `supermemory` | 회의록 저장 시 팩트 카드 동시 저장 + 다음 회의 컨텍스트·사실 검증에 자동 참조 (`supermemory_client.py`) |
+| `vault_watcher` | `run_meeting.py watch`, `run_meeting.py audio-watcher`, 자동 처리 상태 파일 |
 | `indexing`, `wiki` | `vault_indexer.py`, `wiki_ask.py`, 관련 노트 검색과 Q&A |
 | `analysis` | `prompts/` 템플릿 기반 문서 유형별 분석 |
+
+### Obsidian 저장 경로 기준
+
+- `obsidian.vault_path`는 실제 Obsidian 볼트 루트입니다. Local REST API가 보고 있는 열린 볼트와 같아야 합니다.
+- `indexing.vault_path`도 같은 루트를 봐야 관련 노트 검색과 실제 저장 위치가 어긋나지 않습니다.
+- `obsidian.meetings_path`가 있으면 새 회의록은 `notes_subdir`이 아니라 그 볼트 상대경로에 저장됩니다.
+- QC 아카이브 기준 예시는 다음입니다.
+
+```jsonc
+"obsidian": {
+  "vault_path": "D:\\Claude\\QC",
+  "meetings_path": "도메인_아카이브/01_회의_세미나/회의별"
+},
+"indexing": {
+  "vault_path": "D:\\Claude\\QC"
+}
+```
+
+현재 실제 경로는 다음 명령으로 확인합니다.
+
+```bash
+python run_meeting.py obsidian --where
+```
+
+### 요약과 회의록의 차이
+
+- `한눈에 보는 요약`: 결론, 결정/합의, 리스크/주의, 다음 액션만 짧게 보여주는 빠른 판단용입니다.
+- `회의록`: 안건별 상세 논의, 근거, 수치, 상충 의견, 미정 사항을 남기는 업무 기록입니다.
+- 같은 내용을 두 섹션에 길게 반복하면 잘못된 출력입니다. 요약은 회의록의 대체물이 아닙니다.
+
+### 전체 STT와 메일 첨부
+
+- `obsidian.transcript_mode = "separate"`이면 전체 STT는 회의록 본문에 붙지 않고 `yymmdd 제목 - 전사.md` 별도 노트로 저장됩니다.
+- `append`로 바꾸면 전체 STT를 회의록 본문 끝에 포함하고, `off`로 바꾸면 저장하지 않습니다.
+- 배치/실시간 완료 메일에는 기본적으로 상세 회의록, 요약본, 액션, STT 원본(`script.md`/`transcript.md`/`segments.json`), STT 교정본, `wiki_context.json`, `wiki_proposal.md/json`, 사실검증 파일을 가능한 한 모두 첨부합니다.
+- `email.markdown_attachment = "txt"`가 기본입니다. `.md` 첨부 한글 깨짐을 피하기 위해 UTF-8 `.txt`로 변환해 보냅니다.
 
 환경변수도 지원합니다 (환경변수 > config.json 순으로 우선):
 
@@ -415,104 +591,111 @@ export OPENAI_API_KEY="sk-proj-..."
 
 ---
 
-## 사용법 (meeting_minutes.py)
+## 사용법 (`run_meeting.py batch`)
 
 ### 기본
 
 ```bash
-python meeting_minutes.py meeting.mp4
+python run_meeting.py batch meeting.mp4
 ```
 
 ### 제목 지정
 
 ```bash
-python meeting_minutes.py meeting.mp4 --title "2025 Q1 정기회의"
+python run_meeting.py batch meeting.mp4 --title "2025 Q1 정기회의"
 ```
 
 ### 문서 타입
 
 ```bash
-python meeting_minutes.py seminar.webm --type seminar     # 세미나
-python meeting_minutes.py lecture.mp4  --type lecture     # 강의
+python run_meeting.py batch seminar.webm --type seminar     # 세미나
+python run_meeting.py batch lecture.mp4  --type lecture     # 강의
 ```
 
 ### 다중 파일
 
 ```bash
-python meeting_minutes.py file1.mp4 file2.webm file3.mp3
-python meeting_minutes.py *.webm --type seminar
-python meeting_minutes.py *.mp4 --title "시리즈강의"       # → 시리즈강의_01_xxx, ...
+python run_meeting.py batch file1.mp4 file2.webm file3.mp3
+python run_meeting.py batch *.webm --type seminar
+python run_meeting.py batch *.mp4 --title "시리즈강의"       # → 시리즈강의_01_xxx, ...
 ```
 
 ### 영어 → 한국어
 
 ```bash
-python meeting_minutes.py talk_en.mp4 --translate
-python meeting_minutes.py talk_en.mp4 --translate --translate-script   # 스크립트도
+python run_meeting.py batch talk_en.mp4 --translate
+python run_meeting.py batch talk_en.mp4 --translate --translate-script   # 스크립트도
 ```
 
 ### 프로필 적용
 
 ```bash
-python meeting_minutes.py meeting.mp4 --profile meeting_ko      # 한국어 회의
-python meeting_minutes.py seminar.webm --profile seminar         # 세미나 (영→한)
-python meeting_minutes.py lecture.mp4  --profile lecture         # 강의 (영→한)
-python profiles.py list                                          # 프로필 목록
+python run_meeting.py batch meeting.mp4 --profile meeting_ko      # 한국어 회의
+python run_meeting.py batch seminar.webm --profile seminar         # 세미나 (영→한)
+python run_meeting.py batch lecture.mp4  --profile lecture         # 강의 (영→한)
+python run_meeting.py profiles list                                          # 프로필 목록
 ```
 
 ### 화자 수정 (캐시 연동)
 
 ```bash
 # 1차 실행 후 화자명 변경 → 자동 저장
-python meeting_minutes.py meeting.mp4 --edit-speakers
+python run_meeting.py batch meeting.mp4 --edit-speakers
 # 동일 회의 재실행 시 저장된 매핑 자동 재사용
-python meeting_minutes.py meeting.mp4 --reuse-speakers
+python run_meeting.py batch meeting.mp4 --reuse-speakers
 ```
 
 ### 메모 반영
 
 ```bash
-python meeting_minutes.py meeting.mp4 --memo notes.txt
+python run_meeting.py batch meeting.mp4 --memo notes.txt
 ```
 
 ### LLM에 추가 지시
 
 ```bash
-python meeting_minutes.py seminar.webm --type seminar --custom-prompt "NVIDIA GPU 기술 중심으로 정리"
+python run_meeting.py batch seminar.webm --type seminar --custom-prompt "NVIDIA GPU 기술 중심으로 정리"
 ```
 
 ### 완료 알림
 
 ```bash
-python meeting_minutes.py meeting.mp4 --notify email    # 이메일
-python meeting_minutes.py meeting.mp4 --notify slack    # Slack
-python meeting_minutes.py meeting.mp4 --notify teams    # Teams
+python run_meeting.py batch meeting.mp4 --notify email    # 이메일
+python run_meeting.py batch meeting.mp4 --notify slack    # Slack
+python run_meeting.py batch meeting.mp4 --notify teams    # Teams
 ```
 
 ### 비용 추정 (실행 안 함)
 
 ```bash
-python meeting_minutes.py big_file.mp4 --estimate-cost
+python run_meeting.py batch big_file.mp4 --estimate-cost
 ```
 
 ### 이어서 처리 (STT 건너뜀)
 
 ```bash
 # STT는 완료됐는데 LLM 단계에서 실패한 경우
-python meeting_minutes.py meeting.mp4 --resume
+python run_meeting.py batch meeting.mp4 --resume
+```
+
+`--resume`은 기존 출력 폴더에서 `segments.json` 또는 `transcript.md`를 찾은 경우에만 STT를 건너뜁니다.
+기존 STT가 없으면 새 STT를 몰래 실행하지 않고 중단합니다. 새 전사가 필요하면 명시적으로 실행합니다.
+
+```bash
+python run_meeting.py batch meeting.mp4 --force-stt
 ```
 
 ### SSL 문제 (회사/학교)
 
 ```bash
-python meeting_minutes.py meeting.mp4 --ssl-no-verify
+python run_meeting.py batch meeting.mp4 --ssl-no-verify
 # 또는 config.json: "ssl": { "verify": false }
 ```
 
 ### 디버그 (콘솔 상세 출력)
 
 ```bash
-python meeting_minutes.py meeting.mp4 --debug
+python run_meeting.py batch meeting.mp4 --debug
 # --debug 시 output/debug.log 생성 (상세 로그 + 중간 파일 저장)
 ```
 
@@ -526,19 +709,22 @@ python meeting_minutes.py meeting.mp4 --debug
 | `--title` | 제목 (출력 폴더명·문서 제목) | 원본 파일명 |
 | `--type` | meeting / seminar / lecture | meeting |
 | `--profile` | 저장된 프로필 이름 적용 | - |
-| `--model` | STT 모델 | gpt-4o-mini-transcribe |
+| `--model` | STT 모델 | config `models.stt` 값 (코드 fallback: gpt-4o-mini-transcribe) |
 | `--llm` | gpt / claude | gpt |
 | `--language` | STT 언어 (ko, en) | ko |
 | `--translate` | 영→한 번역 | OFF |
 | `--translate-script` | 스크립트 번역본도 생성 | OFF |
 | `--memo` | 메모 파일 | - |
+| `--topic` | 회의 주제/맥락. 관련 노트 검색과 회의록 생성에 반영 | - |
 | `--speakers` | 화자 이름 (쉼표구분) | 자동 |
 | `--custom-prompt` | LLM 추가 지시 | - |
-| `--resume` | 기존 STT 재사용 | OFF |
+| `--resume` | 기존 `segments.json`/`transcript.md`가 있을 때만 STT 재사용 | OFF |
+| `--force-stt` | 기존 STT/전사 결과가 있어도 새 STT 수행 | OFF |
 | `--edit-speakers` | 화자 수정 모드 (캐시 저장) | OFF |
 | `--reuse-speakers` | 화자 캐시 자동 적용 | OFF |
 | `--estimate-cost` | 비용 추정만 | OFF |
 | `--notify` | email / slack / teams 완료 알림 | - |
+| `--no-notify` | config 자동 알림까지 포함해 이번 실행 알림 생략 | OFF |
 | `--output-dir` | 출력 디렉토리 | ./output |
 | `--ssl-no-verify` | SSL 우회 | OFF |
 | `--debug` | 콘솔 상세 출력 | OFF |
@@ -553,18 +739,18 @@ python meeting_minutes.py meeting.mp4 --debug
 
 | 프로필 | STT 모델 | 설명 |
 | --- | --- | --- |
-| `meeting_ko` | `gpt-4o-transcribe-diarize` | 한국어 회의 → 한국어 회의록 (화자 분리) |
-| `meeting_en2ko` | `gpt-4o-transcribe-diarize` | 영어 회의 → 한국어 번역 회의록 (화자 분리) |
-| `seminar` | `gpt-4o-transcribe-diarize` | 영어 세미나 → 한국어 세미나 기록 (화자 분리) |
+| `meeting_ko` | `gpt-4o-transcribe-diarize` | 한국어 회의 → 한국어 회의록 (배치 화자 분리) |
+| `meeting_en2ko` | `gpt-4o-transcribe-diarize` | 영어 회의 → 한국어 번역 회의록 (배치 화자 분리) |
+| `seminar` | `gpt-4o-transcribe-diarize` | 영어 세미나 → 한국어 세미나 기록 (배치 화자 분리) |
 | `lecture` | `gpt-4o-transcribe` | 영어 강의 → 한국어 강의 노트 |
 
-> `meeting_ko` / `meeting_en2ko` / `seminar` 프로필은 `gpt-4o-transcribe-diarize` 모델을 사용하여 화자 분리 품질을 높입니다.
+> `meeting_ko` / `meeting_en2ko` / `seminar` 프로필은 배치 파일 전사에서 `gpt-4o-transcribe-diarize` 모델을 사용하여 화자 분리 품질을 높입니다. Realtime 모드는 기본 화자분리 없음입니다.
 
 ```bash
-python profiles.py list                    # 전체 프로필 목록
-python profiles.py show meeting_ko         # 프로필 상세
-python profiles.py create my_profile      # 대화형 생성
-python profiles.py delete my_profile      # 삭제
+python run_meeting.py profiles list                    # 전체 프로필 목록
+python run_meeting.py profiles show meeting_ko         # 프로필 상세
+python run_meeting.py profiles create my_profile      # 대화형 생성
+python run_meeting.py profiles delete my_profile      # 삭제
 ```
 
 커스텀 프로필은 `profiles.json`에 저장됩니다.
@@ -578,8 +764,8 @@ CLI 옵션이 프로필보다 항상 우선합니다.
 같은 회의 재실행 시 제목 기반 퍼지 매칭으로 불러옵니다.
 
 ```bash
-python speaker_cache.py list               # 저장된 매핑 목록
-python speaker_cache.py delete "주간회의"   # 특정 매핑 삭제
+python run_meeting.py speaker-cache list               # 저장된 매핑 목록
+python run_meeting.py speaker-cache delete "주간회의"   # 특정 매핑 삭제
 ```
 
 매핑 파일 위치: `output/speaker_map.json`
@@ -640,7 +826,7 @@ TEAMS_WEBHOOK_URL = https://...webhook.office.com/...
 
 ```bash
 # 단독 테스트
-python notifier.py
+python run_meeting.py notifier
 ```
 
 ---
@@ -652,13 +838,13 @@ python notifier.py
 ```bash
 pip install watchdog        # 최초 1회
 
-python watcher.py ./recordings                           # 기본 감시
-python watcher.py ./recordings --profile seminar         # 프로필 적용
-python watcher.py ./recordings --notify slack            # 완료 시 Slack 알림
-python watcher.py ./recordings --no-move                 # 처리 후 파일 이동 안 함
-python watcher.py ./recordings --type seminar            # 문서 타입 지정
-python watcher.py ./recordings --translate               # 영→한 번역 활성화
-python watcher.py ./recordings --ssl-no-verify           # SSL 우회
+python run_meeting.py legacy-watcher ./recordings                           # 기본 감시
+python run_meeting.py legacy-watcher ./recordings --profile seminar         # 프로필 적용
+python run_meeting.py legacy-watcher ./recordings --notify slack            # 완료 시 Slack 알림
+python run_meeting.py legacy-watcher ./recordings --no-move                 # 처리 후 파일 이동 안 함
+python run_meeting.py legacy-watcher ./recordings --type seminar            # 문서 타입 지정
+python run_meeting.py legacy-watcher ./recordings --translate               # 영→한 번역 활성화
+python run_meeting.py legacy-watcher ./recordings --ssl-no-verify           # SSL 우회
 ```
 
 **전체 옵션:**
@@ -672,7 +858,7 @@ python watcher.py ./recordings --ssl-no-verify           # SSL 우회
 | `--type` | meeting / seminar / lecture | meeting |
 | `--translate` | 영→한 번역 | OFF |
 | `--ssl-no-verify` | SSL 우회 | OFF |
-| `--script` | meeting_minutes.py 경로 | 자동 탐색 |
+| `--script` | 내부 배치 처리 스크립트 경로 | 자동 탐색 |
 
 **동작:**
 
@@ -768,31 +954,31 @@ python watcher.py ./recordings --ssl-no-verify           # SSL 우회
 pip install sounddevice numpy websockets    # 최초 1회
 
 # 기본 실행 — HTTP 모드 (영어 → 영어 회의록)
-python realtime_transcription.py
+python run_meeting.py realtime-raw
 
 # 한국어 회의
-python realtime_transcription.py --language ko
+python run_meeting.py realtime-raw --language ko
 
 # 영어 → 한국어 실시간 번역 + 한국어 회의록
-python realtime_transcription.py --translate
+python run_meeting.py realtime-raw --translate
 
 # ★ WebSocket 모드 — ~1초 지연 실시간 전사
-python realtime_transcription.py --mode ws --translate
+python run_meeting.py realtime-raw --mode ws --translate
 
 # WebSocket + 세미나 모드
-python realtime_transcription.py --mode ws --type seminar --translate
+python run_meeting.py realtime-raw --mode ws --type seminar --translate
 
 # HTTP 모드 — 청크 5초 (API 호출 횟수 줄여 비용 절감)
-python realtime_transcription.py --chunk-duration 5
+python run_meeting.py realtime-raw --chunk-duration 5
 
 # 이전 세션 이어서 (타임스탬프 자동 연속)
-python realtime_transcription.py --prev-session output/session_20250220_143022.jsonl
+python run_meeting.py realtime-raw --prev-session output/session_20250220_143022.jsonl
 
 # 이전 세션 로그로 회의록 재생성 (재녹음 없이)
-python realtime_transcription.py --recover output/session_20250220_143022.jsonl
+python run_meeting.py realtime-raw --recover output/session_20250220_143022.jsonl
 
 # 완료 후 이메일 발송
-python realtime_transcription.py --email
+python run_meeting.py realtime-raw --email
 ```
 
 ### 실행 흐름 — HTTP 모드 (기본)
@@ -865,7 +1051,7 @@ output/
 | `--language` | ko / en | ko |
 | `--type` | meeting / seminar / lecture | meeting |
 | `--topic` | 회의 주제 (번역·회의록·요약 프롬프트에 맥락으로 반영) | - |
-| `--model` | STT 모델 (아래 표 참고) | gpt-4o-mini-transcribe |
+| `--model` | STT 모델 (아래 표 참고) | config `models.stt` 값 |
 | `--llm` | gpt / claude | gpt |
 | `--translate` | 실시간 영→한 번역 | OFF |
 | `--translate-model` | 번역 모델 (gpt-4o-mini / gpt-4o) | gpt-4o-mini |
@@ -898,9 +1084,11 @@ ffmpeg -f s16le -ar 24000 -ac 1 -i output/session_TS_audio.pcm output/session_TS
 
 ---
 
-## run_batch.bat (Windows 전용)
+## scripts/windows/run_batch.bat (Windows 전용)
 
-더블클릭 또는 파일 드래그앤드롭으로 실행합니다. `run_batch.py`를 호출하는 래퍼입니다.
+더블클릭 또는 파일 드래그앤드롭으로 실행합니다. 인자가 있으면 `run_meeting.py batch %*`를 통해
+`meeting_minutes.py`에 바로 위임하고, 인자 없이 실행하면 기존 `run_batch.py` 인터랙티브 메뉴를 엽니다.
+따라서 `--resume`, `--force-stt`, `--topic`, `--no-notify` 같은 batch 옵션을 그대로 사용할 수 있습니다.
 
 ### 실행 방법
 
@@ -908,7 +1096,7 @@ ffmpeg -f s16le -ar 24000 -ac 1 -i output/session_TS_audio.pcm output/session_TS
 | --- | --- |
 | 더블클릭 | 인터랙티브 메인 메뉴 → 파일 경로 직접 입력 |
 | 파일 드래그앤드롭 | bat 파일 위에 미디어 파일을 끌어놓으면 자동 감지 |
-| 커맨드라인 | `run_batch.bat file1.mp4 file2.webm` |
+| 커맨드라인 | `scripts/windows/run_batch.bat file1.mp4 file2.webm` |
 
 ### 배치 메인 메뉴
 
@@ -947,7 +1135,7 @@ O  출력 폴더 열기
 
 ---
 
-## run_realtime.bat (Windows 전용)
+## scripts/windows/run_realtime.bat (Windows 전용)
 
 더블클릭으로 실행. 시작 시 크래시 상태를 자동 감지합니다.
 
@@ -1018,18 +1206,25 @@ CLI에서 직접 실행 시에는 `--topic "주제"` 옵션으로 지정할 수 
 
 ## STT 모델 비교
 
-| 모델 | 화자 분리 | 타임스탬프 | 비용/분 | HTTP | WS | 참고 |
+| 모델 | 화자 분리 | 타임스탬프 | 비용/분 | 배치 HTTP | Realtime | 참고 |
 | --- | :---: | :---: | :---: | :--: | :-: | --- |
-| `gpt-4o-transcribe-diarize` | ✅ | ✅ | $0.006 | ✅ | ❌ | 최고 품질, WS 미지원. 회의 프로필 기본값 |
-| `gpt-4o-transcribe` | ❌ | ❌ | $0.006 | ✅ | ✅ | 고품질 |
-| `gpt-4o-mini-transcribe` | ❌ | ❌ | $0.003 | ✅ | ✅ | **기본값** (가성비) |
-| `whisper-1` | ❌ | ✅ | $0.006 | ✅ | ✅ | 타임스탬프 필요 시 |
+| `gpt-4o-transcribe-diarize` | ✅ | ✅ | $0.006 | ✅ | ❌ | `/v1/audio/transcriptions` 전용. `diarized_json` + `chunking_strategy` 우선 검증 |
+| `gpt-4o-transcribe` | ❌ | ❌ | $0.006 | ✅ | ✅ | 배치/실시간 고품질 전사 |
+| `gpt-4o-mini-transcribe` | ❌ | ❌ | $0.003 | ✅ | 제한적 | 코드 fallback (가성비) |
+| `whisper-1` | ❌ | ✅ | $0.006 | ✅ | ❌ | 레거시 파일 전사, 타임스탬프 필요 시 |
 
-> `gpt-4o-transcribe-diarize` (화자 분리 모델)은 WebSocket Realtime API에서 지원되지 않습니다.
-> WS 모드에서 diarize 모델 지정 시 자동으로 HTTP 모드로 전환됩니다.
+> `gpt-4o-transcribe-diarize`는 OpenAI `/v1/audio/transcriptions` 배치 전사용 모델이며 Realtime API에서는 지원되지 않습니다.
+> 30초 초과 오디오는 `chunking_strategy` 적용 가능성을 우선 검증하고, 실패 또는 품질 저하 시 `gpt-4o-transcribe`로 fallback합니다.
 >
-> 기본 STT 모델은 `gpt-4o-mini-transcribe` (가성비)입니다.
-> 품질을 높이려면 `config.json`의 `models.stt`를 `"gpt-4o-transcribe"`로 변경하세요.
+> STT 기본값은 `config.json`의 `models.stt`가 우선입니다. 설정 파일이 없으면 코드 fallback은 `gpt-4o-mini-transcribe`입니다.
+> 배치 파일에서 화자 분리가 필요하면 `models.stt`를 `"gpt-4o-transcribe-diarize"`로 설정하세요. 실시간 모드는 기본적으로 화자분리 없음이며, 종료 후 화자 추론 또는 로컬 diarization 후처리로 보강합니다.
+
+### 화자분리와 known speaker
+
+- 배치 파일 STT는 `gpt-4o-transcribe-diarize` + `diarized_json` + `chunking_strategy`를 우선 검증합니다.
+- 대용량 파일에서 diarization 품질이 불안정하거나 화자 연속성이 깨지면 `gpt-4o-transcribe`로 fallback하고 화자는 미정 처리합니다.
+- 반복 회의 참석자는 OpenAI known speaker reference 또는 `speaker_cache.py`/People 노트 기반 실명 매핑 고도화를 검토합니다.
+- 안정적인 후처리 화자분리는 provider 방식으로 분리합니다: OpenAI batch diarize, pyannote/WhisperX, Deepgram/AssemblyAI.
 
 ---
 
@@ -1086,7 +1281,7 @@ v2.1부터 **회의록 생성 이전**에 `refine_script()`를 실행하고 교�
 
 ### 3. 화자 이름 자동 추론 (`infer_speaker_names`)
 
-`gpt-4o-transcribe-diarize` 모델 사용 시 "Speaker A/B" → 실명 또는 역할명으로 자동 변환.
+배치 diarize 결과가 "Speaker A/B"로 반환되면 실명 또는 역할명으로 자동 변환합니다. Realtime 세션은 종료 후 화자 추론 또는 로컬 diarization 후처리로 보강합니다.
 
 ### 4. MAX_LLM_CHARS 청크 분할
 
@@ -1097,7 +1292,10 @@ v2.1부터 **회의록 생성 이전**에 `refine_script()`를 실행하고 교�
 
 ### 5. 파일명에서 날짜 자동 추출
 
-`YYYYMMDD_HHMMSS` 패턴 파일명에서 회의 일시를 자동 파싱:
+파일명에서 회의 일시를 자동 파싱합니다. 지원 패턴:
+- `YYMMDD` 예: `260627_5.m4a` → `2026년 06월 27일`
+- `YYYYMMDD_HHMMSS` 예: `20260303_145540`
+- `YYYY-MM-DD 14.10` 예: `2026-06-29 14.10_남우진교수.webm`
 
 ```text
 realtime_20260303_145540 → "2026년 03월 03일 14:55"
@@ -1116,9 +1314,9 @@ realtime_20260303_145540 → "2026년 03월 03일 14:55"
 | `Connection error` / `SSL CERTIFICATE` | `--ssl-no-verify` 추가 또는 config.json `ssl.verify: false` |
 | `APIConnectionError` | 네트워크 확인, VPN 끄기 |
 | `AuthenticationError` | API 키 확인 (config.json 또는 환경변수) |
-| STT 후 LLM 실패 | `--resume` 으로 이어서 (STT 비용 절약) |
+| STT 후 LLM 실패 | `--resume` 으로 이어서 처리. 기존 STT가 없으면 중단되며 새 전사는 `--force-stt` 사용 |
 | 화자 이름이 틀림 | `--edit-speakers` 로 수정 (캐시에 저장됨) |
-| 화자가 "Speaker A/B" 로 표기됨 | `gpt-4o-transcribe-diarize` 모델 사용 → `infer_speaker_names` 자동 실행 |
+| 화자가 "Speaker A/B" 로 표기됨 | 배치 diarize 결과는 `infer_speaker_names` 또는 `--edit-speakers`로 보정. 실시간 모드는 기본 화자분리 없음 |
 | 170MB+ 대용량 | 자동 mp3 압축 (별도 조치 불필요) |
 | LLM 컨텍스트 초과 | 자동 청크 분할 처리 (별도 조치 불필요) |
 | 회의록이 너무 짧음 | 프롬프트에 200~400자/분 기준 명시됨. `--debug` 로 입력 스크립트 길이 확인 |
@@ -1130,7 +1328,7 @@ realtime_20260303_145540 → "2026년 03월 03일 14:55"
 | WS 모드 `websockets 미설치` | `pip install websockets` |
 | WS 모드 연결 실패 | 자동으로 HTTP 모드로 전환됨. 네트워크/API 키 확인 |
 | WS 모드 SSL 오류 | `--ssl-no-verify` 또는 config.json `ssl.verify: false` |
-| WS 모드에서 diarize 모델 | 자동으로 HTTP 모드로 전환됨 (Realtime API 미지원) |
+| WS/Realtime 모드에서 diarize 모델 | Realtime API는 diarize 미지원. 실시간은 화자분리 없이 전사하고 종료 후 추론/로컬 diarization으로 보강 |
 | STT에서 중국어/일본어 출력 | CJK 환각 필터가 자동 제거. `--language ko` 또는 `--language en` 명시 권장 |
 | 녹음 중 이전 대화 보기 힘듦 | `s+Enter` 로 스크롤 잠금 → 위로 스크롤 → 다시 `s+Enter` 로 해제 |
 | 터미널 UI 헤더가 안 보임 | ANSI 가상 터미널 지원 터미널 필요. Windows: cmd/PowerShell 모두 지원 |

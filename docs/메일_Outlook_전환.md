@@ -1,4 +1,4 @@
-# 메일 발신을 회사 Outlook(Microsoft 365)로 전환
+﻿# 메일 발신을 회사 Outlook(Microsoft 365)로 전환
 
 현재는 Gmail(`sar10320@gmail.com`)에서 보내 회사메일(`you@example.com`)로 수신 중입니다.
 발신을 회사 Outlook으로 바꾸려면 아래 한 블록만 교체하면 됩니다.
@@ -34,7 +34,9 @@
 교체·저장 후, 앱 폴더에서 새 녹음 하나로 확인:
 
 ```
-python meeting_assistant.py process "D:\Obsidian\MyVault\<테스트 녹음>.m4a" --notify email
+python run_meeting.py batch "D:\Claude\QC\<테스트 녹음>.m4a" --notify email
 ```
 
 메일이 `you@example.com` 으로 도착하면 성공. 실패 메시지(예: `535 5.7.139 Authentication unsuccessful`)가 뜨면 SMTP AUTH/앱 비밀번호 문제이니 위 2)로.
+
+참고: `process`는 호환 명령으로 남아 있지만, 새 문서와 테스트는 `batch` 기준으로 작성합니다. 메일 첨부에는 회의록/요약뿐 아니라 설정과 경로에 따라 사실검증, Wiki Context/Proposal 산출물이 함께 생성됩니다.

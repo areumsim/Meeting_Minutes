@@ -5,6 +5,8 @@
 
 > **핵심 아키텍처 (수정됨)**: 앱은 PC 백엔드를 거치지 않습니다.
 > 앱 내부에서 API Key를 직접 관리하여 OpenAI API로 다이렉트 통신을 수행하며, 모든 회의록 데이터는 디바이스 자체 내장 DB에만 저장됩니다.
+> 따라서 이 모바일 경로는 Obsidian/Vault 검색, 사실검증, Wiki Context/Proposal, 계획 회의 병합을 수행하지 않습니다.
+> 운영 지식으로 축적할 회의는 PC/서버 경로(`run_meeting.py batch`, `run_meeting.py realtime`, `/ws/realtime`)에서 처리합니다.
 
 ---
 
@@ -52,6 +54,7 @@
 ### 2-4. 녹음 완료 후 로컬 문서화
 - [x] 녹음 정지 시, 최종 확정된 트랜스크립트를 다시 한번 GPT API(Chat Completions)로 던져서 요약+회의록 파일 생성
 - [x] 완료된 모든 데이터를 스마트폰 로컬 저장소(IndexedDB)에 영구 기록
+- [ ] 선택 기능: 서버 연결 모드 추가 시 Fact Check / Wiki Context / Wiki Proposal 동기화
 
 ---
 

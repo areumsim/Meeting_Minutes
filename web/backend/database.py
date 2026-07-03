@@ -249,6 +249,9 @@ DOC_TYPE_MAP = {
     "script": "script",
     "refined_script": "refined_script",
     "actions": "actions",
+    "fact_check": "fact_check",
+    "wiki_context": "wiki_context",
+    "wiki_proposal": "wiki_proposal",
     "transcript": "transcript",
 }
 
@@ -274,6 +277,19 @@ def import_output_files(session_id: str, output_dir: str):
                             content = f.read()
                         if content.strip():
                             upsert_document(session_id, doc_type, content)
+                    except Exception:
+                        pass
+                    break
+
+        # JSON 문서 임포트
+        elif fname.endswith(".json") and any(key in fname.lower() for key in ("wiki_context", "wiki_proposal", "actions")):
+            for key, doc_type in DOC_TYPE_MAP.items():
+                if key in fname.lower():
+                    try:
+                        with open(fpath, "r", encoding="utf-8") as f:
+                            content = f.read()
+                        if content.strip():
+                            upsert_document(session_id, doc_type, content, "json")
                     except Exception:
                         pass
                     break

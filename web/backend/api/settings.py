@@ -6,13 +6,19 @@ import json
 import copy
 from pathlib import Path
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 
 from web.backend.paths import EXE_DIR
 
 router = APIRouter(tags=["settings"])
 
 CONFIG_PATH = Path(EXE_DIR) / "config.json"
+
+# config.json에서 허용하는 최상위 섹션 목록
+_ALLOWED_SECTIONS = {
+    "api", "models", "realtime", "email", "obsidian",
+    "indexing", "wiki", "notify", "ssl", "output",
+}
 
 
 def _mask_key(key: str) -> str:
@@ -43,12 +49,16 @@ def update_config(data: dict):
     if not CONFIG_PATH.exists():
         return {"error": "config.json not found"}
 
+    unknown = [s for s in data if s not in _ALLOWED_SECTIONS]
+    if unknown:
+        raise HTTPException(status_code=422, detail=f"허용되지 않는 섹션: {unknown}")
+
     with open(CONFIG_PATH, "r", encoding="utf-8") as f:
         cfg = json.load(f)
 
     for section, values in data.items():
         if not isinstance(values, dict):
-            continue
+            raise HTTPException(status_code=422, detail=f"섹션 '{section}'의 값은 dict여야 합니다.")
         if section not in cfg:
             cfg[section] = {}
         for k, v in values.items():

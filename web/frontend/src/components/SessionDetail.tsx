@@ -13,7 +13,7 @@ interface Props {
   onBack: () => void;
 }
 
-type Tab = "script" | "minutes" | "summary" | "actions" | "refined_script";
+type Tab = "script" | "minutes" | "summary" | "actions" | "fact_check" | "wiki_context" | "wiki_proposal" | "refined_script";
 
 export default function SessionDetail({ id, onBack }: Props) {
   const [session, setSession] = useState<Session | null>(null);
@@ -110,8 +110,11 @@ export default function SessionDetail({ id, onBack }: Props) {
   const tabs: { key: Tab; label: string; icon: React.ReactNode }[] = [
     { key: "minutes", label: "Minutes", icon: <FileText size={14} /> },
     { key: "summary", label: "Summary", icon: <Zap size={14} /> },
+    { key: "fact_check", label: "Fact Check", icon: <AlertCircle size={14} /> },
     { key: "script", label: "Script", icon: <List size={14} /> },
     { key: "actions", label: "Actions", icon: <CheckCircle size={14} /> },
+    { key: "wiki_context", label: "Wiki Context", icon: <FileText size={14} /> },
+    { key: "wiki_proposal", label: "Wiki Proposal", icon: <FileText size={14} /> },
     { key: "refined_script", label: "Refined", icon: <FileText size={14} /> },
   ];
 

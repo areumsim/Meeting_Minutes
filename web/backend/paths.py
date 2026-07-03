@@ -22,6 +22,9 @@ def _get_exe_dir() -> str:
 
 AR_ROOT = _get_ar_root()
 EXE_DIR = _get_exe_dir()
+APP_DIR = str(Path(AR_ROOT) / "meeting_minutes_app")
 
 if AR_ROOT not in sys.path:
     sys.path.insert(0, AR_ROOT)
+if APP_DIR not in sys.path:
+    sys.path.insert(0, APP_DIR)

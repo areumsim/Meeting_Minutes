@@ -73,6 +73,7 @@ def _py(script: str, *args: str) -> int:
 def _usage() -> str:
     return """\
 Usage:
+  meeting-minutes init [--force]        # 최초 설정 마법사 (새 팀/새 설치용)
   meeting-minutes                       # interactive menu
   meeting-minutes realtime [args]       # record|realtime — 실시간 마이크 녹음
   meeting-minutes batch [files...]      # file|files    — 파일 일괄 처리
@@ -159,6 +160,9 @@ def dispatch(argv: list[str]) -> int:
         return _py("run_ui.py", *rest)
     if cmd == "assistant":
         return _py("meeting_assistant.py", *rest)
+    if cmd == "init":
+        from meeting_minutes_app.cli_init import run_init
+        return run_init(rest)
 
     print(f"Unknown command: {cmd}\n")
     print(_usage())

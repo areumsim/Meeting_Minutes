@@ -792,6 +792,25 @@ RAGAS의 faithfulness 개념은 회의록 claim이 retrieved evidence로 뒷받�
 
 ---
 
+## 패키징/배포
+
+`pyproject.toml`(repo root)로 pip 설치 가능한 패키지다 — `meeting_minutes_app`(common/wiki_core/
+meeting_pipeline 서브패키지 포함)과 `web`을 하나의 배포판으로 묶고, `[project.scripts]`로
+`meeting-minutes` 콘솔 커맨드(`meeting_minutes_app.cli:main`)를 등록한다.
+`[tool.setuptools.packages.find]`가 자동 탐색하므로 새 모듈(예: `graph_db.py`)을 추가해도
+pyproject.toml을 고칠 필요가 없다.
+
+`run_meeting.py`(repo root)는 `meeting_minutes_app/cli.py`로 위임하는 얇은 하위호환 shim이다 —
+기존 `.bat` 런처·문서가 `python run_meeting.py ...`를 그대로 계속 쓸 수 있게 유지한다.
+`meeting-minutes init`(`meeting_minutes_app/cli_init.py`)이 새 팀의 최초 설정(Obsidian/API 키
+입력 + 연결 확인)을 처리한다.
+
+PyInstaller `.exe` 배포(`scripts/build/build_exe.spec`)는 비개발자용 1차 배포 채널로 유지된다.
+새 팀 설치 절차 전체(배포 채널 선택, Obsidian 플러그인 설정, 격리 확인, 첫 실행 체크리스트,
+업데이트 방법)는 [`docs/SETUP_NEW_TEAM.md`](SETUP_NEW_TEAM.md)에 있다.
+
+---
+
 ## 향후 확장 후보 (현재 미구현)
 
 이번 MVP에서 구조적으로 확장 가능하도록 남겨두었으나 실제 구현은 하지 않은 기능 목록.

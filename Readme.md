@@ -15,15 +15,29 @@
 
 ## 빠른 시작 (5분)
 
+새 팀/새 PC에 처음 설치하는 경우 자세한 절차는 [`docs/SETUP_NEW_TEAM.md`](docs/SETUP_NEW_TEAM.md)를 참고하세요.
+아래는 요약입니다.
+
 ### 1. 패키지 설치
 
 ```bash
-pip install -r requirements.txt
+pip install -e .
 ```
+
+(pyproject.toml 기반 설치 — `meeting-minutes` 커맨드가 PATH에 등록됩니다. 개발 중이 아니라면
+`pip install .`도 가능합니다. 예전 방식인 `pip install -r requirements.txt`도 여전히 동작합니다.)
 
 ffmpeg 미설치 시: <https://www.gyan.dev/ffmpeg/builds/> 에서 다운로드 → PATH 추가
 
 ### 2. config.json 생성
+
+```bash
+meeting-minutes init
+```
+
+Obsidian vault 경로, API 키 등 핵심 항목만 물어보고 `config.json`을 생성한 뒤 연결 상태를 확인합니다.
+이미 `config.json`이 있으면 건드리지 않습니다(재설정하려면 `meeting-minutes init --force`).
+수동으로 하려면:
 
 ```bash
 copy config.example.json config.json   # Windows
@@ -42,11 +56,14 @@ run_meeting.bat
 
 ### 4. 직접 명령 실행
 
+`pip install -e .` 이후에는 `meeting-minutes`, 설치 없이 저장소만 clone했다면
+`python run_meeting.py`를 동일하게 사용할 수 있습니다(둘 다 같은 로직).
+
 ```bash
-python run_meeting.py batch meeting.mp4                              # 파일 → 회의록
-python run_meeting.py realtime                                       # 실시간 녹취
-python run_meeting.py ingest meeting.m4a --no-email
-python run_meeting.py prep-brief --title "회의 제목" --topic "주제"  # 회의 준비 브리프
+meeting-minutes batch meeting.mp4                              # 파일 → 회의록
+meeting-minutes realtime                                       # 실시간 녹취
+meeting-minutes ingest meeting.m4a --no-email
+meeting-minutes prep-brief --title "회의 제목" --topic "주제"  # 회의 준비 브리프
 ```
 
 → `output/날짜_제목/` 폴더에 회의록·요약본 자동 저장
@@ -407,13 +424,17 @@ output/
 
 ## 설치
 
-**Python 3.9 이상** 필요 (3.10+ 권장)
+**Python 3.10 이상** 필요
 
 ```bash
-pip install -r requirements.txt
+pip install -e .
 ```
 
-주요 의존성: `openai`, `anthropic`, `requests`, `sounddevice`, `numpy`, `watchdog`, `websockets`
+`pyproject.toml` 기반 설치로 `meeting-minutes` 콘솔 커맨드가 등록됩니다(개발 모드가 아니면 `pip install .`).
+저장소만 clone해서 설치 없이 쓰려면 `pip install -r requirements.txt` + `python run_meeting.py ...`도
+여전히 동작합니다. 새 팀/새 PC 설치 절차는 [`docs/SETUP_NEW_TEAM.md`](docs/SETUP_NEW_TEAM.md) 참고.
+
+주요 의존성: `openai`, `anthropic`, `requests`, `sounddevice`, `numpy`, `watchdog`, `websockets`, `fastapi`
 
 ffmpeg 설치:
 
@@ -426,10 +447,12 @@ ffmpeg 설치:
 ## 설정 (config.json)
 
 모든 비밀값(API 키, 이메일 비밀번호 등)은 `config.json`에 저장합니다.
-`config.json`은 `.gitignore`에 포함되어 git에 올라가지 않습니다.
+`config.json`은 `.gitignore`에 포함되어 git에 올라가지 않으며, `data/`(registry·인덱스 등)와
+함께 이 설치에만 속합니다 — 다른 팀/설치와 공유되지 않습니다.
 
 ```bash
-# 예시 파일을 복사해서 편집
+meeting-minutes init          # 대화형 마법사 (권장) — 핵심 항목만 물어보고 연결까지 확인
+# 또는 수동으로:
 copy config.example.json config.json   # Windows
 cp   config.example.json config.json   # Mac/Linux
 ```

@@ -9,7 +9,8 @@ output/
 *.log.*
 
 # ── 빌드 산출물 ──────────────────────────────────
-build/
+# build/ 는 repo root 전용으로 anchor (scripts/build/ 는 빌드 스크립트 소스 디렉토리라 별개)
+/build/
 dist/
 *.tsbuildinfo
 

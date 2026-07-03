@@ -14,6 +14,15 @@ from fastapi.responses import FileResponse
 from web.backend.paths import AR_ROOT, EXE_DIR
 from web.backend.database import init_db
 
+# Wiki Knowledge Graph를 원격 MCP 서버로 노출(/mcp) — Claude Cowork 커스텀 커넥터용.
+# fastmcp가 없으면(구버전 설치, 아직 `pip install -e .` 안 함) MCP 없이도 나머지 앱은 정상 동작해야 한다.
+try:
+    from meeting_minutes_app.wiki_core.mcp_server import get_mcp_asgi_app
+    _mcp_app = get_mcp_asgi_app(path="/")  # app.mount("/mcp", ...) 아래서 최종 경로가 /mcp가 되도록
+except Exception as _mcp_import_err:
+    _mcp_app = None
+    print(f"[mcp] Wiki Graph MCP 서버 비활성화(무시): {_mcp_import_err}")
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -23,10 +32,17 @@ async def lifespan(app: FastAPI):
         scan_output_dir()
     except Exception as e:
         print(f"[scanner] 초기 스캔 실패: {e}")
-    yield
+    if _mcp_app is not None:
+        async with _mcp_app.lifespan(app):
+            yield
+    else:
+        yield
 
 
 app = FastAPI(title="AI Meeting Minutes", lifespan=lifespan)
+
+if _mcp_app is not None:
+    app.mount("/mcp", _mcp_app)
 
 app.add_middleware(
     CORSMiddleware,

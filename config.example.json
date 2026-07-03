@@ -243,6 +243,17 @@
     "graph_retrieval_expand_enabled": false
   },
 
+  "mcp": {
+    "_comment": [
+      "Wiki Knowledge Graph를 원격 MCP 서버(/mcp)로 노출 — Claude Cowork 커스텀 커넥터 연동용.",
+      "allowed_tokens에 없는 토큰은 전부 401 — 기본값(빈 배열)이면 아무도 접근 불가(안전한 기본).",
+      "새 토큰 발급: `meeting-minutes mcp-token --name <이름>` (config.json에 자동 추가, 화면에 한 번만 출력).",
+      "이 토큰은 API 키와 동급 비밀 — git에 올리지 말고(config.json은 이미 gitignore) 로그에 남기지 마세요.",
+      "/mcp만 외부(Cloudflare Tunnel 등)에 노출하고 나머지 API(/api/sessions 등)는 노출하지 않는 것을 권장합니다."
+    ],
+    "allowed_tokens": []
+  },
+
   "supermemory": {
     "_comment": [
       "회의록 저장 시 Supermemory에도 동시 저장, 다음 회의 컨텍스트 빌딩 시 자동 조회.",

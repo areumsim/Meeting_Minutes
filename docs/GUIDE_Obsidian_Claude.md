@@ -73,7 +73,9 @@ python run_meeting.py realtime --language ko
 
 ## 3. Claude Cowork로 더 활용하기
 
-**Claude Cowork**는 Claude 데스크톱 앱의 비서입니다(개발용 Claude Code와 다름). 볼트에 쌓인 회의록을 **사람처럼 뒤지고 정리**해 줍니다.
+**Claude Cowork**는 Claude 데스크톱 앱의 비서입니다(개발용 Claude Code와 다름). 볼트에 쌓인 회의록을 **사람처럼 뒤지고 정리**해 줍니다. 연결 방법은 두 가지입니다 — 로컬 PC에서 쓸 거면 A, 팀원과 공유하거나 웹/모바일 Claude에서 쓸 거면 B.
+
+### 3-A. 폴더 접근 (같은 PC에서, 가장 쉬움)
 
 **연결**: Claude 데스크톱 앱 → Cowork → "폴더 접근 권한"에서 **Obsidian 볼트 폴더**를 선택. (끝)
 
@@ -83,7 +85,28 @@ python run_meeting.py realtime --language ko
 - "미완료 액션아이템 담당자별로 정리해줘"
 - "비슷한 용어 노트끼리 링크 걸어줘"
 
-> 요약: **파이프라인이 회의록을 만들어 볼트에 넣고**, **Cowork가 볼트를 관리**합니다.
+폴더 안 파일을 통째로 읽는 방식이라 빠르고 별도 설정이 없지만, **이 파이프라인을 실행 중인 PC에서만** 되고 관계(누가 어느 회의에서 뭘 결정했는지 등)는 Claude가 매번 텍스트에서 다시 추론해야 합니다.
+
+### 3-B. Wiki Graph MCP 커넥터 (원격, 관계 조회 전용)
+
+파이프라인이 회의 처리 때마다 인물·조직·주제·결정·액션 사이의 관계를 그래프 DB(`wiki_graph.db`)에 쌓아 둡니다. 이 그래프를 **원격 MCP 서버**(`/mcp`)로 노출해서, 볼트 폴더에 직접 접근하지 못하는 환경(다른 PC, 팀원 계정, Claude.ai 웹)에서도 "누가/어느 프로젝트가 지금 어떤 상태인지"를 바로 조회할 수 있습니다. 볼트 원문 대신 구조화된 관계만 보므로 3-A보다 빠르고 정확하지만, 노트 본문 자체를 읽거나 수정하지는 못합니다(읽기 전용, 그래프 조회만).
+
+**1) 토큰 발급** (서버를 띄우는 PC에서 한 번만):
+```bash
+meeting-minutes mcp-token --name 홍길동
+```
+출력되는 토큰은 **이 화면에만 한 번** 나옵니다 — API 키처럼 보관하세요. `config.json`의 `mcp.allowed_tokens`에 저장되며, 여기 없는 토큰은 전부 거부됩니다(기본값은 빈 목록 = 아무도 접근 불가).
+
+**2) 서버 노출**: `python run_meeting.py web` 실행 시 `/mcp`가 함께 서빙됩니다. 팀 외부에서 접근하려면 Cloudflare Tunnel 등으로 `/mcp`만(다른 API는 제외) 외부에 노출하는 걸 권장합니다.
+
+**3) Claude 쪽 등록**: Claude 데스크톱 앱 → Customize → Connectors → **Add custom connector** → `<서버 주소>/mcp` 입력 → Authorization에 `Bearer <발급받은 토큰>` 입력.
+
+**시킬 수 있는 일** (그냥 말로):
+- "GraphDB-온톨로지 프로젝트 지금 상태 어때?" (미해결 액션·최근 결정·관련 회의 한 번에)
+- "서지훈 교수 언급된 회의 다 찾아줘"
+- "이 결정사항이랑 저 주제가 어떻게 연결돼있어?"
+
+> 요약: **3-A는 볼트 원문을 통째로 넘겨서 Claude가 알아서 뒤지게** 하고, **3-B는 이미 구조화된 관계를 도구로 직접 조회**합니다. 둘 다 켜놔도 무방합니다(용도가 다름).
 
 ---
 
@@ -146,6 +169,7 @@ python run_meeting.py realtime --language ko
 | 메일 안 옴 | `config.json` `email` 의 sender/password(앱 비밀번호)/recipient 확인 |
 | 한글 깨짐(Windows) | 명령 앞에 `set PYTHONUTF8=1` |
 | Obsidian에 저장 안 됨 | `python run_meeting.py obsidian --ping` 먼저 확인 |
+| MCP 커넥터 401/거부 | 토큰이 `config.json`의 `mcp.allowed_tokens`에 있는지, `Bearer ` 접두사 포함해서 넣었는지 확인 |
 
 ---
 

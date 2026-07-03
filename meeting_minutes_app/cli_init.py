@@ -157,5 +157,52 @@ def run_init(argv: list[str]) -> int:
     return 0
 
 
+def run_mcp_token(argv: list[str]) -> int:
+    """새 사용자용 Wiki Graph MCP Bearer 토큰을 발급해 config.json의
+    mcp.allowed_tokens에 추가한다. 토큰은 이 실행 화면에만 한 번 출력된다(재조회 불가 —
+    API 키처럼 다뤄야 한다). --name으로 누구 것인지 표시용 이름을 붙일 수 있다."""
+    import secrets
+
+    name = "user"
+    if "--name" in argv:
+        idx = argv.index("--name")
+        if idx + 1 < len(argv):
+            name = argv[idx + 1]
+
+    root = _project_root()
+    config_path = root / "config.json"
+    if not config_path.exists():
+        print(f"[mcp-token] config.json이 없습니다: {config_path}")
+        print("            먼저 'meeting-minutes init'을 실행하세요.")
+        return 1
+
+    with open(config_path, encoding="utf-8") as f:
+        cfg: Dict[str, Any] = json.load(f)
+
+    token = secrets.token_urlsafe(32)
+    tokens = _get_nested(cfg, "mcp.allowed_tokens", [])
+    if not isinstance(tokens, list):
+        tokens = []
+    tokens.append({"token": token, "name": name})
+    _set_nested(cfg, "mcp.allowed_tokens", tokens)
+
+    with open(config_path, "w", encoding="utf-8") as f:
+        json.dump(cfg, f, ensure_ascii=False, indent=2)
+        f.write("\n")
+
+    print("=" * 60)
+    print(f"  MCP 토큰 발급됨 (name={name})")
+    print("=" * 60)
+    print()
+    print(f"  {token}")
+    print()
+    print("  이 토큰은 다시 조회할 수 없습니다 — API 키처럼 안전하게 보관하세요.")
+    print("  Claude Desktop → Customize → Connectors → Add custom connector에서")
+    print("  <서버 URL>/mcp 를 등록할 때 Authorization 헤더(Bearer)로 사용합니다.")
+    print("  config.json의 mcp.allowed_tokens에 저장됐습니다 (git에 올라가지 않음).")
+    print("=" * 60)
+    return 0
+
+
 if __name__ == "__main__":
     raise SystemExit(run_init(sys.argv[1:]))

@@ -74,6 +74,7 @@ def _usage() -> str:
     return """\
 Usage:
   meeting-minutes init [--force]        # 최초 설정 마법사 (새 팀/새 설치용)
+  meeting-minutes mcp-token [--name X]  # Wiki Graph MCP(Claude Cowork 연동) Bearer 토큰 발급
   meeting-minutes                       # interactive menu
   meeting-minutes realtime [args]       # record|realtime — 실시간 마이크 녹음
   meeting-minutes batch [files...]      # file|files    — 파일 일괄 처리
@@ -163,6 +164,9 @@ def dispatch(argv: list[str]) -> int:
     if cmd == "init":
         from meeting_minutes_app.cli_init import run_init
         return run_init(rest)
+    if cmd in ("mcp-token", "mcp_token"):
+        from meeting_minutes_app.cli_init import run_mcp_token
+        return run_mcp_token(rest)
 
     print(f"Unknown command: {cmd}\n")
     print(_usage())

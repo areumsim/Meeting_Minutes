@@ -1,0 +1,197 @@
+#!/usr/bin/env python3
+"""Unified launcher for meeting workflows.
+
+This file delegates to implementation modules under meeting_minutes_app while
+keeping one stable user-facing entrypoint at the project root.
+"""
+
+from __future__ import annotations
+
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+for _s in (sys.stdout, sys.stderr):
+    if getattr(_s, "encoding", None) and _s.encoding.lower() in ("cp949", "euc-kr", "ansi"):
+        try:
+            _s.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+BASE_DIR = Path(__file__).resolve().parent
+APP_DIR = BASE_DIR / "meeting_minutes_app"
+
+
+def _run(args: list[str]) -> int:
+    print("\n> " + subprocess.list2cmdline(args))
+    try:
+        return subprocess.call(args, cwd=str(BASE_DIR))
+    except KeyboardInterrupt:
+        return 130
+
+
+def _py(script: str, *args: str) -> int:
+    script_path = APP_DIR / script
+    if not script_path.exists():
+        script_path = BASE_DIR / script
+    return _run([sys.executable, str(script_path), *args])
+
+
+def _usage() -> str:
+    return """\
+Usage:
+  python run_meeting.py                 # interactive menu
+  python run_meeting.py realtime [args] # record|realtime — 실시간 마이크 녹음
+  python run_meeting.py batch [files...]# file|files    — 파일 일괄 처리
+      batch 주요 옵션: --resume(STT 재사용, 없으면 중단) / --force-stt(새 STT 강제)
+  python run_meeting.py ingest <audio> [args]           # 단일 파일 → Obsidian
+  python run_meeting.py vault-audio [args]              # Obsidian 임베드 오디오
+  python run_meeting.py watch [args]                    # 폴더 감시 자동 처리
+  python run_meeting.py reindex [args]                  # TF-IDF 인덱스 재빌드
+  python run_meeting.py ask <question> [args]           # Vault 질의
+  python run_meeting.py web [args]                      # Web UI 실행 (ui|web)
+  python run_meeting.py prep-brief --title "제목" [--topic "주제"]  # 회의 준비 브리프 생성
+
+Advanced:
+  python run_meeting.py status|prep|process|schedule|merge [args]
+  python run_meeting.py obsidian|profiles|speaker-cache [args]
+  python run_meeting.py plan-watcher|auto-process [args]
+  python run_meeting.py audio-watcher|vault-indexer|wiki-ask [args]
+  python run_meeting.py legacy-watcher [args]           # 구형 파일 감시자
+"""
+
+
+def dispatch(argv: list[str]) -> int:
+    if not argv:
+        return menu()
+
+    cmd, rest = argv[0].lower(), argv[1:]
+    if cmd in ("-h", "--help", "help"):
+        print(_usage())
+        return 0
+    if cmd in ("realtime", "record"):
+        if rest and rest[0].lower() in ("-h", "--help", "help"):
+            return _py("run_realtime.py", "--help")
+        return _py("run_realtime.py", *rest)
+    if cmd in ("batch", "file", "files"):
+        if rest and rest[0].lower() in ("-h", "--help", "help"):
+            return _py("meeting_minutes.py", "--help")
+        if rest:
+            return _py("meeting_minutes.py", *rest)
+        return _py("run_batch.py")
+    if cmd == "ingest":
+        return _py("meeting_assistant.py", "ingest", *rest)
+    if cmd in ("vault-audio", "vault_audio"):
+        return _py("meeting_assistant.py", "vault-audio", *rest)
+    if cmd == "watch":
+        return _py("meeting_assistant.py", "watch", *rest)
+    if cmd == "reindex":
+        return _py("meeting_assistant.py", "reindex", *rest)
+    if cmd == "ask":
+        return _py("meeting_assistant.py", "ask", *rest)
+    if cmd in ("status", "prep", "process", "schedule", "merge", "people"):
+        return _py("meeting_assistant.py", cmd, *rest)
+    if cmd in ("plan-watcher", "plan_watcher"):
+        return _py("plan_watcher.py", *rest)
+    if cmd in ("auto-process", "auto_process"):
+        return _py("auto_process_vault.py", *rest)
+    if cmd == "obsidian":
+        return _py("obsidian.py", *rest)
+    if cmd == "profiles":
+        return _py("profiles.py", *rest)
+    if cmd in ("speaker-cache", "speaker_cache"):
+        return _py("speaker_cache.py", *rest)
+    if cmd == "notifier":
+        return _py("notifier.py", *rest)
+    if cmd in ("audio-watcher", "audio_watcher"):
+        return _py("audio_watcher.py", *rest)
+    if cmd in ("legacy-watcher", "legacy_watcher"):
+        return _py("watcher.py", *rest)
+    if cmd in ("vault-indexer", "vault_indexer"):
+        return _py("vault_indexer.py", *rest)
+    if cmd in ("wiki-ask", "wiki_ask"):
+        return _py("wiki_ask.py", *rest)
+    if cmd in ("meeting-minutes", "meeting_minutes"):
+        return _py("meeting_minutes.py", *rest)
+    if cmd in ("realtime-raw", "realtime_transcription"):
+        return _py("realtime_transcription.py", *rest)
+    if cmd in ("prep-brief", "prep_brief"):
+        return _py("wiki_knowledge.py", *rest)
+    if cmd in ("web", "ui"):
+        return _py("run_ui.py", *rest)
+    if cmd == "assistant":
+        return _py("meeting_assistant.py", *rest)
+
+    print(f"Unknown command: {cmd}\n")
+    print(_usage())
+    return 2
+
+
+def menu() -> int:
+    while True:
+        os.system("cls" if os.name == "nt" else "clear")
+        print("Meeting Minutes - Unified Launcher")
+        print("=" * 40)
+        print("1. Realtime recording")
+        print("2. File/batch processing")
+        print("3. Ingest one audio file")
+        print("4. Obsidian embedded audio")
+        print("5. Watch audio folders")
+        print("6. Reindex Vault")
+        print("7. Ask Vault Wiki")
+        print("8. Web UI")
+        print("9. Prep brief (회의 준비 브리프)")
+        print("10. Assistant status")
+        print("11. Schedule dashboard")
+        print("12. Merge pending recording")
+        print("13. Obsidian connection/path")
+        print("0. Exit")
+        print("   (고급 커맨드: python run_meeting.py --help)")
+        choice = input("\nSelect >> ").strip()
+
+        if choice == "1":
+            return dispatch(["realtime"])
+        if choice == "2":
+            return dispatch(["batch"])
+        if choice == "3":
+            path = input("Audio path >> ").strip().strip('"')
+            if path:
+                return dispatch(["ingest", path])
+            continue
+        if choice == "4":
+            return dispatch(["vault-audio"])
+        if choice == "5":
+            return dispatch(["watch"])
+        if choice == "6":
+            return dispatch(["reindex"])
+        if choice == "7":
+            q = input("Question >> ").strip()
+            if q:
+                return dispatch(["ask", q, "--show-sources"])
+            continue
+        if choice == "8":
+            return dispatch(["web"])
+        if choice == "9":
+            t = input("회의 제목 >> ").strip()
+            if t:
+                return dispatch(["prep-brief", "--title", t])
+            continue
+        if choice == "10":
+            return dispatch(["status"])
+        if choice == "11":
+            return dispatch(["schedule", "--write-dashboard"])
+        if choice == "12":
+            return dispatch(["merge"])
+        if choice == "13":
+            return dispatch(["obsidian", "--where"])
+        if choice in ("0", ""):
+            return 0
+
+
+def main() -> int:
+    return dispatch(sys.argv[1:])
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

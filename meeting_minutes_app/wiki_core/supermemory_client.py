@@ -22,7 +22,7 @@ from typing import Any, Dict, List, Optional
 logger = logging.getLogger(__name__)
 
 try:
-    import config_loader as _cfg
+    from meeting_minutes_app.common import config_loader as _cfg
     _cfg_ok = True
 except ImportError:
     _cfg = None  # type: ignore

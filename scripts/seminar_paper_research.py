@@ -25,15 +25,15 @@ sys.path.insert(0, str(_HERE.parent / "meeting_minutes_app"))
 sys.path.insert(0, str(_HERE.parent))
 
 try:
-    import config_loader as _cfg
+    from meeting_minutes_app.common import config_loader as _cfg
     def cfg(key, default=None):
         return _cfg.get(key, default)
 except ImportError:
     def cfg(key, default=None):
         return default
 
-from meeting_minutes import LLMClient
-from obsidian import ObsidianClient, safe_filename, build_frontmatter
+from meeting_minutes_app.common.llm_client import LLMClient
+from meeting_minutes_app.wiki_core.obsidian import ObsidianClient, safe_filename, build_frontmatter
 
 
 # ── 설정 ────────────────────────────────────────

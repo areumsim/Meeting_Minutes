@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 try:
-    import config_loader as _cfg
+    from meeting_minutes_app.common import config_loader as _cfg
     _cfg_ok = True
 except ImportError:
     _cfg = None  # type: ignore
@@ -87,11 +87,11 @@ class WikiQA:
 
     def _ensure_clients(self) -> None:
         if self._llm is None:
-            import meeting_minutes as mm
-            self._llm = mm.LLMClient(preferred=mm._c("models.llm", "gpt") or "gpt")
+            from meeting_minutes_app.common.llm_client import LLMClient
+            self._llm = LLMClient(preferred=_c("models.llm", "gpt") or "gpt")
         if self._obs is None:
             try:
-                from obsidian import ObsidianClient
+                from meeting_minutes_app.wiki_core.obsidian import ObsidianClient
                 obs = ObsidianClient.from_config()
                 if obs and obs.ping():
                     self._obs = obs
@@ -99,7 +99,7 @@ class WikiQA:
                 pass
         if self._indexer is None:
             try:
-                from vault_indexer import VaultIndexer
+                from meeting_minutes_app.wiki_core.vault_indexer import VaultIndexer
                 idx = VaultIndexer.from_config()
                 if idx and idx.load():
                     self._indexer = idx

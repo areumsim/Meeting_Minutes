@@ -36,7 +36,7 @@ def _build_args(
 
     # 회의록 생성 LLM은 config.json(models.llm)을 따른다 (gpt 하드코딩 제거)
     try:
-        import config_loader as _cfg
+        from meeting_minutes_app.common import config_loader as _cfg
         _llm = _cfg.get("models.llm", "gpt") or "gpt"
     except Exception:
         _llm = "gpt"
@@ -66,7 +66,7 @@ def _build_args(
 def _run_batch_processing(session_id: str, file_path: str, args: argparse.Namespace, title: str):
     """백그라운드에서 meeting_minutes.process_single() 실행."""
     try:
-        import meeting_minutes as mm
+        from meeting_minutes_app.meeting_pipeline import meeting_minutes as mm
 
         if not args.model:
             args.model = mm.DEFAULT_STT_MODEL

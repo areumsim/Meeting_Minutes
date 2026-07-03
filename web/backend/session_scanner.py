@@ -17,7 +17,7 @@ def scan_output_dir(output_dir: Optional[str] = None):
     """output/ 디렉토리를 스캔하여 CLI로 생성된 세션을 DB에 임포트."""
     if not output_dir:
         try:
-            import config_loader as cfg
+            from meeting_minutes_app.common import config_loader as cfg
             output_dir = cfg.get("output_dir", "./output")
         except Exception:
             output_dir = "./output"

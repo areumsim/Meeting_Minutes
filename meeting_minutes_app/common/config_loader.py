@@ -4,7 +4,7 @@ config_loader.py — config.json 통합 로더
 우선순위:  환경변수  >  config.json  >  기본값
 
 사용법:
-    import config_loader as cfg
+    from meeting_minutes_app.common import config_loader as cfg
     key = cfg.get("api.openai_api_key")
     stt = cfg.get("models.stt", "gpt-4o-mini-transcribe")
 ============================================================

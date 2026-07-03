@@ -33,7 +33,7 @@ for _stream in (sys.stdout, sys.stderr):
             pass
 
 try:
-    import config_loader as _cfg
+    from meeting_minutes_app.common import config_loader as _cfg
     _cfg_ok = True
 except ImportError:
     _cfg = None  # type: ignore
@@ -58,7 +58,7 @@ def _extract_date_from_path(audio_path: str) -> str:
     찾지 못하면 오늘 날짜를 반환한다.
     """
     try:
-        from date_utils import parse_iso_date_from_text
+        from meeting_minutes_app.common.date_utils import parse_iso_date_from_text
         return parse_iso_date_from_text(audio_path, default_today=True)
     except Exception:
         return datetime.now().strftime("%Y-%m-%d")
@@ -151,14 +151,14 @@ class IngestionPipeline:
 
     def _ensure_llm(self):
         if self._llm is None:
-            import meeting_minutes as mm
+            from meeting_minutes_app.meeting_pipeline import meeting_minutes as mm
             self._llm = mm.LLMClient(preferred=mm._c("models.llm", "gpt") or "gpt")
             self._llm_initialized = True
 
     def _ensure_obs(self):
         if self._obs is None:
             try:
-                from obsidian import ObsidianClient
+                from meeting_minutes_app.wiki_core.obsidian import ObsidianClient
                 obs = ObsidianClient.from_config()
                 if obs:
                     if not obs.ping():
@@ -171,7 +171,7 @@ class IngestionPipeline:
     def _ensure_indexer(self):
         if self._indexer is None:
             try:
-                from vault_indexer import VaultIndexer
+                from meeting_minutes_app.wiki_core.vault_indexer import VaultIndexer
                 idx = VaultIndexer.from_config()
                 if idx:
                     if not idx.load():
@@ -243,7 +243,7 @@ class IngestionPipeline:
 
             # 오디오 길이 측정
             try:
-                import meeting_minutes as mm
+                from meeting_minutes_app.meeting_pipeline import meeting_minutes as mm
                 duration = mm.audio_duration(audio_path)
                 result["duration"] = duration
             except Exception:
@@ -252,7 +252,7 @@ class IngestionPipeline:
             # STT를 먼저 수행하고, STT 발화 내용으로 Obsidian을 검색한 뒤 회의록 생성에 주입
             self._ensure_llm()
 
-            import meeting_minutes as mm
+            from meeting_minutes_app.meeting_pipeline import meeting_minutes as mm
             work_dir = tempfile.mkdtemp(prefix="ingest_audio_")
             try:
                 audio2 = mm.prepare_audio(audio_path, work_dir)
@@ -277,7 +277,7 @@ class IngestionPipeline:
             if meeting_scope != "unknown":
                 scope_label = "외부 회의" if meeting_scope == "external" else "내부 회의"
                 base_memo = f"[회의 구분]\n- {scope_label}로 분류해 기록하세요."
-            import meeting_workflow as mw
+            from meeting_minutes_app.meeting_pipeline import meeting_workflow as mw
             final_memo, related_titles, context_flags = mw.build_generation_context_memo(
                 llm=self._llm,
                 title=title,
@@ -348,7 +348,7 @@ class IngestionPipeline:
             entities: Dict = {}
             if _c("wiki.vault_enrich", True):
                 try:
-                    import enrichment as _enr
+                    from meeting_minutes_app.meeting_pipeline import enrichment as _enr
                     entities = _enr.extract_entities(minutes, self._llm, topic=topic)
                     entity_vault_hits: List[str] = []
                     all_entity_names: List[str] = []
@@ -462,7 +462,7 @@ class IngestionPipeline:
 
             obs_vault_root: str = ""
             if self._obs:
-                from obsidian import ObsidianClient
+                from meeting_minutes_app.wiki_core.obsidian import ObsidianClient
                 stt_meta = {
                     "stt_segment_count": len(segments or []),
                     "stt_raw_chars": sum(len(str(s.get("text", ""))) for s in segments or []),
@@ -499,7 +499,7 @@ class IngestionPipeline:
                     obs_vault_root = _c("obsidian.vault_path", "") or ""
                     if not obs_vault_root:
                         try:
-                            from obsidian import _detect_obsidian_config
+                            from meeting_minutes_app.wiki_core.obsidian import _detect_obsidian_config
                             obs_vault_root = _detect_obsidian_config().get("vault_path", "")
                         except Exception:
                             pass
@@ -554,7 +554,7 @@ class IngestionPipeline:
             )
             if should_email:
                 try:
-                    from vault_audio import _send_email_summary
+                    from meeting_minutes_app.meeting_pipeline.vault_audio import _send_email_summary
                     _send_email_summary(
                         title=f"[회의록] {title}",
                         summary=summary,
@@ -568,7 +568,7 @@ class IngestionPipeline:
             # ── Wiki Registry 갱신 (노트 저장 성공 후, 실패해도 결과에 영향 없음) ──
             if result["status"] == "done":
                 try:
-                    from wiki_knowledge import (
+                    from meeting_minutes_app.wiki_core.wiki_knowledge import (
                         update_action_registry_from_actions,
                         update_decision_registry_from_minutes,
                     )
@@ -582,7 +582,7 @@ class IngestionPipeline:
                     decision_list = sections.get("decisions", [])
                     if not decision_list:
                         # _extract_sections 미감지 시 직접 파싱 재시도
-                        from wiki_knowledge import extract_decisions_from_minutes
+                        from meeting_minutes_app.wiki_core.wiki_knowledge import extract_decisions_from_minutes
                         decision_list = extract_decisions_from_minutes(minutes)
                     if decision_list and doc_type == "meeting":
                         update_decision_registry_from_minutes(
@@ -595,7 +595,7 @@ class IngestionPipeline:
 
                 # ── Wiki Context Package 저장 (per-meeting 폴더 or output 루트) ──
                 try:
-                    from wiki_knowledge import (
+                    from meeting_minutes_app.wiki_core.wiki_knowledge import (
                         build_wiki_context_package,
                         save_wiki_context_package,
                     )
@@ -617,7 +617,7 @@ class IngestionPipeline:
                 # ── Wiki Update Proposal (meeting 타입, 관련 노트 있을 때만) ──
                 if doc_type == "meeting" and related_titles:
                     try:
-                        from wiki_knowledge import (
+                        from meeting_minutes_app.wiki_core.wiki_knowledge import (
                             build_wiki_update_proposal,
                             save_wiki_update_proposal,
                         )
@@ -672,8 +672,8 @@ def _has_markdown_section(content: str, *names: str) -> bool:
 def _expected_recording_note_path(title: str, session_dt: str = "") -> str:
     """ObsidianClient.write_recording_note()가 사용할 기본 상대 경로를 미리 계산한다."""
     try:
-        from obsidian import _expand_path_template, safe_filename
-        from date_utils import iso_to_yymmdd
+        from meeting_minutes_app.wiki_core.obsidian import _expand_path_template, safe_filename
+        from meeting_minutes_app.common.date_utils import iso_to_yymmdd
     except Exception:
         safe_filename = lambda s: re.sub(r'[\\/:*?"<>|]', "_", s).strip()[:80]  # noqa: E731
         _expand_path_template = lambda path, date_str="": str(path or "").strip("/")  # noqa: E731

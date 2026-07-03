@@ -11,7 +11,7 @@ notifier.py – 알림 훅 (Email / Slack / Teams)
 이메일 설정은 환경변수 또는 config.json 의 email 섹션에서 자동 로드됩니다.
 
 사용 예:
-    from notifier import Notifier
+    from meeting_minutes_app.common.notifier import Notifier
     notifier = Notifier.from_config({"notify": "email"})
     notifier.send(title="2025 Q2 주간회의",
                   summary_path="output/summary.md",
@@ -41,7 +41,7 @@ except ImportError:
 
 # config_loader 가 있으면 config.json 에서 이메일 설정 로드
 try:
-    import config_loader as _cfg_mod
+    from meeting_minutes_app.common import config_loader as _cfg_mod
     _cfg_ok = True
 except ImportError:
     _cfg_mod = None  # type: ignore

@@ -77,7 +77,7 @@ class BrowserRealtimeSession:
 
     async def run(self):
         """메인 실행 루프."""
-        import config_loader as cfg
+        from meeting_minutes_app.common import config_loader as cfg
 
         mode_num = self.config.get("mode", 2)
         preset = MODE_PRESETS.get(mode_num, MODE_PRESETS[2])
@@ -370,7 +370,7 @@ class BrowserRealtimeSession:
             # 실시간 Vault/웹 검색 (설정된 경우, 비차단)
             self._segment_counter += 1
             try:
-                import config_loader as _rc
+                from meeting_minutes_app.common import config_loader as _rc
                 vault_search_on = bool(_rc.get("wiki.realtime_vault_search", False))
                 search_interval = int(_rc.get("wiki.realtime_search_interval", 3) or 3)
                 online_search_on = bool(_rc.get("wiki.online_search_enabled", False))
@@ -443,7 +443,7 @@ class BrowserRealtimeSession:
         """ObsidianClient 세션 싱글톤 (최초 호출 시 생성, 이후 재사용)."""
         if self._obs_client is None:
             try:
-                from obsidian import ObsidianClient
+                from meeting_minutes_app.wiki_core.obsidian import ObsidianClient
                 obs = ObsidianClient.from_config()
                 if obs:
                     if not obs.ping():
@@ -491,8 +491,8 @@ class BrowserRealtimeSession:
     def _web_research_segment(self, text: str) -> None:
         """세그먼트 텍스트로 웹 검색 보완 (백그라운드 스레드, 비차단)."""
         try:
-            import config_loader as _rc
-            import meeting_minutes as mm
+            from meeting_minutes_app.common import config_loader as _rc
+            from meeting_minutes_app.meeting_pipeline import meeting_minutes as mm
             llm = mm.LLMClient(preferred=_rc.get("models.llm", "gpt") or "gpt")
             result = llm.web_research(text[:60])
             if result and result.get("text"):
@@ -623,7 +623,7 @@ class BrowserRealtimeSession:
         await self.ws.send_json({"type": "generating", "message": "회의록 생성 중..."})
 
         try:
-            import meeting_minutes as mm
+            from meeting_minutes_app.meeting_pipeline import meeting_minutes as mm
 
             # 회의록 생성 LLM은 config.json(models.llm)을 따른다 (gpt 하드코딩 제거)
             llm = mm.LLMClient(preferred=mm._c("models.llm", "gpt") or "gpt")
@@ -675,7 +675,7 @@ class BrowserRealtimeSession:
             # 종료 시 전체 전사를 기준으로 배치와 동일한 Wiki 컨텍스트를 1회 더 구성한다.
             _context_flags: Dict[str, Any] = {}
             try:
-                import meeting_workflow as _mw_ctx
+                from meeting_minutes_app.meeting_pipeline import meeting_workflow as _mw_ctx
                 _gen_memo, _final_related, _context_flags = _mw_ctx.build_generation_context_memo(
                     llm=llm,
                     title=title or topic,
@@ -746,13 +746,13 @@ class BrowserRealtimeSession:
             _minutes_for_verify = locals().get("minutes") or ""
             if _minutes_for_verify and mm._c("wiki.claim_verify", False):
                 try:
-                    import meeting_workflow as _mw
-                    import config_loader as _rc
+                    from meeting_minutes_app.meeting_pipeline import meeting_workflow as _mw
+                    from meeting_minutes_app.common import config_loader as _rc
                     await self.ws.send_json({"type": "status", "message": "사실 검증 중..."})
                     # 인덱서 로드 (오프라인)
                     _idx = None
                     try:
-                        from vault_indexer import VaultIndexer
+                        from meeting_minutes_app.wiki_core.vault_indexer import VaultIndexer
                         _idx = VaultIndexer.from_config()
                         if _idx and not _idx.load():
                             _idx = None
@@ -798,7 +798,7 @@ class BrowserRealtimeSession:
                             pass
                 _evidence_links: List[str] = []
                 try:
-                    import meeting_workflow as _mw_pub
+                    from meeting_minutes_app.meeting_pipeline import meeting_workflow as _mw_pub
                     _evidence_links = _mw_pub.evidence_to_wikilinks(
                         (_context_flags or {}).get("evidence", [])
                     )
@@ -820,8 +820,8 @@ class BrowserRealtimeSession:
 
             # Wiki Context / Proposal 산출물을 파일과 DB 양쪽에 남겨 웹에서 확인 가능하게 한다.
             try:
-                import config_loader as _rc2
-                from wiki_knowledge import (
+                from meeting_minutes_app.common import config_loader as _rc2
+                from meeting_minutes_app.wiki_core.wiki_knowledge import (
                     build_wiki_context_package,
                     save_wiki_context_package,
                     build_wiki_update_proposal,
@@ -880,7 +880,7 @@ class BrowserRealtimeSession:
             # Wiki Registry 갱신 (회의 타입만)
             if doc_type == "meeting":
                 try:
-                    from wiki_knowledge import (
+                    from meeting_minutes_app.wiki_core.wiki_knowledge import (
                         update_action_registry_from_actions,
                         update_decision_registry_from_minutes,
                         extract_decisions_from_minutes,

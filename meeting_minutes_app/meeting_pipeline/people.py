@@ -18,7 +18,7 @@ import re
 import glob
 from typing import Optional, List, Dict, Tuple
 
-from obsidian import parse_frontmatter, build_frontmatter, safe_filename, _as_str_list
+from meeting_minutes_app.wiki_core.obsidian import parse_frontmatter, build_frontmatter, safe_filename, _as_str_list
 
 # 이름 뒤/괄호 안에 올 수 있는 직책 토큰
 ROLE_TOKENS = ["팀장", "본부장", "실장", "센터장", "그룹장", "파트장", "리더",

@@ -5,7 +5,7 @@ speaker_cache.py – 화자 매핑 캐시
 이전 매핑을 저장·재사용합니다.
 
 사용 예:
-    from speaker_cache import SpeakerCache
+    from meeting_minutes_app.meeting_pipeline.speaker_cache import SpeakerCache
     cache = SpeakerCache()
     mapping = cache.interactive_edit(segments, title="주간회의")
 

@@ -35,7 +35,7 @@ Obsidian "Local REST API (with MCP)" 플러그인을 통해 회의록을 사용�
   - 용어:   01_References/<도메인>/<용어>.md        (없으면 공통)
 
 사용 예:
-    from obsidian import ObsidianClient
+    from meeting_minutes_app.wiki_core.obsidian import ObsidianClient
     obs = ObsidianClient.from_config()
     if obs and obs.ping():
         obs.write_meeting_note(title="2025 양자 세미나", body_md=minutes, ...)
@@ -63,7 +63,7 @@ except ImportError:
     HAS_HTTPX = False
 
 try:
-    import config_loader as _cfg
+    from meeting_minutes_app.common import config_loader as _cfg
     _cfg_ok = True
 except ImportError:
     _cfg = None  # type: ignore
@@ -77,7 +77,7 @@ def _c(key: str, default: Any = None) -> Any:
 def _sm_save(content: str, *, metadata: dict, container_tag: str) -> None:
     """회의록을 Supermemory에 저장 (config.supermemory.enabled=true 시). 실패 무시."""
     try:
-        from supermemory_client import get_client as _sm_get  # type: ignore
+        from meeting_minutes_app.wiki_core.supermemory_client import get_client as _sm_get  # type: ignore
         _sm_get().save(content, metadata=metadata, container_tag=container_tag)
     except ImportError:
         pass

@@ -38,7 +38,7 @@ for _stream in (sys.stdout, sys.stderr):
             pass
 
 try:
-    import config_loader as _cfg
+    from meeting_minutes_app.common import config_loader as _cfg
     _cfg_ok = True
 except ImportError:
     _cfg = None  # type: ignore
@@ -490,7 +490,7 @@ def _get_brief_related_notes(
         3. norm_title 기반 중복 제거
     """
     try:
-        from meeting_workflow import (
+        from meeting_minutes_app.wiki_core.vault_retrieval import (
             search_related_notes_rest,
             get_related_note_content,
             strip_frontmatter,
@@ -703,7 +703,7 @@ def _send_prep_brief_notification(
     채널이 없거나 실패해도 brief 생성 흐름을 막지 않는다.
     """
     try:
-        from notifier import Notifier
+        from meeting_minutes_app.common.notifier import Notifier
         notify_cfg = _c("notify.on_finish", "") or ""
         if not notify_cfg:
             return
@@ -1167,7 +1167,7 @@ def main() -> None:
 
     # meeting_workflow import (best-effort)
     try:
-        from meeting_workflow import load_vault_indexer, load_obsidian_client
+        from meeting_minutes_app.wiki_core.vault_retrieval import load_vault_indexer, load_obsidian_client
     except ImportError as e:
         print(f"[wiki] meeting_workflow 없음 — Vault 검색 건너뜀: {e}")
         load_vault_indexer = lambda: None  # noqa: E731

@@ -6,13 +6,13 @@ import sys
 import os
 import re
 
-# meeting_minutes_app 경로 추가
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "meeting_minutes_app"))
+# 저장소 루트 경로 추가 (meeting_minutes_app 패키지 임포트용)
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from pathlib import Path
-from date_utils import iso_to_yymmdd, parse_iso_date_from_text
-from notifier import Notifier
-from obsidian import safe_filename
+from meeting_minutes_app.common.date_utils import iso_to_yymmdd, parse_iso_date_from_text
+from meeting_minutes_app.common.notifier import Notifier
+from meeting_minutes_app.wiki_core.obsidian import safe_filename
 
 def load_config():
     import json

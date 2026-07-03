@@ -22,6 +22,29 @@ for _s in (sys.stdout, sys.stderr):
 BASE_DIR = Path(__file__).resolve().parent
 APP_DIR = BASE_DIR / "meeting_minutes_app"
 
+# meeting_minutes_app/*.py 스크립트는 common/wiki_core/meeting_pipeline 서브패키지로
+# 이동했다 (내부적으로 절대 import를 쓰므로 `python <path>` 직접 실행이 아니라
+# `python -m <dotted.module>` 형태로 실행해야 meeting_minutes_app 패키지가 resolve된다).
+_MODULE_MAP = {
+    "meeting_minutes.py":        "meeting_minutes_app.meeting_pipeline.meeting_minutes",
+    "run_realtime.py":           "meeting_minutes_app.meeting_pipeline.run_realtime",
+    "run_batch.py":              "meeting_minutes_app.meeting_pipeline.run_batch",
+    "run_ui.py":                 "meeting_minutes_app.meeting_pipeline.run_ui",
+    "meeting_assistant.py":      "meeting_minutes_app.meeting_pipeline.meeting_assistant",
+    "plan_watcher.py":           "meeting_minutes_app.meeting_pipeline.plan_watcher",
+    "auto_process_vault.py":     "meeting_minutes_app.meeting_pipeline.auto_process_vault",
+    "profiles.py":               "meeting_minutes_app.meeting_pipeline.profiles",
+    "speaker_cache.py":          "meeting_minutes_app.meeting_pipeline.speaker_cache",
+    "audio_watcher.py":          "meeting_minutes_app.meeting_pipeline.audio_watcher",
+    "watcher.py":                "meeting_minutes_app.meeting_pipeline.watcher",
+    "realtime_transcription.py": "meeting_minutes_app.meeting_pipeline.realtime_transcription",
+    "obsidian.py":                "meeting_minutes_app.wiki_core.obsidian",
+    "vault_indexer.py":           "meeting_minutes_app.wiki_core.vault_indexer",
+    "wiki_ask.py":                "meeting_minutes_app.wiki_core.wiki_ask",
+    "wiki_knowledge.py":          "meeting_minutes_app.wiki_core.wiki_knowledge",
+    "notifier.py":                "meeting_minutes_app.common.notifier",
+}
+
 
 def _run(args: list[str]) -> int:
     print("\n> " + subprocess.list2cmdline(args))
@@ -32,6 +55,9 @@ def _run(args: list[str]) -> int:
 
 
 def _py(script: str, *args: str) -> int:
+    module = _MODULE_MAP.get(script)
+    if module:
+        return _run([sys.executable, "-m", module, *args])
     script_path = APP_DIR / script
     if not script_path.exists():
         script_path = BASE_DIR / script

@@ -22,7 +22,7 @@ import shutil
 from datetime import datetime
 from typing import Optional, List, Dict, Tuple
 
-from obsidian import parse_frontmatter, build_frontmatter, _as_str_list
+from meeting_minutes_app.wiki_core.obsidian import parse_frontmatter, build_frontmatter, _as_str_list
 
 AUDIO_EXTS = (".webm", ".m4a", ".mp3", ".wav", ".ogg", ".mp4", ".mpga", ".flac")
 
@@ -130,7 +130,7 @@ def transcribe_and_minutes(audio_path: str, doc_type: str = "meeting",
     """오디오 → (minutes, summary, actions_md, speakers). meeting_minutes 재사용.
     memo: generate_minutes에 전달할 추가 컨텍스트 (web_research 결과 등).
     """
-    import meeting_minutes as mm
+    from meeting_minutes_app.meeting_pipeline import meeting_minutes as mm
     if llm is None:
         llm = mm.LLMClient(preferred=mm._c("models.llm", "gpt") or "gpt")
     work = tempfile.mkdtemp(prefix="vault_audio_")
@@ -180,8 +180,8 @@ def _send_email_summary(title: str, summary: str, actions_md: str = "",
     minutes_md: 회의록 본문 (일시·참석자·안건 추출용).
     attachment_paths: 추가 첨부 파일 경로 목록 (예: Obsidian 노트 .md)."""
     try:
-        import meeting_minutes as mm
-        from notifier import Notifier
+        from meeting_minutes_app.meeting_pipeline import meeting_minutes as mm
+        from meeting_minutes_app.common.notifier import Notifier
     except ImportError:
         return False
     sender = mm._c("email.sender", "")
@@ -244,7 +244,7 @@ def _send_email_summary(title: str, summary: str, actions_md: str = "",
 def process_vault(vault_root: str, notes_subdir: str = "00_Meetings",
                   only_audio: str = "", dry_run: bool = False,
                   notify: str = "") -> int:
-    import meeting_minutes as mm
+    from meeting_minutes_app.meeting_pipeline import meeting_minutes as mm
     audios = [only_audio] if only_audio else find_audio_files(vault_root)
     done = 0
     for ap in audios:

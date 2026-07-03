@@ -68,18 +68,11 @@ from pathlib import Path
 from datetime import datetime
 from typing import Optional, List, Dict, Tuple, Any
 
-try:
-    import httpx
-    HAS_HTTPX = True
-except ImportError:
-    HAS_HTTPX = False
-
-
 # ──────────────────────────────────────────────
 #  config_loader (API 키, 모델, SSL 설정)
 # ──────────────────────────────────────────────
 try:
-    import config_loader as _cfg
+    from meeting_minutes_app.common import config_loader as _cfg
     _cfg_ok = True
 except ImportError:
     _cfg = None  # type: ignore
@@ -91,18 +84,19 @@ def _c(key: str, default: Any = None) -> Any:
     return _cfg.get(key, default) if _cfg_ok else default
 
 
+from meeting_minutes_app.common.llm_client import (
+    LLMClient, GPT_MODEL, CLAUDE_MODEL, OPENAI_API_KEY, ANTHROPIC_API_KEY,
+    SSL_VERIFY, get_api_key, make_openai_client, make_anthropic_client,
+)
+
+
 # ──────────────────────────────────────────────
 #  상수 / 모델 설정
 # ──────────────────────────────────────────────
 DEFAULT_STT_MODEL  = _c("models.stt",          "gpt-4o-mini-transcribe") or "gpt-4o-mini-transcribe"
 FALLBACK_STT_MODEL = _c("models.stt_fallback", "gpt-4o-transcribe") or "gpt-4o-transcribe"
-GPT_MODEL          = _c("models.gpt_model",     "gpt-4o") or "gpt-4o"
 MINUTES_MODEL      = _c("models.minutes_model", "gpt-4o") or "gpt-4o"
 SUMMARY_MODEL      = _c("models.summary_model", "gpt-4o") or "gpt-4o"
-CLAUDE_MODEL       = _c("models.claude_model", "claude-opus-4-6") or "claude-opus-4-6"
-OPENAI_API_KEY     = _c("api.openai_api_key",    "") or ""
-ANTHROPIC_API_KEY  = _c("api.anthropic_api_key", "") or ""
-SSL_VERIFY         = _c("ssl.verify", False)
 
 MAX_FILE_SIZE_MB = 25
 MAX_CHUNK_DURATION_SEC = 1200  # gpt-4o-transcribe* 최대 1400s → 안전 마진 포함
@@ -265,14 +259,6 @@ def read_file(p: str) -> str:
         return f.read()
 
 
-def get_api_key(env_name: str, code_value: str = "") -> Optional[str]:
-    key = os.environ.get(env_name) or code_value or None
-    if key:
-        masked = key[:8] + "..." + key[-4:]
-        logger.debug(f"API Key [{env_name}]: {masked}")
-    return key
-
-
 def sanitize_filename(name: str) -> str:
     return re.sub(r'[\\/*?:"<>|]', '_', name).strip()
 
@@ -288,7 +274,7 @@ def parse_session_dt_from_filename(filename: str) -> str:
       260627_5                  → "2026년 06월 27일"
     """
     try:
-        from date_utils import parse_session_dt_from_path
+        from meeting_minutes_app.common.date_utils import parse_session_dt_from_path
         return parse_session_dt_from_path(filename, default="")
     except Exception:
         return ""
@@ -403,30 +389,6 @@ def load_segments_from_transcript(transcript_path: str) -> List[Dict[str, Any]]:
     return segments
 
 
-def make_openai_client(api_key: str):
-    """OpenAI 클라이언트 생성 (SSL 우회 지원)."""
-    from openai import OpenAI
-    if not SSL_VERIFY and HAS_HTTPX:
-        import warnings
-        warnings.filterwarnings("ignore", message="Unverified HTTPS request")
-        http_client = httpx.Client(verify=False)
-        logger.debug("OpenAI client: SSL 검증 비활성화")
-        return OpenAI(api_key=api_key, http_client=http_client)
-    return OpenAI(api_key=api_key)
-
-
-def make_anthropic_client(api_key: str):
-    """Anthropic 클라이언트 생성 (SSL 우회 지원)."""
-    import anthropic as ant
-    if not SSL_VERIFY and HAS_HTTPX:
-        import warnings
-        warnings.filterwarnings("ignore", message="Unverified HTTPS request")
-        http_client = httpx.Client(verify=False)
-        logger.debug("Anthropic client: SSL 검증 비활성화")
-        return ant.Anthropic(api_key=api_key, http_client=http_client)
-    return ant.Anthropic(api_key=api_key)
-
-
 def retry_call(func, *args, retries: int = MAX_RETRIES, delay: int = RETRY_DELAY, **kwargs):
     """자동 재시도 래퍼."""
     last_err = None
@@ -447,210 +409,6 @@ def retry_call(func, *args, retries: int = MAX_RETRIES, delay: int = RETRY_DELAY
 def has_timestamps(segments: List[Dict]) -> bool:
     """세그먼트에 실제 타임스탬프가 있는지 확인 (start != end 이면 있음)."""
     return any(s.get("start", 0) != s.get("end", 0) for s in segments)
-
-
-# ──────────────────────────────────────────────
-#  LLM Client  (GPT-4o ↔ Claude 폴백)
-# ──────────────────────────────────────────────
-class LLMClient:
-    def __init__(self, preferred: str = "gpt"):
-        self.preferred     = preferred
-        self.openai        = None
-        self.anthropic     = None
-        self._call_count   = 0
-        self._total_tokens = 0
-        self._init()
-
-    def _init(self):
-        try:
-            k = get_api_key("OPENAI_API_KEY", OPENAI_API_KEY)
-            if k:
-                self.openai = make_openai_client(k)
-                info(f"OpenAI client ready{' (SSL 우회)' if not SSL_VERIFY else ''}")
-            else:
-                warn("OpenAI API 키 없음")
-        except ImportError:
-            warn("openai 미설치 → pip install openai")
-        except Exception as e:
-            warn(f"OpenAI 초기화 실패: {e}")
-
-        try:
-            k = get_api_key("ANTHROPIC_API_KEY", ANTHROPIC_API_KEY)
-            if k:
-                self.anthropic = make_anthropic_client(k)
-                info(f"Anthropic client ready{' (SSL 우회)' if not SSL_VERIFY else ''}")
-        except ImportError:
-            pass
-        except Exception as e:
-            warn(f"Anthropic 초기화 실패: {e}")
-
-    def _gpt(self, system: str, user: str, temp: float = 0.3,
-             model: str = None, max_tokens: int = None) -> Optional[str]:
-        if not self.openai:
-            return None
-        _model = model or GPT_MODEL
-        try:
-            logger.debug(f"[GPT] model={_model}, temp={temp}, max_tokens={max_tokens}")
-            t0 = time.time()
-            kwargs = dict(
-                model=_model, temperature=temp,
-                messages=[
-                    {"role": "system", "content": system},
-                    {"role": "user",   "content": user},
-                ],
-            )
-            if max_tokens:
-                kwargs["max_tokens"] = max_tokens
-            r  = self.openai.chat.completions.create(**kwargs)
-            elapsed = time.time() - t0
-            result  = r.choices[0].message.content
-            if r.usage:
-                self._total_tokens += r.usage.total_tokens
-                logger.debug(f"[GPT USAGE] {r.usage.prompt_tokens}+{r.usage.completion_tokens} "
-                             f"time={elapsed:.1f}s")
-            self._call_count += 1
-            return result
-        except Exception as e:
-            logger.error(f"[GPT ERROR] {type(e).__name__}: {e}")
-            if DEBUG:
-                logger.debug(traceback.format_exc())
-            warn(f"GPT 호출 실패: {e}")
-            return None
-
-    def _claude(self, system: str, user: str, temp: float = 0.3,
-                max_tokens: int = 16000) -> Optional[str]:
-        if not self.anthropic:
-            return None
-        try:
-            logger.debug(f"[CLAUDE] model={CLAUDE_MODEL}, temp={temp}, max_tokens={max_tokens}")
-            t0 = time.time()
-            r  = self.anthropic.messages.create(
-                model=CLAUDE_MODEL, max_tokens=max_tokens, temperature=temp,
-                system=system,
-                messages=[{"role": "user", "content": user}],
-            )
-            elapsed = time.time() - t0
-            result  = r.content[0].text
-            self._total_tokens += r.usage.input_tokens + r.usage.output_tokens
-            logger.debug(f"[CLAUDE USAGE] in={r.usage.input_tokens} "
-                         f"out={r.usage.output_tokens} time={elapsed:.1f}s")
-            self._call_count += 1
-            return result
-        except Exception as e:
-            logger.error(f"[CLAUDE ERROR] {type(e).__name__}: {e}")
-            if DEBUG:
-                logger.debug(traceback.format_exc())
-            warn(f"Claude 호출 실패: {e}")
-            return None
-
-    def chat(self, system: str, user: str, temp: float = 0.3,
-             model: str = None, max_tokens: int = None) -> str:
-        if self.preferred == "claude":
-            r = self._claude(system, user, temp, max_tokens or 16000)
-            if r:
-                return r
-            warn("Claude 실패 → GPT 폴백")
-            r = self._gpt(system, user, temp, model, max_tokens)
-        else:
-            r = self._gpt(system, user, temp, model, max_tokens)
-            if r:
-                return r
-            warn("GPT 실패 → Claude 폴백")
-            r = self._claude(system, user, temp, max_tokens or 16000)
-        if r:
-            return r
-        tried = "Claude → GPT" if self.preferred == "claude" else "GPT → Claude"
-        raise RuntimeError(
-            f"모든 LLM API 호출 실패 ({tried} 모두 응답 없음).\n"
-            "  → API 키를 확인하세요 (ANTHROPIC_API_KEY, OPENAI_API_KEY).\n"
-            "  → SSL 에러라면: --ssl-no-verify 또는 config.json ssl.verify: false"
-        )
-
-    def web_research(self, query: str, max_uses: int = 3,
-                     max_tokens: int = 1500) -> Dict[str, Any]:
-        """Anthropic 웹 검색 도구로 외부 자료를 보완해 설명을 생성.
-        반환: {"text": 설명, "sources": [{"title","url"}], "searched": bool}
-        웹 검색 불가(키 없음/도구 미지원/회사망 차단) 시 모델 지식 기반으로 폴백(searched=False).
-        """
-        system = (
-            "당신은 회의·세미나 기록을 보완하는 리서치 어시스턴트입니다.\n"
-            "주어진 용어/기술/인물/기업에 대해 정확하고 간결한 한국어 설명(2~4문장)을 제공하세요.\n"
-            "가능하면 웹 검색으로 최신·정확한 사실을 확인하고, 모르면 모른다고 하세요. 추측 금지."
-        )
-        # 1) Anthropic 웹 검색 도구 시도
-        if self.anthropic:
-            try:
-                r = self.anthropic.messages.create(
-                    model=CLAUDE_MODEL, max_tokens=max_tokens, system=system,
-                    messages=[{"role": "user", "content": query}],
-                    tools=[{"type": "web_search_20250305",
-                            "name": "web_search", "max_uses": max_uses}],
-                )
-                text_parts: List[str] = []
-                sources: List[Dict[str, str]] = []
-                for block in r.content:
-                    btype = getattr(block, "type", "")
-                    if btype == "text":
-                        text_parts.append(getattr(block, "text", "") or "")
-                    elif btype == "web_search_tool_result":
-                        for item in (getattr(block, "content", None) or []):
-                            url = getattr(item, "url", None)
-                            if url:
-                                sources.append({"title": getattr(item, "title", None) or url,
-                                                "url": url})
-                text = "\n".join(t for t in text_parts if t).strip()
-                if text:
-                    seen = set(); uniq = []
-                    for s in sources:
-                        if s["url"] not in seen:
-                            seen.add(s["url"]); uniq.append(s)
-                    self._call_count += 1
-                    return {"text": text, "sources": uniq[:5], "searched": True}
-            except Exception as e:
-                logger.warning(f"[web_research] Anthropic 웹검색 실패 → GPT 폴백: {type(e).__name__}: {e}")
-
-        # 2) GPT responses API 웹검색 폴백 (openai SDK 1.x/2.x responses 모듈 지원 시)
-        if self.openai and hasattr(self.openai, "responses"):
-            try:
-                resp = self.openai.responses.create(
-                    model=GPT_MODEL,
-                    tools=[{"type": "web_search_preview"}],
-                    input=query,
-                )
-                text_parts: List[str] = []
-                for item in (resp.output or []):
-                    if getattr(item, "type", "") == "message":
-                        for c in (item.content or []):
-                            if getattr(c, "type", "") == "output_text":
-                                text_parts.append(getattr(c, "text", "") or "")
-                text = "\n".join(t for t in text_parts if t).strip()
-                if text:
-                    self._call_count += 1
-                    return {
-                        "text": text,
-                        "sources": [],
-                        "searched": True,
-                        "source_status": "no_urls",
-                        "source_warning": "GPT 웹검색 폴백이 URL 출처를 반환하지 않았습니다.",
-                    }
-            except Exception as e:
-                logger.warning(f"[web_research] GPT 웹검색 실패 → 최종 폴백: {e}")
-
-        # 3) 최종 폴백: 일반 LLM (라이브 검색 없음)
-        try:
-            text = self.chat(system, query, temp=0.2, max_tokens=max_tokens)
-            return {
-                "text": text or "",
-                "sources": [],
-                "searched": False,
-                "source_status": "model_fallback",
-                "source_warning": "라이브 웹검색 실패 후 일반 LLM 응답으로 대체되었습니다.",
-            }
-        except Exception:
-            return {"text": "", "sources": [], "searched": False, "source_status": "failed"}
-
-    def stats(self) -> str:
-        return f"LLM 호출 {self._call_count}회  토큰 {self._total_tokens:,}개 (추정)"
 
 
 # ──────────────────────────────────────────────
@@ -1107,7 +865,7 @@ def translate_segments(
                 debug_save(raw,
                            os.path.join(debug_dir, f"translate_batch{bi:03d}.txt"),
                            f"Translate {bi}")
-            from json_utils import parse_json_loose
+            from meeting_minutes_app.common.json_utils import parse_json_loose
             arr = parse_json_loose(raw, expect="list")
             if arr is None:
                 raise ValueError("번역 JSON 파싱 실패")
@@ -1937,7 +1695,7 @@ def extract_action_items(
     if debug_dir:
         debug_save(raw, os.path.join(debug_dir, "actions_raw.json"), "Actions raw")
 
-    from json_utils import parse_json_loose
+    from meeting_minutes_app.common.json_utils import parse_json_loose
     items = parse_json_loose(raw, expect="list", default=[])
 
     if not items:
@@ -2047,7 +1805,7 @@ def infer_speaker_names(
 
     try:
         raw = llm.chat(system, user, temp=0.1)
-        from json_utils import parse_json_loose
+        from meeting_minutes_app.common.json_utils import parse_json_loose
         mapping = parse_json_loose(raw, expect="dict", default={})
         if not mapping:
             return {}
@@ -2072,7 +1830,7 @@ def _send_notification(
     doc_type: str = "meeting",
 ):
     try:
-        from notifier import Notifier
+        from meeting_minutes_app.common.notifier import Notifier
     except ImportError:
         warn("notifier.py 없음 → 알림 건너뜀")
         return
@@ -2342,7 +2100,7 @@ def enrich_and_publish(
     # Obsidian 클라이언트 (설정 없거나 연결 실패 시 None → 볼트 기록만 생략)
     obs = None
     try:
-        from obsidian import ObsidianClient
+        from meeting_minutes_app.wiki_core.obsidian import ObsidianClient
         obs = ObsidianClient.from_config()
         if obs is not None and not obs.ping():
             warn("Obsidian 연결 실패 → 볼트 기록 건너뜀")
@@ -2354,7 +2112,7 @@ def enrich_and_publish(
     # 1) 용어 보완
     enr = {"glossary_md": "", "related_notes": [], "sources": []}
     try:
-        import enrichment
+        from meeting_minutes_app.meeting_pipeline import enrichment
         enr = enrichment.enrich(minutes_md, llm, obs=obs, topic=topic or title,
                                 presenter_name=title)
         if related_notes_extra:
@@ -2451,7 +2209,7 @@ def enrich_and_publish(
                 _vault_root = _c("obsidian.vault_path", "") or ""
                 if not _vault_root:
                     try:
-                        from obsidian import _detect_obsidian_config as _dOC
+                        from meeting_minutes_app.wiki_core.obsidian import _detect_obsidian_config as _dOC
                         _vault_root = _dOC().get("vault_path", "")
                     except Exception:
                         pass
@@ -2490,7 +2248,7 @@ def enrich_and_publish(
 def _lookup_plan(title: str, session_dt: str):
     """계획(planned) 노트를 1회만 탐색해 match dict(or None) 반환. Obsidian 미연결시 None."""
     try:
-        from obsidian import ObsidianClient
+        from meeting_minutes_app.wiki_core.obsidian import ObsidianClient
         obs = ObsidianClient.from_config()
         if obs is None or not obs.ping():
             if obs:
@@ -2513,7 +2271,7 @@ def _plan_context_text(match) -> str:
     body = match.get("body") or ""
     cut = re.split(r"^##\s+회의 기록", body, maxsplit=1, flags=re.MULTILINE)[0]
     try:
-        import plan_research
+        from meeting_minutes_app.meeting_pipeline import plan_research
         cut = cut.replace(plan_research.MARKER_BEGIN, "").replace(plan_research.MARKER_END, "")
     except Exception:
         pass
@@ -2621,7 +2379,7 @@ def process_single(
     # 3. 화자 매핑 재사용 (--reuse-speakers)
     if getattr(args, "reuse_speakers", False):
         try:
-            from speaker_cache import SpeakerCache
+            from meeting_minutes_app.meeting_pipeline.speaker_cache import SpeakerCache
             cache = SpeakerCache(
                 os.path.join(os.path.dirname(output_dir), "speaker_map.json")
             )
@@ -2726,7 +2484,7 @@ def process_single(
     # 6-0. [공용] 사전 자료 주입 (계획 매칭은 위에서 1회 탐색해 화자 추론에도 사용)
     related_note_titles: List[str] = []
     context_flags: Dict[str, Any] = {}
-    import meeting_workflow as mw
+    from meeting_minutes_app.meeting_pipeline import meeting_workflow as mw
     try:
         _, full_memo = plan_context_memo(title, session_dt, full_memo, match=_plan_match)
         if _plan_match:
@@ -2753,7 +2511,7 @@ def process_single(
 
     # Wiki Context Package 저장 (wiki_context.json)
     try:
-        from wiki_knowledge import build_wiki_context_package, save_wiki_context_package
+        from meeting_minutes_app.wiki_core.wiki_knowledge import build_wiki_context_package, save_wiki_context_package
         entities_for_context: List[str] = []
         _ctx_pkg = build_wiki_context_package(
             related_titles=related_note_titles,
@@ -2789,7 +2547,7 @@ def process_single(
     if _c("wiki.claim_verify", False):
         obs_for_verify = None
         try:
-            import meeting_workflow as mw
+            from meeting_minutes_app.meeting_pipeline import meeting_workflow as mw
             info("사실 검증 중 (vault 비교)...")
             indexer_for_verify = mw.load_vault_indexer()
             obs_for_verify = mw.load_obsidian_client()
@@ -2880,7 +2638,7 @@ def process_single(
 
     # Wiki Context Package 최종 저장: enrichment 엔티티와 정제된 registry 반영
     try:
-        from wiki_knowledge import build_wiki_context_package, save_wiki_context_package
+        from meeting_minutes_app.wiki_core.wiki_knowledge import build_wiki_context_package, save_wiki_context_package
         entity_map = enr.get("entities") or {}
         known_entities = []
         for vals in entity_map.values():
@@ -2911,7 +2669,7 @@ def process_single(
     # 10. Wiki Registry 갱신 (실패해도 회의록 결과에 영향 없음)
     if args.type == "meeting":
         try:
-            from wiki_knowledge import (
+            from meeting_minutes_app.wiki_core.wiki_knowledge import (
                 update_action_registry_from_actions,
                 update_decision_registry_from_minutes,
                 extract_decisions_from_minutes,
@@ -2936,7 +2694,7 @@ def process_single(
         # ── Wiki Update Proposal ──
         if related_note_titles:
             try:
-                from wiki_knowledge import (
+                from meeting_minutes_app.wiki_core.wiki_knowledge import (
                     build_wiki_update_proposal,
                     save_wiki_update_proposal,
                 )
@@ -2947,7 +2705,7 @@ def process_single(
                     llm=llm,
                     claim_results=claim_results,
                 )
-                import config_loader as _cfg
+                from meeting_minutes_app.common import config_loader as _cfg
                 _root_out = Path(__file__).resolve().parent.parent / str(_cfg.get("output_dir", "output"))
                 save_wiki_update_proposal(_proposal, _root_out)
             except Exception as _wpe:
@@ -3049,7 +2807,7 @@ def main():
     # ── 프로필 적용 ──────────────────────────────────────
     if args.profile:
         try:
-            from profiles import ProfileManager
+            from meeting_minutes_app.meeting_pipeline.profiles import ProfileManager
             pm   = ProfileManager()
             args = pm.apply_profile(args.profile, args)
             print(f"  프로필 [{args.profile}] 적용됨")
@@ -3178,7 +2936,7 @@ def main():
             # 화자 캐시 통합 수정
             speaker_mapping: Dict[str, str] = {}
             try:
-                from speaker_cache import SpeakerCache
+                from meeting_minutes_app.meeting_pipeline.speaker_cache import SpeakerCache
                 cache          = SpeakerCache(
                     os.path.join(args.output_dir, "speaker_map.json")
                 )

@@ -13,7 +13,7 @@ router = APIRouter(tags=["profiles"])
 
 
 def _get_manager():
-    from profiles import ProfileManager
+    from meeting_minutes_app.meeting_pipeline.profiles import ProfileManager
     return ProfileManager(str(Path(EXE_DIR) / "profiles.json"))
 
 

@@ -11,12 +11,12 @@ from pathlib import Path
 
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "meeting_minutes_app"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import json_utils as ju  # noqa: E402
-import wiki_knowledge as wk  # noqa: E402
-import vault_indexer as vi  # noqa: E402
-import date_utils as du  # noqa: E402
+from meeting_minutes_app.common import json_utils as ju  # noqa: E402
+from meeting_minutes_app.wiki_core import wiki_knowledge as wk  # noqa: E402
+from meeting_minutes_app.wiki_core import vault_indexer as vi  # noqa: E402
+from meeting_minutes_app.common import date_utils as du  # noqa: E402
 
 
 # ━━━━━━━━━━━━━━━━━━━━ json_utils ━━━━━━━━━━━━━━━━━━━━

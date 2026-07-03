@@ -28,7 +28,7 @@ logging.basicConfig(level=logging.INFO, format="%(message)s")
 logger = logging.getLogger("meeting_minutes")
 
 try:
-    import config_loader as _cfg
+    from meeting_minutes_app.common import config_loader as _cfg
     def _c(k, d=None): return _cfg.get(k, d)
 except Exception:
     def _c(k, d=None): return d
@@ -52,12 +52,12 @@ def _build_clients():
     llm = None
     obs = None
     try:
-        import meeting_minutes as mm
+        from meeting_minutes_app.meeting_pipeline import meeting_minutes as mm
         llm = mm.LLMClient(preferred=_c("models.llm", "claude"))
     except Exception as e:
         print(f"[plan_watcher] LLM 초기화 실패: {e}")
     try:
-        from obsidian import ObsidianClient
+        from meeting_minutes_app.wiki_core.obsidian import ObsidianClient
         obs = ObsidianClient.from_config()
         if obs is not None and not obs.ping():
             print("[plan_watcher] Obsidian REST 연결 안 됨 → 글로서리만 작성(참고노트/볼트검색 생략)")
@@ -77,7 +77,7 @@ def _process_file(path: Path, llm, obs) -> bool:
     if "status: planned" not in content and "status: \"planned\"" not in content:
         return False
     try:
-        import plan_research
+        from meeting_minutes_app.meeting_pipeline import plan_research
         new = plan_research.research_planned_note(content, llm, obs=obs)
     except Exception as e:
         print(f"[plan_watcher] 리서치 실패({path.name}): {e}")
@@ -103,7 +103,7 @@ _audio_seen = {}
 def _audio_pass(vault, notes_subdir, min_age=6.0):
     """볼트의 새(안정화된) 임베드 오디오를 vault_audio 로 자동 STT·요약·정리·병합."""
     try:
-        import vault_audio as va
+        from meeting_minutes_app.meeting_pipeline import vault_audio as va
     except Exception:
         return 0
     done = 0

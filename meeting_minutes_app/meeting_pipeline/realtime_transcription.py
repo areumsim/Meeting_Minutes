@@ -71,7 +71,7 @@ except ImportError:
 
 # ── config_loader ─────────────────────────────
 try:
-    import config_loader as _cfg_mod
+    from meeting_minutes_app.common import config_loader as _cfg_mod
     _cfg_ok = True
 except ImportError:
     _cfg_mod = None  # type: ignore
@@ -109,7 +109,7 @@ def _apply_wiki_quality_loop(
     claim_results: List[Dict[str, Any]] = []
 
     try:
-        import meeting_workflow as mw
+        from meeting_minutes_app.meeting_pipeline import meeting_workflow as mw
         if minutes and _c("wiki.claim_verify", False):
             print("  사실 검증 중 (vault 비교)...")
             idx = mw.load_vault_indexer()
@@ -144,7 +144,7 @@ def _apply_wiki_quality_loop(
         print(f"  {C_YELLOW}사실 검증 실패 (무시): {e}{C_RESET}")
 
     try:
-        from wiki_knowledge import build_wiki_context_package, save_wiki_context_package
+        from meeting_minutes_app.wiki_core.wiki_knowledge import build_wiki_context_package, save_wiki_context_package
         _ctx_pkg = build_wiki_context_package(
             related_titles=related_note_titles,
             data_dir=Path(__file__).resolve().parent.parent / "data",
@@ -169,7 +169,7 @@ def _apply_wiki_quality_loop(
 
     if doc_type == "meeting":
         try:
-            from wiki_knowledge import (
+            from meeting_minutes_app.wiki_core.wiki_knowledge import (
                 update_action_registry_from_actions,
                 update_decision_registry_from_minutes,
                 extract_decisions_from_minutes,
@@ -192,7 +192,7 @@ def _apply_wiki_quality_loop(
 
         if related_note_titles:
             try:
-                from wiki_knowledge import build_wiki_update_proposal, save_wiki_update_proposal
+                from meeting_minutes_app.wiki_core.wiki_knowledge import build_wiki_update_proposal, save_wiki_update_proposal
                 proposal = build_wiki_update_proposal(
                     meeting_title=title,
                     minutes_text=minutes,
@@ -212,14 +212,14 @@ def _apply_wiki_quality_loop(
 _this_dir = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _this_dir)
 try:
-    from meeting_minutes import (
+    from meeting_minutes_app.meeting_pipeline.meeting_minutes import (
         OPENAI_API_KEY, SSL_VERIFY,
         make_openai_client, get_api_key,
         LLMClient, generate_minutes, generate_summary, refine_script,
         save, TYPE_LABELS,
         build_script_md, infer_speaker_names, _parse_diarized,
     )
-    import meeting_minutes as _mm
+    from meeting_minutes_app.meeting_pipeline import meeting_minutes as _mm
 except (ImportError, Exception) as e:
     import traceback as _tb
     print(f"❌ meeting_minutes.py 임포트 실패: {e}")
@@ -727,7 +727,7 @@ def cmd_recover(log_path: str, output_dir: str, llm_preferred: str,
     _related_note_titles = []
     _context_flags: Dict[str, Any] = {}
     try:
-        import meeting_workflow as mw
+        from meeting_minutes_app.meeting_pipeline import meeting_workflow as mw
         _gen_memo, _related_note_titles, _context_flags = mw.build_generation_context_memo(
             llm=llm,
             title=(topic or stem),
@@ -781,7 +781,7 @@ def cmd_recover(log_path: str, output_dir: str, llm_preferred: str,
         _ra_md = _mm.format_actions_md(actions_json) if actions_json else ""
         _evidence_links = []
         try:
-            import meeting_workflow as _mw_pub
+            from meeting_minutes_app.meeting_pipeline import meeting_workflow as _mw_pub
             _evidence_links = _mw_pub.evidence_to_wikilinks((_context_flags or {}).get("evidence", []))
         except Exception:
             _evidence_links = []
@@ -1231,7 +1231,7 @@ class RealtimeTranscriber:
 
     def _translate_and_log(self, text: str, seg: dict):
         """백그라운드 스레드: 공유 번역 함수 호출."""
-        from ws_transcriber import translate_and_log
+        from meeting_minutes_app.meeting_pipeline.ws_transcriber import translate_and_log
         translate_and_log(
             text, seg, self.client,
             self.translate_model, self.logger, self._indicator,
@@ -1753,7 +1753,7 @@ class RealtimeSession:
 
     def _run_ws(self):
         """WebSocket 스트리밍 모드 실행."""
-        from ws_transcriber import WebSocketAudioStreamer, WebSocketTranscriber
+        from meeting_minutes_app.meeting_pipeline.ws_transcriber import WebSocketAudioStreamer, WebSocketTranscriber
 
         self._print_session_header()
 
@@ -2038,7 +2038,7 @@ class RealtimeSession:
         _related_note_titles = []
         _context_flags: Dict[str, Any] = {}
         try:
-            import meeting_workflow as mw
+            from meeting_minutes_app.meeting_pipeline import meeting_workflow as mw
             _gen_memo, _related_note_titles, _context_flags = mw.build_generation_context_memo(
                 llm=self.llm,
                 title=(self.topic or stem),
@@ -2114,7 +2114,7 @@ class RealtimeSession:
             try:
                 _evidence_links = []
                 try:
-                    import meeting_workflow as _mw_pub
+                    from meeting_minutes_app.meeting_pipeline import meeting_workflow as _mw_pub
                     _evidence_links = _mw_pub.evidence_to_wikilinks((_context_flags or {}).get("evidence", []))
                 except Exception:
                     _evidence_links = []
@@ -2179,7 +2179,7 @@ class RealtimeSession:
                 _vault_root = _c("obsidian.vault_path", "") or ""
                 if not _vault_root:
                     try:
-                        from obsidian import _detect_obsidian_config as _dOC2
+                        from meeting_minutes_app.wiki_core.obsidian import _detect_obsidian_config as _dOC2
                         _vault_root = _dOC2().get("vault_path", "")
                     except Exception:
                         pass

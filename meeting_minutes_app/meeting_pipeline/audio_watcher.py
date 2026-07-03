@@ -22,7 +22,7 @@ from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional, Set
 
 try:
-    import config_loader as _cfg
+    from meeting_minutes_app.common import config_loader as _cfg
     _cfg_ok = True
 except ImportError:
     _cfg = None  # type: ignore
@@ -263,7 +263,7 @@ class AudioWatcher:
 
 def _default_callback(audio_path: str) -> Dict[str, Any]:
     """기본 콜백: ingestion_pipeline.ingest_file() 호출."""
-    from ingestion_pipeline import ingest_file
+    from meeting_minutes_app.meeting_pipeline.ingestion_pipeline import ingest_file
     result = ingest_file(audio_path)
     status = result.get("status", "?")
     note_path = result.get("note_path", "")

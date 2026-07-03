@@ -9,7 +9,7 @@ LLMClient(meeting_minutes.LLMClient)의 .chat() / .web_research() 를 사용.
 ObsidianClient 는 선택(없으면 글로서리 텍스트만 생성, 백링크는 생략).
 
 사용:
-    from enrichment import enrich
+    from meeting_minutes_app.meeting_pipeline.enrichment import enrich
     result = enrich(minutes_md, llm, obs=obsidian_client, topic="양자컴퓨팅")
     # result = {"glossary_md", "related_notes", "sources"}
 """
@@ -269,7 +269,7 @@ def _build_query(name: str, label: str, topic: str) -> str:
 
 def _parse_json_object(raw: str) -> Dict[str, Any]:
     try:
-        from json_utils import parse_json_loose
+        from meeting_minutes_app.common.json_utils import parse_json_loose
         return parse_json_loose(raw, expect="dict", default={}) or {}
     except ImportError:
         # json_utils 없을 때 최소 폴백

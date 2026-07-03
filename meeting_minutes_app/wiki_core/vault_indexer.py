@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Optional, List, Dict, Any, Tuple
 
 try:
-    import config_loader as _cfg
+    from meeting_minutes_app.common import config_loader as _cfg
     _cfg_ok = True
 except ImportError:
     _cfg = None  # type: ignore
@@ -209,7 +209,7 @@ class VaultIndexer:
             print(f"[indexer] {len(md_files)}개 .md 파일 발견 (_시작 제외)")
 
         try:
-            from obsidian import parse_frontmatter, safe_filename
+            from meeting_minutes_app.wiki_core.obsidian import parse_frontmatter, safe_filename
         except ImportError:
             parse_frontmatter = _fallback_parse_frontmatter
             def safe_filename(n, max_len=80): return n[:max_len]
@@ -666,7 +666,7 @@ class VaultIndexer:
         if not content:
             return None
         try:
-            from obsidian import parse_frontmatter
+            from meeting_minutes_app.wiki_core.obsidian import parse_frontmatter
             _, body = parse_frontmatter(content)
         except ImportError:
             body = re.sub(r'^---\s*\n.*?\n---\s*\n', '', content, flags=re.DOTALL)
@@ -687,7 +687,7 @@ class VaultIndexer:
                 index = os.path.join(str(root), index)
         if not vault:
             try:
-                from obsidian import _detect_obsidian_config
+                from meeting_minutes_app.wiki_core.obsidian import _detect_obsidian_config
                 detected = _detect_obsidian_config()
                 vault = detected.get("vault_path", "")
                 if vault:

@@ -22,7 +22,7 @@ import logging
 from datetime import datetime
 from typing import Optional, List, Dict, Any
 
-from obsidian import parse_frontmatter, build_frontmatter, safe_filename
+from meeting_minutes_app.wiki_core.obsidian import parse_frontmatter, build_frontmatter, safe_filename
 
 logger = logging.getLogger("meeting_minutes")
 
@@ -173,7 +173,7 @@ def research_planned_note(content: str, llm, obs=None,
     if not force and meta.get("research_hash") == fp:
         return None
 
-    import enrichment
+    from meeting_minutes_app.meeting_pipeline import enrichment
     topic = meta.get("topic", "") or meta.get("title", "")
     enr = enrichment.enrich(agenda, llm, obs=obs, topic=topic)
 

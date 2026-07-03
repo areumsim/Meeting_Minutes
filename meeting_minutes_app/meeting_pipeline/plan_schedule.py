@@ -23,7 +23,7 @@ import argparse
 from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional
 
-from obsidian import parse_frontmatter, date_key, _as_str_list
+from meeting_minutes_app.wiki_core.obsidian import parse_frontmatter, date_key, _as_str_list
 
 DEFAULT_DURATION_MIN = 60   # 회의에 duration/end 가 없을 때 가정 길이(분)
 
@@ -50,7 +50,7 @@ def _parse_time(t: str):
 def _body_has_agenda(body: str) -> bool:
     """'## 안건' 섹션에 실제 항목이 있는지(자동 리서치 블록 제외)."""
     import re
-    import plan_research
+    from meeting_minutes_app.meeting_pipeline import plan_research
     b = plan_research.strip_auto_block(body)
     m = re.search(r"^##\s+안건\s*$(.*?)(?=^##\s|\Z)", b, flags=re.MULTILINE | re.DOTALL)
     if not m:
@@ -274,7 +274,7 @@ def main():
     vault = args.vault
     if not vault:
         try:
-            import config_loader as _cfg
+            from meeting_minutes_app.common import config_loader as _cfg
             vault = _cfg.get("obsidian.vault_path", "") or ""
         except ImportError:
             pass

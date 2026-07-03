@@ -41,7 +41,7 @@ for _stream in (sys.stdout, sys.stderr):
             pass
 
 try:
-    import config_loader as _cfg
+    from meeting_minutes_app.common import config_loader as _cfg
     def _c(k, d=None): return _cfg.get(k, d)
 except Exception:
     def _c(k, d=None): return d
@@ -57,7 +57,7 @@ def _vault(args) -> str:
 
 # ── 회의 전: 사전 리서치 ──────────────────────────────────────
 def cmd_prep(args):
-    import plan_watcher as pw
+    from meeting_minutes_app.meeting_pipeline import plan_watcher as pw
     vault = _vault(args)
     root = Path(vault) / args.notes_subdir
     if not root.is_dir():
@@ -107,7 +107,7 @@ def cmd_process(args):
 
 # ── 이후 정리: 일정/충돌/대시보드 ─────────────────────────────
 def cmd_schedule(args):
-    import plan_schedule as ps
+    from meeting_minutes_app.meeting_pipeline import plan_schedule as ps
     from datetime import datetime
     vault = _vault(args)
     now = datetime.now()
@@ -129,8 +129,8 @@ def cmd_status(args):
 
 # ── 이후 정리: 병합 대기 확인 후 병합 ─────────────────────────
 def cmd_merge(args):
-    import plan_schedule as ps
-    from obsidian import ObsidianClient
+    from meeting_minutes_app.meeting_pipeline import plan_schedule as ps
+    from meeting_minutes_app.wiki_core.obsidian import ObsidianClient
     vault = _vault(args)
     ms = ps.load_meetings(vault, args.notes_subdir)
     pend = ps.pending_merges(ms)
@@ -155,7 +155,7 @@ def cmd_merge(args):
 
 
 def cmd_people(args):
-    import people as pp
+    from meeting_minutes_app.meeting_pipeline import people as pp
     vault = _vault(args)
     if args.add:
         res = pp.sync_from_list(vault, [x.strip() for x in args.add.split(",") if x.strip()],
@@ -169,7 +169,7 @@ def cmd_people(args):
 
 
 def cmd_vault_audio(args):
-    import vault_audio as va
+    from meeting_minutes_app.meeting_pipeline import vault_audio as va
     vault = _vault(args)
     n = va.process_vault(vault, args.notes_subdir, only_audio=args.audio,
                          dry_run=args.dry_run, notify=getattr(args, "notify", ""))
@@ -179,7 +179,7 @@ def cmd_vault_audio(args):
 # ── 오디오 자동 감시 ────────────────────────────────────────
 def cmd_watch(args):
     """폴더를 감시하며 새 오디오 파일을 자동 처리한다."""
-    from audio_watcher import AudioWatcher, _default_callback
+    from meeting_minutes_app.meeting_pipeline.audio_watcher import AudioWatcher, _default_callback
     folders = args.folders or list(_c("vault_watcher.watch_folders", []) or [])
     if not folders:
         print("[watch] 오류: --folders 또는 config.vault_watcher.watch_folders 설정 필요")
@@ -199,7 +199,7 @@ def cmd_watch(args):
 # ── 단일 파일 수동 처리 ─────────────────────────────────────
 def cmd_ingest(args):
     """특정 오디오 파일을 수동으로 처리한다."""
-    from ingestion_pipeline import IngestionPipeline
+    from meeting_minutes_app.meeting_pipeline.ingestion_pipeline import IngestionPipeline
     pipeline = IngestionPipeline()
     result = pipeline.ingest(
         audio_path=args.file,
@@ -224,7 +224,7 @@ def cmd_ingest(args):
 # ── Vault 재인덱싱 ──────────────────────────────────────────
 def cmd_reindex(args):
     """Obsidian Vault 노트를 재인덱싱한다."""
-    from vault_indexer import VaultIndexer
+    from meeting_minutes_app.wiki_core.vault_indexer import VaultIndexer
     vault = getattr(args, "vault_path", "") or _c("indexing.vault_path") or _c("obsidian.vault_path", "")
     if not vault:
         print("[reindex] 오류: --vault-path 또는 config.indexing.vault_path 설정 필요")
@@ -238,7 +238,7 @@ def cmd_reindex(args):
 # ── LLM Wiki Q&A ────────────────────────────────────────────
 def cmd_ask(args):
     """Vault 지식 베이스를 기반으로 질문에 답한다."""
-    from wiki_ask import WikiQA
+    from meeting_minutes_app.wiki_core.wiki_ask import WikiQA
     qa = WikiQA()
     result = qa.ask(args.question, max_context_notes=args.max_notes)
 
@@ -273,7 +273,7 @@ def cmd_analyze(args):
 
     if ext in audio_exts:
         # 오디오 파일: force=True로 재처리
-        from ingestion_pipeline import IngestionPipeline
+        from meeting_minutes_app.meeting_pipeline.ingestion_pipeline import IngestionPipeline
         pipeline = IngestionPipeline()
         result = pipeline.ingest(
             audio_path=path,

@@ -70,7 +70,7 @@ def update_config(data: dict):
         json.dump(cfg, f, ensure_ascii=False, indent=2)
 
     try:
-        import config_loader
+        from meeting_minutes_app.common import config_loader
         config_loader.reload()
     except Exception:
         pass

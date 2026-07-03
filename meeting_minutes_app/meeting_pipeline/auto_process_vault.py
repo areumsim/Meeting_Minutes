@@ -21,7 +21,7 @@ import datetime
 # ── 설정 ─────────────────────────────────────────────────────
 # VAULT: config.json의 obsidian.vault_path 를 우선 사용, 없으면 환경변수 OBSIDIAN_VAULT
 try:
-    import config_loader as _cfg
+    from meeting_minutes_app.common import config_loader as _cfg
     VAULT = _cfg.get("obsidian.vault_path", "") or os.environ.get("OBSIDIAN_VAULT", "")
 except ImportError:
     VAULT = os.environ.get("OBSIDIAN_VAULT", "")

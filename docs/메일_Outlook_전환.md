@@ -37,6 +37,8 @@
 python run_meeting.py batch "D:\Claude\QC\<테스트 녹음>.m4a" --notify email
 ```
 
+(`pip install -e .`로 설치했다면 `meeting-minutes batch ... --notify email`도 동일하게 동작합니다.)
+
 메일이 `you@example.com` 으로 도착하면 성공. 실패 메시지(예: `535 5.7.139 Authentication unsuccessful`)가 뜨면 SMTP AUTH/앱 비밀번호 문제이니 위 2)로.
 
 참고: `process`는 호환 명령으로 남아 있지만, 새 문서와 테스트는 `batch` 기준으로 작성합니다. 메일 첨부에는 회의록/요약뿐 아니라 설정과 경로에 따라 사실검증, Wiki Context/Proposal 산출물이 함께 생성됩니다.

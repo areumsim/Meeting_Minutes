@@ -416,18 +416,24 @@ python run_meeting.py obsidian --where
 
 | 모듈 | 역할 | 주요 함수 | 외부 호출 |
 |---|---|---|---|
-| `meeting_minutes.py` (~2753줄) | STT, LLM 클라이언트, 텍스트 생성 | `LLMClient`, `run_stt()`, `generate_minutes()`, `generate_summary()`, `extract_action_items()`, `translate_segments()` | OpenAI STT, GPT-4o, Claude |
-| `date_utils.py` | batch/ingest 공용 날짜 파싱 | `parse_session_dt_from_path()`, `parse_iso_date_from_text()`, `iso_to_yymmdd()` | 표준 라이브러리 |
-| `meeting_workflow.py` | 공유 워크플로우 (vault 검색, claim verify) | `build_generation_context_memo()`, `_keyword_vault_search()`, `claim_verify()`, `_extract_claims()`, `_fetch_vault_notes_for_claim()` | VaultIndexer, Obsidian REST, LLM |
-| `ingestion_pipeline.py` | 오디오→Obsidian 자동화 파이프라인 | `IngestPipeline.ingest()`, `_detect_type()`, `_detect_meeting_scope()`, `_build_transcript_md()` | 위 모든 모듈 |
-| `wiki_knowledge.py` | Wiki 지식 순환 — 준비 브리프 + Registry + Context Package | `build_prep_brief()`, `load_action_registry()`, `load_decision_registry()`, `build_wiki_update_proposal()`, `build_wiki_context_package()`, `save_wiki_context_package()` | VaultIndexer, Obsidian REST (LLM 호출 없음) |
-| `vault_indexer.py` (~400줄) | TF-IDF 오프라인 인덱서 | `VaultIndexer.build()` (한국어 바이그램+영어), `.load()` (7일 초과 경고), `.search()`, `.find_related()`, `.get_note_content()` | 파일시스템만 |
-| `obsidian.py` (~1213줄) | Obsidian REST API 클라이언트 | `ping()`, `ensure_running()`, `search_simple()`, `get_note()`, `put_note()`, `write_recording_note()`, `write_meeting_note()`, `update_planned_note()`, `find_planned_note()`, `create_reference_note()` | https://127.0.0.1:27124 |
-| `supermemory_client.py` | Supermemory SDK 래퍼 — 크로스세션 팩트 메모리 | `SupermemoryClient.save()`, `.search()`, `get_client()` | Supermemory API 또는 로컬 서버 |
-| `enrichment.py` (~200줄) | 엔티티 추출 + 참고 노트 생성 | `enrich()` | LLM (웹리서치 선택적) |
-| `notifier.py` (~521줄) | 이메일/Slack/Teams 알림 | `_build_html_body()`, `_send_email()`, `_send_email_summary()` | SMTP, Webhooks |
-| `vault_audio.py` (~302줄) | 임베드 오디오 처리 | `process_vault()`, `merge_into_note_file()` | meeting_minutes 재사용 |
-| `web/backend/api/realtime.py` (~830줄) | WebSocket 실시간 전사 | `BrowserRealtimeSession`, `_handle_event()`, `_search_vault_segment()`, `_finalize()` | OpenAI Realtime API |
+| `meeting_pipeline/meeting_minutes.py` | STT, 텍스트 생성 | `run_stt()`, `generate_minutes()`, `generate_summary()`, `extract_action_items()`, `translate_segments()`, `enrich_and_publish()` | OpenAI STT, GPT-4o, Claude |
+| `common/llm_client.py` | LLM 클라이언트 (GPT-4o ↔ Claude 폴백) — `wiki_core`/`meeting_pipeline` 공용 | `LLMClient`, `make_openai_client()`, `make_anthropic_client()` | OpenAI, Anthropic |
+| `common/date_utils.py` | batch/ingest 공용 날짜 파싱 | `parse_session_dt_from_path()`, `parse_iso_date_from_text()`, `iso_to_yymmdd()` | 표준 라이브러리 |
+| `meeting_pipeline/meeting_workflow.py` | 회의록 생성 컨텍스트 오케스트레이션, claim verify | `build_generation_context_memo()`, `_keyword_vault_search()`, `claim_verify()`, `_extract_claims()`, `_fetch_vault_notes_for_claim()`, `graph_expand_titles()` | VaultIndexer, Obsidian REST, LLM, Graph DB |
+| `wiki_core/vault_retrieval.py` | 도메인 무관 vault/Obsidian 검색·메모 헬퍼 | `load_vault_indexer()`, `load_obsidian_client()`, `search_related_notes_rest()`, `build_obsidian_context_memo()` | VaultIndexer, Obsidian REST |
+| `meeting_pipeline/ingestion_pipeline.py` | 오디오→Obsidian 자동화 파이프라인 | `IngestionPipeline.ingest()`, `_detect_type()`, `_detect_meeting_scope()` | 위 모든 모듈 |
+| `wiki_core/wiki_knowledge.py` | Wiki 지식 순환 — 준비 브리프 + Registry + Context Package | `build_prep_brief()`, `load_action_registry()`, `load_decision_registry()`, `build_wiki_update_proposal()`, `build_wiki_context_package()`, `save_wiki_context_package()` | VaultIndexer, Obsidian REST (LLM 호출 없음) |
+| `wiki_core/graph_db.py` | Wiki Knowledge Graph SQLite 저장소 | `upsert_node()`, `upsert_edge()`, `get_neighbors()`, `find_path()`, `get_session_subgraph()` | `data/wiki_graph.db` |
+| `wiki_core/graph_sync.py` | registry/vault/세션 산출물 → 그래프 동기화, 엔티티 정규화 | `backfill_from_registries()`, `backfill_from_vault()`, `sync_session_graph()`, `resolve_canonical_key()` | graph_db, wiki_knowledge |
+| `wiki_core/vault_indexer.py` (~770줄) | TF-IDF/하이브리드 오프라인 인덱서 | `VaultIndexer.build()` (한국어 바이그램+영어), `.load()`, `.search()` (RRF 융합), `.find_related()` | 파일시스템, OpenAI 임베딩(선택) |
+| `wiki_core/obsidian.py` (~1369줄) | Obsidian REST API 클라이언트 | `ping()`, `ensure_running()`, `search_simple()`, `get_note()`, `put_note()`, `write_recording_note()`, `write_meeting_note()`, `parse_frontmatter()` | https://127.0.0.1:27124 |
+| `wiki_core/supermemory_client.py` | Supermemory SDK 래퍼 — 크로스세션 팩트 메모리 | `SupermemoryClient.save()`, `.search()`, `get_client()` | Supermemory API 또는 로컬 서버 |
+| `meeting_pipeline/enrichment.py` | 엔티티 추출 + 참고 노트 생성 | `enrich()` | LLM (웹리서치 선택적) |
+| `common/notifier.py` | 이메일/Slack/Teams 알림 | `_build_html_body()`, `_send_email()`, `_send_email_summary()` | SMTP, Webhooks |
+| `meeting_pipeline/vault_audio.py` | 임베드 오디오 처리 | `process_vault()`, `merge_into_note_file()` | meeting_minutes 재사용 |
+| `cli.py` / `cli_init.py` | `meeting-minutes` 콘솔 커맨드 디스패치 / 최초 설정 마법사 | `dispatch()`, `run_init()` | 하위 모듈 subprocess 호출 |
+| `web/backend/api/graph.py` | Wiki Knowledge Graph 조회 REST (읽기 전용) | `list_nodes()`, `get_node_neighbors()`, `get_session_subgraph()` | graph_db |
+| `web/backend/api/realtime.py` (~940줄) | WebSocket 실시간 전사 | `BrowserRealtimeSession`, `_handle_event()`, `_search_vault_segment()`, `_finalize()` | OpenAI Realtime API |
 
 ---
 
@@ -559,6 +565,8 @@ LLM은 다음 고정 답변 구조를 반드시 따르도록 강제된다:
 | `wiki_knowledge.section_index_enabled` | `true` | 섹션(heading) 단위 인덱싱. claim_verify/context memo/wiki_ask가 whole-note 대신 관련 섹션을 근거로 우선 사용. 변경 후 `reindex` 필요 |
 | `wiki_knowledge.proposal_llm_enabled` | `false` | LLM 기반 proposal 초안 생성 (향후 확장 후보) |
 | `wiki_knowledge.auto_apply_updates` | `false` | **항상 false — Obsidian 원본 자동 수정 금지** |
+| `wiki_knowledge.graph_enabled` | `true` | Wiki Knowledge Graph 동기화(registry/vault 백필 + 세션 실시간 동기화) — 파생 데이터라 기본 활성 |
+| `wiki_knowledge.graph_retrieval_expand_enabled` | `false` | 회의록 생성 컨텍스트를 그래프로 1-hop 확장(`graph_expand_titles()`) — 기존 RRF 파이프라인에 얹는 실험적 단계라 기본 비활성 |
 | `supermemory.enabled` | `false` | Supermemory 팩트 메모리 활성화 — Obsidian 저장 시 동시 저장, 다음 회의 컨텍스트·사실 검증 시 자동 참조 |
 | `supermemory.api_key` | `""` | Supermemory API 키 (클라우드) 또는 로컬 서버는 빈 값 허용 |
 | `supermemory.base_url` | `"https://api.supermemory.ai"` | 자체 호스팅 시 `http://localhost:6767` |

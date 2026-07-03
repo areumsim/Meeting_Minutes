@@ -120,13 +120,18 @@ python run_meeting.py realtime --language ko
 <details>
 <summary>처음 세팅 5단계 (이미 된 PC는 무시)</summary>
 
-1. **패키지**: `pip install -r requirements.txt` (httpx 포함)
-2. **키 입력**: `config.example.json` → `config.json` 복사 후 OpenAI·Anthropic 키 입력
+1. **패키지**: `pip install -e .` (pyproject.toml 기반, `meeting-minutes` 커맨드 등록됨) — 저장소만
+   clone해서 쓰려면 `pip install -r requirements.txt`도 가능
+2. **최초 설정**: `meeting-minutes init` (대화형 — vault 경로/API 키 입력 + 연결 확인까지 자동),
+   또는 수동으로 `config.example.json` → `config.json` 복사 후 OpenAI·Anthropic 키 입력
 3. **Obsidian 플러그인**: Obsidian → 설정 → 커뮤니티 플러그인 → **"Local REST API"** 설치·활성화 → **API Key 복사**
-4. **연결**: `config.json` 의 `obsidian.api_key` 에 그 키 붙여넣기 (`.mcp.json` 에도 — Claude Code용)
-5. **볼트 폴더 생성**: `python run_meeting.py obsidian --init-vault`
+4. **연결**: (수동 설정 시) `config.json` 의 `obsidian.api_key` 에 그 키 붙여넣기 (`.mcp.json` 에도 — Claude Code용).
+   `meeting-minutes init`을 썼다면 이미 물어봤을 것.
+5. **볼트 폴더 생성**: `meeting-minutes obsidian --init-vault` (또는 `python run_meeting.py obsidian --init-vault`)
 
-확인: `python run_meeting.py obsidian --ping`
+확인: `meeting-minutes obsidian --ping` (또는 `python run_meeting.py obsidian --ping`)
+
+새 팀/새 PC 설치 절차 전체(배포 채널, 격리 확인, 체크리스트)는 [`docs/SETUP_NEW_TEAM.md`](SETUP_NEW_TEAM.md) 참고.
 </details>
 
 ---

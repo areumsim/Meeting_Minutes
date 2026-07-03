@@ -1,15 +1,25 @@
 # 🎙️ Meeting Minutes Generator v2.1
 
-음성/영상 파일에서 자동으로 **스크립트 + 회의록 + 요약본 + 사실검증 + Wiki 업데이트 후보**를 생성합니다.
-실시간 마이크 녹취와 파일 배치 처리를 모두 지원합니다. 사용자 실행은 root의 `run_meeting.bat` / `run_meeting.py`로 통일되어 있고, 구현 모듈은 `meeting_minutes_app/` 아래에 있습니다.
-**웹 UI**(`run_meeting.bat`)로도 동일한 기능을 브라우저에서 사용할 수 있습니다.
+음성/영상 파일에서 자동으로 **스크립트 + 회의록 + 요약본 + 사실검증 + Wiki 업데이트 후보**를 생성하고,
+누적된 회의록·결정사항·액션을 **지식그래프(Wiki Knowledge Graph)**로 정착시킵니다.
+실시간 마이크 녹취와 파일 배치 처리를 모두 지원합니다. `pip install -e .` 설치 후에는 `meeting-minutes`
+커맨드를, 설치 없이 저장소만 clone했다면 `run_meeting.bat` / `python run_meeting.py`를 씁니다(동일한 로직).
+구현 모듈은 `meeting_minutes_app/`(common/wiki_core/meeting_pipeline 서브패키지) 아래에 있습니다.
+**웹 UI**(`meeting-minutes web` 또는 `run_meeting.bat`)로도 동일한 기능을 브라우저에서 사용할 수 있습니다.
 
 > 🆕 **Obsidian + Claude 연동**: 회의록을 Claude로 작성하고, 전문용어·인물·기업을 자동 검색해
 > Obsidian 볼트에 정리한 뒤 메일로 발송합니다. → **쉬운 사용법: [`docs/GUIDE_Obsidian_Claude.md`](docs/GUIDE_Obsidian_Claude.md)**
 >
+> 🆕 **Wiki Knowledge Graph**: 회의/사람/조직/주제/결정/액션을 노드·엣지로 저장해(`data/wiki_graph.db`)
+> 표기가 달라도(직함, 구분자) 같은 엔티티로 정규화하고, 회의록 생성 시 관련 인물/주제를 그래프로
+> 1-hop 확장해 컨텍스트에 추가 주입할 수 있습니다. 웹 UI 세션 상세의 "Graph" 탭에서 확인,
+> `python scripts/graph_backfill.py`로 기존 registry·vault를 백필. 자세한 구조는
+> [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)의 "Wiki Knowledge Graph" 절 참고.
+>
 > 🆕 **Supermemory 팩트 메모리**: Obsidian에 회의록을 저장할 때 동시에 Supermemory에도 저장 → 다음 회의 컨텍스트 빌딩 및 사실 검증 시 이전 회의 기억을 자동 참조합니다. `config.supermemory.enabled: true` 로 활성화. 자체 호스팅 가능 (`npx supermemory local`, MIT 라이선스).
 >
 > 저장 경로와 요약/회의록 구분 기준은 [`docs/출력_구조_저장경로_요약회의록.md`](docs/출력_구조_저장경로_요약회의록.md)를 기준으로 합니다.
+> 새 팀/새 PC 설치는 [`docs/SETUP_NEW_TEAM.md`](docs/SETUP_NEW_TEAM.md) 참고.
 
 ---
 
@@ -531,7 +541,9 @@ cp   config.example.json config.json   # Mac/Linux
     "update_proposals_enabled": true,
     "section_index_enabled": true,
     "proposal_llm_enabled": false,
-    "auto_apply_updates": false
+    "auto_apply_updates": false,
+    "graph_enabled": true,
+    "graph_retrieval_expand_enabled": false
   },
   "output_dir": "./output"
 }
@@ -546,6 +558,7 @@ cp   config.example.json config.json   # Mac/Linux
 | `supermemory` | 회의록 저장 시 팩트 카드 동시 저장 + 다음 회의 컨텍스트·사실 검증에 자동 참조 (`supermemory_client.py`) |
 | `vault_watcher` | `run_meeting.py watch`, `run_meeting.py audio-watcher`, 자동 처리 상태 파일 |
 | `indexing`, `wiki` | `vault_indexer.py`, `wiki_ask.py`, 관련 노트 검색과 Q&A |
+| `wiki_knowledge.graph_enabled`/`graph_retrieval_expand_enabled` | Wiki Knowledge Graph 동기화(`graph_db.py`/`graph_sync.py`) + 회의록 생성 시 그래프 기반 검색 확장 |
 | `analysis` | `prompts/` 템플릿 기반 문서 유형별 분석 |
 
 ### Obsidian 저장 경로 기준

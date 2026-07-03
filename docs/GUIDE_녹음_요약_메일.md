@@ -5,6 +5,9 @@
 
 세 가지 경로가 있습니다. 모두 같은 `config.json` email 설정을 사용하지만, 저장/병합 방식은 다릅니다.
 
+> 아래 예시는 모두 `python run_meeting.py ...` 형태입니다 — `pip install -e .`로 설치했다면
+> `meeting-minutes ...`로 동일하게 실행할 수 있습니다(예: `meeting-minutes batch ...`).
+
 ---
 
 ## 경로 A — vault-audio (옵시디언 녹음에 권장)

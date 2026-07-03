@@ -22,11 +22,12 @@ from typing import Optional
 # ══════════════════════════════════════════════════════════════════
 #  경로
 # ══════════════════════════════════════════════════════════════════
-APP_DIR        = Path(__file__).parent.resolve()
-BASE_DIR       = APP_DIR.parent
+APP_DIR        = Path(__file__).parent.resolve()  # meeting_minutes_app/meeting_pipeline/
+BASE_DIR       = APP_DIR.parent.parent             # repo root
 OUTPUT_DIR     = BASE_DIR / "output"
 ACTIVE_SESSION = OUTPUT_DIR / ".active_session"
 SCRIPT         = APP_DIR / "realtime_transcription.py"
+SCRIPT_MODULE  = "meeting_minutes_app.meeting_pipeline.realtime_transcription"
 LOG_DIR        = BASE_DIR / "data" / "logs"
 LOG_FILE       = LOG_DIR / "run_py.log"
 
@@ -292,7 +293,7 @@ def screen_install_deps(missing: list) -> bool:
 #  메인 스크립트 실행
 # ══════════════════════════════════════════════════════════════════
 def _run_script(extra_args: list) -> int:
-    cmd = [sys.executable, str(SCRIPT)] + extra_args
+    cmd = [sys.executable, "-m", SCRIPT_MODULE] + extra_args
     log.info("실행: %s", subprocess.list2cmdline(cmd))
     try:
         with open(str(LOG_FILE), "a", encoding="utf-8") as _lf:
@@ -1016,7 +1017,9 @@ def main():
         print_cli_help()
         return
     if argv:
-        raise SystemExit(subprocess.call([sys.executable, str(SCRIPT), *argv], cwd=str(BASE_DIR)))
+        raise SystemExit(subprocess.call(
+            [sys.executable, "-m", SCRIPT_MODULE, *argv], cwd=str(BASE_DIR)
+        ))
 
     # 1. 패키지 의존성 체크
     missing = _check_deps()

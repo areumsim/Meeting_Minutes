@@ -147,7 +147,7 @@ def _apply_wiki_quality_loop(
         from meeting_minutes_app.wiki_core.wiki_knowledge import build_wiki_context_package, save_wiki_context_package
         _ctx_pkg = build_wiki_context_package(
             related_titles=related_note_titles,
-            data_dir=Path(__file__).resolve().parent.parent / "data",
+            data_dir=Path(__file__).resolve().parent.parent.parent / "data",
             metadata={
                 "title": title,
                 "session_dt": session_dt,

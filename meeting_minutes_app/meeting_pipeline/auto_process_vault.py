@@ -33,7 +33,7 @@ AUDIO_EXTS = (".webm", ".m4a", ".mp3", ".wav", ".ogg", ".mp4", ".mpga", ".flac")
 # ─────────────────────────────────────────────────────────────
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-ROOT = os.path.dirname(HERE)
+ROOT = os.path.dirname(os.path.dirname(HERE))  # meeting_minutes_app/meeting_pipeline/ -> repo root
 OUT = os.path.join(ROOT, "output")
 LOG = os.path.join(ROOT, "auto_process.log")
 

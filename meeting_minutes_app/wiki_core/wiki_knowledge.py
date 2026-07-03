@@ -26,8 +26,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
-HERE = Path(__file__).resolve().parent      # meeting_minutes_app/
-BASE_DIR = HERE.parent                      # project root
+HERE = Path(__file__).resolve().parent      # meeting_minutes_app/wiki_core/
+BASE_DIR = HERE.parent.parent                # project root
 
 # UTF-8 재설정 — Windows CP949 환경 대응 (ingestion_pipeline.py 동일 패턴)
 for _stream in (sys.stdout, sys.stderr):

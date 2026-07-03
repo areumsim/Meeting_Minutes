@@ -19,8 +19,8 @@ import webbrowser
 import time
 from pathlib import Path
 
-APP_DIR = Path(__file__).resolve().parent
-PROJECT_ROOT = APP_DIR.parent
+APP_DIR = Path(__file__).resolve().parent.parent  # meeting_minutes_app/
+PROJECT_ROOT = APP_DIR.parent                       # repo root
 WEB_DIR = PROJECT_ROOT / "web"
 FRONTEND_DIR = WEB_DIR / "frontend"
 DIST_DIR = FRONTEND_DIR / "dist"

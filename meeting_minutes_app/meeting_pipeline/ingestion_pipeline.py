@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Optional, List, Dict, Any
 
 HERE = Path(__file__).resolve().parent
+PROJECT_ROOT = HERE.parent.parent  # meeting_minutes_app/meeting_pipeline/ -> repo root
 
 for _stream in (sys.stdout, sys.stderr):
     if getattr(_stream, "encoding", None) and _stream.encoding.lower() in ("cp949", "euc-kr", "ansi"):
@@ -93,7 +94,7 @@ def _detect_meeting_scope(title: str = "", topic: str = "") -> str:
 def _load_prompt_template(doc_type: str) -> Optional[str]:
     """prompts/{doc_type}_analysis.md 를 읽어 반환. 없으면 None."""
     templates_dir = _c("analysis.templates_dir", "prompts")
-    path = HERE / templates_dir / f"{doc_type}_analysis.md"
+    path = PROJECT_ROOT / templates_dir / f"{doc_type}_analysis.md"
     if path.exists():
         try:
             return path.read_text(encoding="utf-8")
@@ -601,10 +602,10 @@ class IngestionPipeline:
                     )
                     _ctx_pkg = build_wiki_context_package(
                         related_titles=related_titles,
-                        data_dir=Path(HERE.parent) / "data",
+                        data_dir=Path(PROJECT_ROOT) / "data",
                         related_details=context_flags.get("evidence", []),
                     )
-                    _out_base = Path(HERE.parent) / str(_c("output_dir", "output"))
+                    _out_base = Path(PROJECT_ROOT) / str(_c("output_dir", "output"))
                     _ctx_save_dir = (
                         Path(note_path).parent
                         if (note_path and not obs_vault_root)
@@ -621,7 +622,7 @@ class IngestionPipeline:
                             build_wiki_update_proposal,
                             save_wiki_update_proposal,
                         )
-                        _out_dir = Path(HERE.parent) / str(_c("output_dir", "output"))
+                        _out_dir = Path(PROJECT_ROOT) / str(_c("output_dir", "output"))
                         _proposal = build_wiki_update_proposal(
                             meeting_title=title,
                             minutes_text=minutes,

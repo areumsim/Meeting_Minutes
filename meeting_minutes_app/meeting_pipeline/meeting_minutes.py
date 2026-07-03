@@ -1892,7 +1892,7 @@ def _collect_wiki_proposal_files(title: str, out_dir: str) -> List[str]:
     candidates: List[Path] = []
     roots = [Path(out_dir)]
     try:
-        roots.append(Path(__file__).resolve().parent.parent / str(_c("output_dir", "output")))
+        roots.append(Path(__file__).resolve().parent.parent.parent / str(_c("output_dir", "output")))
     except Exception:
         pass
 
@@ -2515,7 +2515,7 @@ def process_single(
         entities_for_context: List[str] = []
         _ctx_pkg = build_wiki_context_package(
             related_titles=related_note_titles,
-            data_dir=Path(__file__).resolve().parent.parent / "data",
+            data_dir=Path(__file__).resolve().parent.parent.parent / "data",
             metadata={
                 "title": title,
                 "session_dt": session_dt,
@@ -2646,7 +2646,7 @@ def process_single(
         glossary_terms = list(entity_map.get("terms", []) or [])
         _ctx_pkg = build_wiki_context_package(
             related_titles=related_note_titles,
-            data_dir=Path(__file__).resolve().parent.parent / "data",
+            data_dir=Path(__file__).resolve().parent.parent.parent / "data",
             metadata={
                 "title": title,
                 "session_dt": session_dt,
@@ -2706,7 +2706,7 @@ def process_single(
                     claim_results=claim_results,
                 )
                 from meeting_minutes_app.common import config_loader as _cfg
-                _root_out = Path(__file__).resolve().parent.parent / str(_cfg.get("output_dir", "output"))
+                _root_out = Path(__file__).resolve().parent.parent.parent / str(_cfg.get("output_dir", "output"))
                 save_wiki_update_proposal(_proposal, _root_out)
             except Exception as _wpe:
                 warn(f"Wiki Update Proposal 생성 실패 (무시): {_wpe}")

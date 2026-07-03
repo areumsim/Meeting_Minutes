@@ -23,7 +23,8 @@ def get_base_dir():
     if getattr(sys, 'frozen', False):
         # PyInstaller 번들: exe가 있는 디렉토리
         return Path(sys.executable).parent
-    return Path(__file__).resolve().parent.parent
+    # meeting_minutes_app/meeting_pipeline/run_ui_exe.py -> repo root (3단계 상위)
+    return Path(__file__).resolve().parent.parent.parent
 
 
 def setup_paths():

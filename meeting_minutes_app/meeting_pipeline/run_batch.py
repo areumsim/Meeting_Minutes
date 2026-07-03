@@ -19,11 +19,13 @@ from pathlib import Path
 # ══════════════════════════════════════════════════════════════════
 #  경로
 # ══════════════════════════════════════════════════════════════════
-APP_DIR    = Path(__file__).parent.resolve()
-BASE_DIR   = APP_DIR.parent
+APP_DIR    = Path(__file__).parent.resolve()  # meeting_minutes_app/meeting_pipeline/
+BASE_DIR   = APP_DIR.parent.parent            # repo root
 OUTPUT_DIR = BASE_DIR / "output"
 SCRIPT     = APP_DIR / "meeting_minutes.py"
+SCRIPT_MODULE = "meeting_minutes_app.meeting_pipeline.meeting_minutes"
 WATCHER    = APP_DIR / "watcher.py"
+WATCHER_MODULE = "meeting_minutes_app.meeting_pipeline.watcher"
 LOG_DIR    = BASE_DIR / "data" / "logs"
 LOG_FILE   = LOG_DIR / "run_py.log"
 
@@ -305,7 +307,7 @@ def _collect_from_folder(folder: Path) -> list:
 #  미디어 파일 실행
 # ══════════════════════════════════════════════════════════════════
 def _run_batch(files: list, extra_args: list, title: str = ""):
-    cmd = [sys.executable, str(SCRIPT)] + files + extra_args
+    cmd = [sys.executable, "-m", SCRIPT_MODULE] + files + extra_args
     cmd += ["--output-dir", "output"]
     if "--notify" not in extra_args and "--no-notify" not in extra_args:
         cmd += ["--notify", "email"]
@@ -593,7 +595,7 @@ def screen_watcher_mode():
         mode_args = list(mode["args"])
 
         # watcher.py 인자 조립
-        cmd = [sys.executable, str(WATCHER), str(folder)]
+        cmd = [sys.executable, "-m", WATCHER_MODULE, str(folder)]
         if "--type" in mode_args:
             cmd += ["--type", mode_args[mode_args.index("--type") + 1]]
         if "--translate" in mode_args:

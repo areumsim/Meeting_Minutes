@@ -32,6 +32,7 @@ import subprocess
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+_REPO_ROOT = HERE.parent.parent  # meeting_minutes_app/meeting_pipeline/ -> repo root
 
 for _stream in (sys.stdout, sys.stderr):
     if getattr(_stream, "encoding", None) and _stream.encoding.lower() in ("cp949", "euc-kr", "ansi"):
@@ -79,19 +80,19 @@ def cmd_prep(args):
 
 # ── 회의 중: 실시간 녹취 ──────────────────────────────────────
 def cmd_record(args):
-    cmd = [sys.executable, str(HERE / "run_realtime.py")]
+    cmd = [sys.executable, "-m", "meeting_minutes_app.meeting_pipeline.run_realtime"]
     if args.type:
         cmd += ["--type", args.type]
     if args.topic:
         cmd += ["--topic", args.topic]
     cmd += args.extra
     print(f"[record] 실시간 녹취 시작: {' '.join(cmd)}")
-    raise SystemExit(subprocess.call(cmd))
+    raise SystemExit(subprocess.call(cmd, cwd=str(_REPO_ROOT)))
 
 
 # ── 회의 후: 파일 처리(STT→회의록→요약→액션→이메일→계획 매칭/병합) ──
 def cmd_process(args):
-    cmd = [sys.executable, str(HERE / "meeting_minutes.py"), args.file]
+    cmd = [sys.executable, "-m", "meeting_minutes_app.meeting_pipeline.meeting_minutes", args.file]
     if args.title:
         cmd += ["--title", args.title]
     if args.type:
@@ -102,7 +103,7 @@ def cmd_process(args):
         cmd += ["--notify", args.notify]
     cmd += args.extra
     print(f"[process] {' '.join(cmd)}")
-    raise SystemExit(subprocess.call(cmd))
+    raise SystemExit(subprocess.call(cmd, cwd=str(_REPO_ROOT)))
 
 
 # ── 이후 정리: 일정/충돌/대시보드 ─────────────────────────────

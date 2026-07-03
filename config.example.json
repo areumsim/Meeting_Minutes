@@ -236,7 +236,9 @@
     "embedding_dims": 256,
     "_embedding_min_cosine_comment": "의미 검색 결과로 인정할 최소 코사인 유사도 (노이즈 컷)",
     "embedding_min_cosine": 0.25,
-    "embedding_max_chars": 4000
+    "embedding_max_chars": 4000,
+    "_graph_comment": "Wiki Knowledge Graph — registry/vault/세션 산출물을 노드·엣지로 파생 저장(data/wiki_graph.db). 읽기 전용 API + 백필 스크립트만 사용, Obsidian/registry 원본은 건드리지 않음. 실험 기능이 아니라 이미 있는 데이터의 파생 뷰이므로 기본값 true.",
+    "graph_enabled": true
   },
 
   "supermemory": {

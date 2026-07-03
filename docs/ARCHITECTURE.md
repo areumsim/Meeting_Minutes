@@ -716,34 +716,48 @@ EvidenceSpan:
 
 ---
 
-## GraphRAG 도입 조건
+## Wiki Knowledge Graph (구현 완료)
 
-GraphRAG는 회의록 시스템과 잘 맞지만 지금 바로 Graph DB를 붙이지 않는다. 먼저 `action_registry.json`, `decision_registry.json`, `wiki_proposal.json` schema를 안정화한 뒤 Markdown Knowledge Graph 또는 별도 Graph DB로 확장한다.
+경량 내장형으로 구현됐다 — 별도 Graph DB 서비스 없이 `meeting_minutes_app/wiki_core/graph_db.py`가
+전용 SQLite 파일(`data/wiki_graph.db`, `web/meeting_assistant.db`와 별개)에 노드/엣지 테이블로
+저장한다. `wiki_core` 패키지 소속이라 `web/backend` 없이도(CLI만으로도) 동작한다.
 
-후보 노드:
+노드 유형: `meeting`, `person`, `organization`, `topic`, `decision`, `action`, `note`
+(`nodes.type` 컬럼 하나로 구분 — 노드 타입별 테이블 분리 없음).
 
-| Node | 주요 속성 |
-|---|---|
-| Meeting | held_on, source_audio, summary |
-| Person | name, role, organization |
-| Project | name, alias |
-| Decision | text, decided_at, confidence, source_meeting |
-| Action | owner, due_date, status, source_meeting |
-| Note | path, title, type |
-
-후보 관계:
+관계(엣지) 유형:
 
 ```text
-Meeting -[:MENTIONED]-> Entity
+Meeting -[:MENTIONED]-> Entity        (Obsidian frontmatter people/organizations/topics 백필)
 Meeting -[:DECIDED]-> Decision
 Meeting -[:CREATED]-> Action
 Action -[:ASSIGNED_TO]-> Person
-Decision -[:AFFECTS]-> Project
+Decision -[:AFFECTS]-> Topic
+Action -[:AFFECTS]-> Topic
 Meeting -[:USED_CONTEXT]-> Note
-WikiProposal -[:UPDATES]-> Note
 ```
 
-목표 질의는 지난 회의 이후 바뀐 결정사항, 프로젝트별 미완료 액션, 특정 업체가 언급된 모든 회의다.
+**채우기**:
+- `scripts/graph_backfill.py [--dry-run]` — `data/action_registry.json`/`decision_registry.json` +
+  Obsidian vault frontmatter를 1회성으로 그래프에 반영.
+- 세션 종료 시 실시간 반영 — `web/backend/api/realtime.py::_finalize()`, `api/batch.py`의
+  후처리 지점에서 `wiki_core.graph_sync.sync_session_graph()` 호출 (registry JSON 갱신과 별개 로직,
+  실패해도 세션 완료에 영향 없음).
+
+**엔티티 정규화**: v1은 `wiki_knowledge._norm_key()`(소문자화 + 공백/특수문자 제거) 기반 정확 일치만
+지원한다. 표기가 다르면(예: "260627_5" vs "260627 5") 별개 노드로 남는다 — 동명이인/약어 통합
+(Entity Resolver)은 여전히 미구현 상태로 남겨둔 향후 과제다.
+
+**조회 API** (읽기 전용, `web/backend/api/graph.py`): `GET /api/graph/nodes`,
+`/api/graph/nodes/{id}`, `/api/graph/nodes/{id}/neighbors`, `/api/graph/edges`, `/api/graph/path`,
+`/api/graph/sessions/{session_id}`. 쓰기 엔드포인트 없음 — 그래프 데이터는 `graph_sync.py`를 통해서만
+갱신되며, Obsidian 노트나 registry JSON 원본은 절대 수정하지 않는다.
+
+프론트엔드는 `SessionDetail.tsx`의 새 "Graph" 탭에서 세션이 만든 노드/엣지를 타입별로 묶어 보여주고,
+칩을 클릭하면 `neighbors` API로 1-hop 확장한다(별도 그래프 시각화 라이브러리 없음).
+
+목표 질의(지난 회의 이후 바뀐 결정사항, 프로젝트별 미완료 액션, 특정 업체가 언급된 모든 회의)는
+`get_neighbors()`/`find_path()`를 조합해 애플리케이션 레벨에서 구성한다.
 
 ---
 
@@ -787,7 +801,7 @@ RAGAS의 faithfulness 개념은 회의록 claim이 retrieved evidence로 뒷받�
 | LLM 기반 proposal 초안 생성 | `wiki_knowledge.proposal_llm_enabled` | 규칙 기반 추출로 MVP 충분, 비용 절감 |
 | Vector DB (FAISS/Qdrant 등) | — | 노트 단위 임베딩 하이브리드 검색은 구현 완료(`wiki_knowledge.embedding_enabled`, RRF 융합) — Vault 규모 증가 시 전용 저장소 검토 |
 | 섹션 단위 임베딩 + Reranker | — | 현재는 노트 단위 임베딩 + 섹션 단위 TF-IDF 조합 |
-| Graph DB / GraphRAG | — | registry/schema 안정화 후 도입 |
+| Graph DB / GraphRAG | `wiki_knowledge.graph_enabled` | 구현 완료 (경량 SQLite, `wiki_core/graph_db.py`) — "Wiki Knowledge Graph" 절 참고 |
 | Review Queue / Obsidian Bases 자동 생성 | — | `review_status`/`wiki_proposal.json v2`가 먼저 안정화된 뒤 도입 |
 | 엔티티 정규화 (Entity Resolver) | — | 동일 인물/조직/주제의 노트명 변형(약어·오탈자) 통합 |
 | 자동 Wiki 반영 (auto_apply_updates) | `wiki_knowledge.auto_apply_updates=false` | 회의 발언이 원본을 오염시킬 위험 |

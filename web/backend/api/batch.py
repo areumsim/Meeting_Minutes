@@ -94,6 +94,24 @@ def _run_batch_processing(session_id: str, file_path: str, args: argparse.Namesp
         db.import_output_files(session_id, output_dir)
         db.update_session_status(session_id, "completed")
 
+        # Wiki Knowledge Graph 동기화 (best-effort — 실패해도 배치 처리 결과에 영향 없음)
+        try:
+            from meeting_minutes_app.wiki_core import graph_sync, wiki_knowledge as wk
+
+            docs = db.get_documents(session_id)
+            actions_doc = next((d for d in docs if d.get("type") == "actions"), None)
+            minutes_doc = next((d for d in docs if d.get("type") == "minutes"), None)
+            decisions = wk.extract_decisions_from_minutes(minutes_doc["content"]) if minutes_doc else None
+
+            graph_sync.sync_session_graph(
+                session_id=session_id,
+                title=title or "Upload",
+                actions_json=actions_doc["content"] if actions_doc else None,
+                decisions=decisions,
+            )
+        except Exception:
+            pass
+
     except Exception:
         traceback.print_exc()
         db.update_session_status(session_id, "error")

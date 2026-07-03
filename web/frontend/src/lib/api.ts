@@ -1,5 +1,5 @@
 import { sessionsStore, segmentsStore, documentsStore } from './db';
-import type { Session, Segment, Document as Doc } from './types';
+import type { Session, Segment, Document as Doc, SessionGraph, GraphNeighbors } from './types';
 
 // Authentication & Config Storage (localStorage for simple key/values)
 export const getApiKey = () => localStorage.getItem("OPENAI_API_KEY") || "";
@@ -85,6 +85,31 @@ export const getSession = async (id: string): Promise<{ session: Session; segmen
   const documents = await documentsStore.getItem<Doc[]>(id) || [];
   if (!session) throw new Error("Session not found in local IndexedDB");
   return { session, segments, documents };
+};
+
+// Wiki Knowledge Graph (읽기 전용) — web/backend/api/graph.py
+// 참고: 이 앱은 대부분 IndexedDB(로컬)로 동작하고 web/backend REST를 호출하지 않지만,
+// FastAPI로 함께 패키징되어 서빙되는 배포 모드(web/backend/app.py가 이 프론트를 정적 서빙)에서는
+// 같은 오리진의 /api/* 가 실제로 존재한다. 백엔드가 없는(모바일 전용) 배포에서는 이 호출이
+// 실패하며, 호출부에서 조용히 무시하고 그래프 탭을 숨기도록 처리한다.
+export const getSessionGraph = async (sessionId: string): Promise<SessionGraph> => {
+  const res = await fetch(`/api/graph/sessions/${sessionId}`);
+  if (!res.ok) throw new Error(`Graph fetch failed (${res.status})`);
+  return res.json();
+};
+
+export const getNodeNeighbors = async (
+  nodeId: string,
+  opts?: { depth?: number; relationType?: string; limit?: number }
+): Promise<GraphNeighbors> => {
+  const params = new URLSearchParams();
+  if (opts?.depth) params.set("depth", String(opts.depth));
+  if (opts?.relationType) params.set("relation_type", opts.relationType);
+  if (opts?.limit) params.set("limit", String(opts.limit));
+  const qs = params.toString();
+  const res = await fetch(`/api/graph/nodes/${nodeId}/neighbors${qs ? `?${qs}` : ""}`);
+  if (!res.ok) throw new Error(`Neighbors fetch failed (${res.status})`);
+  return res.json();
 };
 
 export const getSessionStatus = async (id: string) => {

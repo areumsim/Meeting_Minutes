@@ -42,12 +42,14 @@ from web.backend.api.batch import router as batch_router
 from web.backend.api.realtime import router as realtime_router
 from web.backend.api.profiles import router as profiles_router
 from web.backend.api.settings import router as settings_router
+from web.backend.api.graph import router as graph_router
 
 app.include_router(sessions_router, prefix="/api")
 app.include_router(batch_router, prefix="/api")
 app.include_router(realtime_router)
 app.include_router(profiles_router, prefix="/api")
 app.include_router(settings_router, prefix="/api")
+app.include_router(graph_router, prefix="/api")
 
 
 @app.get("/api/health")

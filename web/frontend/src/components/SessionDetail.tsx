@@ -1,19 +1,31 @@
 import React, { useState, useEffect, useRef } from "react";
 import { Share as ShareIcon, ArrowLeft, Copy, Download, Loader2, CheckCircle, Clock,
-  FileText, List, Zap, AlertCircle, RefreshCw, Send
+  FileText, List, Zap, AlertCircle, RefreshCw, Send, Network
 } from "lucide-react";
 import { motion } from "motion/react";
 import { Share } from '@capacitor/share';
-import { getSession, getSessionStatus, generateSummaryForSession, getTargetEmail } from "../lib/api";
+import { getSession, getSessionStatus, generateSummaryForSession, getTargetEmail,
+  getSessionGraph, getNodeNeighbors } from "../lib/api";
 import { formatDuration, formatTime } from "../lib/format";
-import type { Session, Segment, Document as Doc } from "../lib/types";
+import type { Session, Segment, Document as Doc, SessionGraph, GraphNeighbors } from "../lib/types";
 
 interface Props {
   id: string;
   onBack: () => void;
 }
 
-type Tab = "script" | "minutes" | "summary" | "actions" | "fact_check" | "wiki_context" | "wiki_proposal" | "refined_script";
+type Tab = "script" | "minutes" | "summary" | "actions" | "fact_check" | "wiki_context" | "wiki_proposal" | "refined_script" | "graph";
+
+// 그래프 노드 타입 -> 섹션 표시 라벨 (이 컴포넌트의 다른 탭 라벨과 톤을 맞춰 영문 사용)
+const GRAPH_TYPE_LABELS: Record<string, string> = {
+  meeting: "Meetings",
+  person: "People",
+  organization: "Organizations",
+  topic: "Topics",
+  decision: "Decisions",
+  action: "Actions",
+  note: "Notes",
+};
 
 export default function SessionDetail({ id, onBack }: Props) {
   const [session, setSession] = useState<Session | null>(null);
@@ -24,6 +36,10 @@ export default function SessionDetail({ id, onBack }: Props) {
   const [copied, setCopied] = useState(false);
   const [userNotes, setUserNotes] = useState("");
   const [regenerating, setRegenerating] = useState(false);
+  const [graph, setGraph] = useState<SessionGraph | null>(null);
+  const [expandedNodeId, setExpandedNodeId] = useState<string | null>(null);
+  const [neighborsCache, setNeighborsCache] = useState<Record<string, GraphNeighbors>>({});
+  const [neighborsLoading, setNeighborsLoading] = useState<string | null>(null);
 
   const load = async () => {
     try {
@@ -37,7 +53,42 @@ export default function SessionDetail({ id, onBack }: Props) {
     setLoading(false);
   };
 
-  useEffect(() => { load(); }, [id]);
+  const loadGraph = async () => {
+    try {
+      const g = await getSessionGraph(id);
+      setGraph(g && g.node_count > 0 ? g : null);
+    } catch {
+      // 백엔드가 없는(모바일 전용) 배포에서는 실패가 정상 — 조용히 무시하고 탭을 숨긴다
+      setGraph(null);
+    }
+  };
+
+  useEffect(() => {
+    load();
+    setGraph(null);
+    setExpandedNodeId(null);
+    setNeighborsCache({});
+    loadGraph();
+  }, [id]);
+
+  const handleToggleNeighbors = async (nodeId: string) => {
+    if (expandedNodeId === nodeId) {
+      setExpandedNodeId(null);
+      return;
+    }
+    setExpandedNodeId(nodeId);
+    if (!neighborsCache[nodeId]) {
+      setNeighborsLoading(nodeId);
+      try {
+        const result = await getNodeNeighbors(nodeId, { depth: 1 });
+        setNeighborsCache(prev => ({ ...prev, [nodeId]: result }));
+      } catch (e) {
+        console.error(e);
+      } finally {
+        setNeighborsLoading(null);
+      }
+    }
+  };
 
   // 처리 중이면 폴링 (session을 dependency에서 제외하여 무한 재시작 방지)
   useEffect(() => {
@@ -116,7 +167,10 @@ export default function SessionDetail({ id, onBack }: Props) {
     { key: "wiki_context", label: "Wiki Context", icon: <FileText size={14} /> },
     { key: "wiki_proposal", label: "Wiki Proposal", icon: <FileText size={14} /> },
     { key: "refined_script", label: "Refined", icon: <FileText size={14} /> },
+    { key: "graph", label: "Graph", icon: <Network size={14} /> },
   ];
+
+  const isTabAvailable = (t: Tab) => (t === "graph" ? !!graph : !!getDoc(t));
 
   if (loading) {
     return (
@@ -173,7 +227,7 @@ export default function SessionDetail({ id, onBack }: Props) {
         <div className="bg-white border border-brand-200 rounded-3xl shadow-xl overflow-hidden">
           {/* Tabs */}
           <div className="flex border-b border-brand-200 overflow-x-auto scrollbar-hide">
-            {tabs.filter(t => getDoc(t.key)).map(t => (
+            {tabs.filter(t => isTabAvailable(t.key)).map(t => (
               <button
                 key={t.key}
                 onClick={() => setActiveTab(t.key)}
@@ -190,7 +244,59 @@ export default function SessionDetail({ id, onBack }: Props) {
 
           {/* Content */}
           <div className="p-8">
-            {activeDoc ? (
+            {activeTab === "graph" ? (
+              graph ? (
+                <div className="space-y-8 max-h-[600px] overflow-y-auto">
+                  {Object.entries(graph.nodes).map(([type, nodes]) => (
+                    <div key={type}>
+                      <h4 className="text-xs font-black uppercase tracking-[0.2em] text-brand-400 mb-3">
+                        {GRAPH_TYPE_LABELS[type] || type} ({nodes.length})
+                      </h4>
+                      <div className="flex flex-wrap gap-2">
+                        {nodes.map(node => (
+                          <div key={node.id} className="flex flex-col">
+                            <button
+                              onClick={() => handleToggleNeighbors(node.id)}
+                              className={`px-3 py-1.5 rounded-xl text-sm font-medium transition-all border ${
+                                expandedNodeId === node.id
+                                  ? "bg-brand-900 text-white border-brand-900"
+                                  : "bg-brand-50 text-brand-700 border-brand-200 hover:bg-brand-100"
+                              }`}
+                            >
+                              {node.label}
+                            </button>
+                            {expandedNodeId === node.id && (
+                              <div className="mt-2 mb-1 px-4 py-3 bg-zinc-50 rounded-xl border border-zinc-200 text-sm max-w-sm">
+                                {neighborsLoading === node.id ? (
+                                  <div className="flex items-center gap-2 text-brand-400">
+                                    <Loader2 size={14} className="animate-spin" /> Loading...
+                                  </div>
+                                ) : neighborsCache[node.id]?.neighbors.length ? (
+                                  <ul className="space-y-1">
+                                    {neighborsCache[node.id].neighbors.map(n => (
+                                      <li key={n.id} className="text-brand-700">
+                                        <span className="text-brand-400">{GRAPH_TYPE_LABELS[n.type] || n.type}:</span> {n.label}
+                                      </li>
+                                    ))}
+                                  </ul>
+                                ) : (
+                                  <span className="text-brand-400">No related nodes.</span>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="text-center py-16 text-brand-400">
+                  <Network size={32} className="mx-auto mb-4" />
+                  <p>No graph data available.</p>
+                </div>
+              )
+            ) : activeDoc ? (
               <>
                 <div className="flex justify-end gap-2 mb-6">
                   <button

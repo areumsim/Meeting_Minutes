@@ -804,8 +804,9 @@ class BrowserRealtimeSession:
                     )
                 except Exception:
                     _evidence_links = []
+                _publish_result: Dict[str, Any] = {}
                 if _minutes:
-                    mm.enrich_and_publish(
+                    _publish_result = mm.enrich_and_publish(
                         title=title or f"실시간 {session_dt}",
                         doc_type=doc_type, minutes_md=_minutes, llm=llm,
                         summary_md=_summary, actions_md=_actions_md,
@@ -814,8 +815,10 @@ class BrowserRealtimeSession:
                         notify=("email" if mm._c("realtime.email_on_finish", False) else None),
                         planned_match=_plan_match,
                         evidence=_evidence_links,
-                    )
+                    ) or {}
+                _source_note = _publish_result.get("obsidian_path") or ""
             except Exception as e:
+                _source_note = ""
                 print(f"[finalize] enrich/obsidian error: {e}")
 
             # Wiki Context / Proposal 산출물을 파일과 DB 양쪽에 남겨 웹에서 확인 가능하게 한다.
@@ -878,6 +881,9 @@ class BrowserRealtimeSession:
                 print(f"[finalize] Wiki artifact 저장 실패 (무시): {_wkae}")
 
             # Wiki Registry 갱신 (회의 타입만)
+            _rt_decisions = None
+            _rt_title = title or f"실시간 {session_dt}"
+            _rt_actions = locals().get("actions")
             if doc_type == "meeting":
                 try:
                     from meeting_minutes_app.wiki_core.wiki_knowledge import (
@@ -885,19 +891,32 @@ class BrowserRealtimeSession:
                         update_decision_registry_from_minutes,
                         extract_decisions_from_minutes,
                     )
-                    _rt_title = title or f"실시간 {session_dt}"
-                    _rt_actions = locals().get("actions")
                     _rt_minutes = locals().get("minutes") or ""
                     if _rt_actions:
                         update_action_registry_from_actions(
-                            _rt_actions, source_meeting=_rt_title, source_note="")
+                            _rt_actions, source_meeting=_rt_title, source_note=_source_note)
                     if _rt_minutes:
                         _rt_decisions = extract_decisions_from_minutes(_rt_minutes)
                         if _rt_decisions:
                             update_decision_registry_from_minutes(
-                                _rt_decisions, source_meeting=_rt_title, source_note="")
+                                _rt_decisions, source_meeting=_rt_title, source_note=_source_note)
                 except Exception as _wke:
                     print(f"[finalize] Wiki Registry 갱신 실패 (무시): {_wke}")
+
+                # Wiki Knowledge Graph 동기화 (registry 실패와 별개 로그로 관리)
+                try:
+                    from meeting_minutes_app.wiki_core import graph_sync
+                    graph_sync.sync_session_graph(
+                        session_id=self.session_id,
+                        title=_rt_title,
+                        actions_json=_rt_actions,
+                        decisions=_rt_decisions,
+                        related_note_titles=related_note_titles,
+                        evidence=(_context_flags or {}).get("evidence", []),
+                        source_note=_source_note,
+                    )
+                except Exception as _gse:
+                    print(f"[finalize] Graph sync 실패 (무시): {_gse}")
 
             duration = self.segments[-1]["end"] - self.segments[0]["start"] if self.segments else 0
             db.update_session_status(

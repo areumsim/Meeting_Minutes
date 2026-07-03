@@ -45,6 +45,33 @@ export interface Profile {
   llm: string;
 }
 
+export interface GraphNode {
+  id: string;
+  type: string;
+  label: string;
+  attributes: Record<string, any>;
+}
+
+export interface GraphEdge {
+  id: string;
+  from_node_id: string;
+  to_node_id: string;
+  relation_type: string;
+}
+
+export interface SessionGraph {
+  nodes: Record<string, GraphNode[]>;
+  edges: GraphEdge[];
+  node_count: number;
+  edge_count: number;
+}
+
+export interface GraphNeighbors {
+  node: GraphNode | null;
+  edges: GraphEdge[];
+  neighbors: GraphNode[];
+}
+
 export interface RealtimeSegment {
   text: string;
   translatedText?: string;

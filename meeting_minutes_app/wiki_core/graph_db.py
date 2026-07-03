@@ -213,6 +213,16 @@ def get_node(node_id: str, *, db_path: Optional[Path] = None) -> Optional[Dict[s
     return _row_to_node(row) if row else None
 
 
+def get_node_by_key(type: str, canonical_key: str, *, db_path: Optional[Path] = None) -> Optional[Dict[str, Any]]:
+    """(type, canonical_key) 정확 일치 조회 — upsert_node()가 쓰는 것과 동일한 조회.
+    호출부는 graph_sync.resolve_canonical_key(type, label)로 키를 계산해서 넘긴다."""
+    with _conn(db_path) as c:
+        row = c.execute(
+            "SELECT * FROM nodes WHERE type = ? AND canonical_key = ?", (type, canonical_key)
+        ).fetchone()
+    return _row_to_node(row) if row else None
+
+
 def list_nodes(
     type: Optional[str] = None,
     q: Optional[str] = None,

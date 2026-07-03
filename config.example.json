@@ -238,7 +238,9 @@
     "embedding_min_cosine": 0.25,
     "embedding_max_chars": 4000,
     "_graph_comment": "Wiki Knowledge Graph — registry/vault/세션 산출물을 노드·엣지로 파생 저장(data/wiki_graph.db). 읽기 전용 API + 백필 스크립트만 사용, Obsidian/registry 원본은 건드리지 않음. 실험 기능이 아니라 이미 있는 데이터의 파생 뷰이므로 기본값 true.",
-    "graph_enabled": true
+    "graph_enabled": true,
+    "_graph_retrieval_expand_comment": "회의록 생성 전 vault 검색으로 찾은 관련 노트를 그래프로 1-hop 확장해 연결된 인물/조직/주제 노트를 추가로 주입. 이미 잘 동작하는 TF-IDF/RRF 검색 결과에 얹는 실험적 추가 단계라 기본값 false — 그래프 백필(scripts/graph_backfill.py)을 먼저 실행한 뒤 켜세요.",
+    "graph_retrieval_expand_enabled": false
   },
 
   "supermemory": {

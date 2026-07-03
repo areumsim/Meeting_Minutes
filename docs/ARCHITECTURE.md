@@ -762,6 +762,14 @@ person 노드의 흔한 직함/존칭 접미사 제거("홍길동 팀장" vs "�
 목표 질의(지난 회의 이후 바뀐 결정사항, 프로젝트별 미완료 액션, 특정 업체가 언급된 모든 회의)는
 `get_neighbors()`/`find_path()`를 조합해 애플리케이션 레벨에서 구성한다.
 
+**검색 품질 연동 (`graph_expand_titles()`, 옵트인)**: `wiki_knowledge.graph_retrieval_expand_enabled`
+(기본 false)를 켜면 `meeting_workflow.build_generation_context_memo()`가 TF-IDF/RRF로 찾은 관련
+노트를 그래프로 1-hop 확장해 연결된 person/organization/topic 라벨을 추가로 끌어온다 — 대부분
+People/Organizations/Topics 폴더의 실제 노트 제목과 일치하므로 `build_related_notes_memo()`가
+그대로 본문을 찾아 주입한다. 그래프 DB가 비어 있거나(백필 전) 조회 실패해도 예외를 삼키고 빈
+목록을 반환하므로 기존 TF-IDF/RRF 파이프라인 동작에는 영향이 없다. 켜기 전에
+`python scripts/graph_backfill.py`로 그래프를 먼저 채워야 실제로 확장될 노트가 있다.
+
 ---
 
 ## 평가 자동화

@@ -128,6 +128,47 @@ def _keyword_vault_search(
     return [t for t, _ in sorted(hits.items(), key=lambda x: -x[1])[:limit]]
 
 
+def graph_expand_titles(titles: List[str], hop: int = 1, max_extra: int = 5) -> List[str]:
+    """관련 노트 제목 목록을 Wiki Knowledge Graph로 1-hop 확장한다.
+
+    각 제목을 그래프의 `note` 노드로 조회하고, 연결된 person/organization/topic 노드의
+    라벨을 추가로 반환한다(대부분 People/Organizations/Topics 폴더의 실제 노트 제목과
+    일치하므로, build_related_notes_memo()가 그대로 본문을 찾아 주입할 수 있다 — 일치하는
+    노트가 없는 라벨은 build_related_notes_memo()가 이미 조용히 건너뛴다).
+
+    옵트인 기능 — `wiki_knowledge.graph_retrieval_expand_enabled`(기본 false)로 게이트한다.
+    그래프 DB가 없거나(아직 백필 전) 조회 중 오류가 나도 원본 titles 처리에 전혀 영향을
+    주지 않는다(항상 새 목록만 반환하고 실패 시 빈 리스트).
+    """
+    if not _c("wiki_knowledge.graph_retrieval_expand_enabled", False) or not titles:
+        return []
+    try:
+        from meeting_minutes_app.wiki_core import graph_db, graph_sync
+
+        seen = {norm_title(t) for t in titles}
+        extra: List[str] = []
+        for title in titles:
+            key = graph_sync.resolve_canonical_key("note", title)
+            node = graph_db.get_node_by_key("note", key)
+            if not node:
+                continue
+            neighbors = graph_db.get_neighbors(node["id"], depth=hop).get("neighbors", [])
+            for neighbor in neighbors:
+                if neighbor.get("type") not in ("person", "organization", "topic"):
+                    continue
+                label = str(neighbor.get("label", "")).strip()
+                nn = norm_title(label)
+                if not label or nn in seen:
+                    continue
+                seen.add(nn)
+                extra.append(label)
+                if len(extra) >= max_extra:
+                    return extra
+        return extra
+    except Exception:
+        return []
+
+
 def build_generation_context_memo(
     *,
     llm=None,
@@ -179,6 +220,18 @@ def build_generation_context_memo(
             related_titles = related_titles + extra_titles
             evidence = evidence + [{"note": t, "heading": None} for t in extra_titles]
 
+    # 3차: 그래프 기반 확장 (옵트인, 기본 off) — 지금까지 모은 관련 노트를 그래프로
+    # 1-hop 확장해 연결된 인물/조직/주제 노트를 추가로 끌어온다. 실패해도 위 결과에 영향 없음.
+    graph_memo = ""
+    graph_titles = graph_expand_titles(related_titles)
+    if graph_titles:
+        graph_memo = build_related_notes_memo(
+            indexer, obs, graph_titles,
+            max_chars_per_note=int(_c("wiki.context_max_chars", 2000) or 2000),
+        )
+        related_titles = related_titles + graph_titles
+        evidence = evidence + [{"note": t, "heading": None} for t in graph_titles]
+
     # Registry 컨텍스트: 이전 결정사항/미완료 액션을 생성 프롬프트에 주입
     registry_memo = ""
     try:
@@ -200,7 +253,7 @@ def build_generation_context_memo(
         registry_memo = ""
 
     web_memo = build_online_research_memo(llm, title=title, topic=topic) if include_web else ""
-    merged = merge_memo_parts(base_memo, wiki_memo, extra_memo, registry_memo, web_memo)
+    merged = merge_memo_parts(base_memo, wiki_memo, extra_memo, graph_memo, registry_memo, web_memo)
 
     _max_chars = int(_c("wiki_knowledge.max_context_chars", 12000) or 12000)
     if merged and len(merged) > _max_chars:
@@ -208,6 +261,7 @@ def build_generation_context_memo(
 
     return merged, related_titles, {
         "wiki": bool(wiki_memo or extra_memo),
+        "graph": bool(graph_memo),
         "registry": bool(registry_memo),
         "web": bool(web_memo),
         "evidence": evidence,

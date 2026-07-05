@@ -10,7 +10,7 @@ import re
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from pathlib import Path
-from meeting_minutes_app.common.date_utils import iso_to_yymmdd, parse_iso_date_from_text
+from meeting_minutes_app.meeting_pipeline.date_utils import iso_to_yymmdd, parse_iso_date_from_text
 from meeting_minutes_app.common.notifier import Notifier
 from meeting_minutes_app.wiki_core.obsidian import safe_filename
 

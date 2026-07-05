@@ -64,9 +64,10 @@ def _build_args(
 
 
 def _run_batch_processing(session_id: str, file_path: str, args: argparse.Namespace, title: str):
-    """백그라운드에서 meeting_minutes.process_single() 실행."""
+    """백그라운드에서 pipeline.process_single() 실행."""
     try:
         from meeting_minutes_app.meeting_pipeline import meeting_minutes as mm
+        from meeting_minutes_app.meeting_pipeline import pipeline
 
         if not args.model:
             args.model = mm.DEFAULT_STT_MODEL
@@ -82,7 +83,7 @@ def _run_batch_processing(session_id: str, file_path: str, args: argparse.Namesp
         db.update_session_status(session_id, "processing", output_dir=output_dir)
 
         with tempfile.TemporaryDirectory() as work_dir:
-            mm.process_single(
+            pipeline.process_single(
                 input_path=file_path,
                 args=args,
                 llm=llm,

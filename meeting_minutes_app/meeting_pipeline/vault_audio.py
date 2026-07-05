@@ -131,12 +131,14 @@ def transcribe_and_minutes(audio_path: str, doc_type: str = "meeting",
     memo: generate_minutes에 전달할 추가 컨텍스트 (web_research 결과 등).
     """
     from meeting_minutes_app.meeting_pipeline import meeting_minutes as mm
+    from meeting_minutes_app.meeting_pipeline import stt
+    from meeting_minutes_app.meeting_pipeline import minutes_generation as mg
     if llm is None:
         llm = mm.LLMClient(preferred=mm._c("models.llm", "gpt") or "gpt")
     work = tempfile.mkdtemp(prefix="vault_audio_")
     try:
-        audio2 = mm.prepare_audio(audio_path, work)
-        segments = mm.run_stt(audio2, model=mm.DEFAULT_STT_MODEL,
+        audio2 = stt.prepare_audio(audio_path, work)
+        segments = stt.run_stt(audio2, model=mm.DEFAULT_STT_MODEL,
                               language=mm._c("realtime.language", None),
                               speaker_names=known_names, work_dir=work)
         if not segments:
@@ -145,21 +147,21 @@ def transcribe_and_minutes(audio_path: str, doc_type: str = "meeting",
         try:
             if any(re.match(r'[Ss]peaker[\s_]?[A-Za-z0-9]', s.get("speaker", ""))
                    for s in segments):
-                inferred = mm.infer_speaker_names(segments, llm, known_names=known_names)
+                inferred = mg.infer_speaker_names(segments, llm, known_names=known_names)
                 for seg in segments:
                     if seg.get("speaker") in (inferred or {}):
                         seg["speaker"] = inferred[seg["speaker"]]
         except Exception:
             pass
-        minutes = mm.generate_minutes(segments, llm, doc_type, memo or None, None,
+        minutes = mg.generate_minutes(segments, llm, doc_type, memo or None, None,
                                       topic=topic, session_dt=session_dt, title=title)
-        summary = mm.generate_summary(minutes, llm, doc_type, topic=topic,
+        summary = mg.generate_summary(minutes, llm, doc_type, topic=topic,
                                       session_dt=session_dt)
         actions_md = ""
         try:
-            aj = mm.extract_action_items(minutes, llm, doc_type)
+            aj = mg.extract_action_items(minutes, llm, doc_type)
             if aj:
-                actions_md = mm.format_actions_md(aj)
+                actions_md = mg.format_actions_md(aj)
         except Exception:
             pass
         speakers = sorted({s.get("speaker", "") for s in segments if s.get("speaker")})
@@ -244,7 +246,7 @@ def _send_email_summary(title: str, summary: str, actions_md: str = "",
 def process_vault(vault_root: str, notes_subdir: str = "00_Meetings",
                   only_audio: str = "", dry_run: bool = False,
                   notify: str = "") -> int:
-    from meeting_minutes_app.meeting_pipeline import meeting_minutes as mm
+    from meeting_minutes_app.meeting_pipeline import publish
     audios = [only_audio] if only_audio else find_audio_files(vault_root)
     done = 0
     for ap in audios:
@@ -259,7 +261,7 @@ def process_vault(vault_root: str, notes_subdir: str = "00_Meetings",
         if dry_run:
             done += 1
             continue
-        known = mm._clean_attendee_names(_as_str_list(meta.get("attendees")))
+        known = publish._clean_attendee_names(_as_str_list(meta.get("attendees")))
         sdt = f"{meta.get('date','')} {meta.get('time','')}".strip()
         minutes, summary, actions_md, speakers = transcribe_and_minutes(
             ap, doc_type=(meta.get("type") or "meeting"),

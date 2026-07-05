@@ -59,7 +59,7 @@ def _extract_date_from_path(audio_path: str) -> str:
     찾지 못하면 오늘 날짜를 반환한다.
     """
     try:
-        from meeting_minutes_app.common.date_utils import parse_iso_date_from_text
+        from meeting_minutes_app.meeting_pipeline.date_utils import parse_iso_date_from_text
         return parse_iso_date_from_text(audio_path, default_today=True)
     except Exception:
         return datetime.now().strftime("%Y-%m-%d")
@@ -254,10 +254,12 @@ class IngestionPipeline:
             self._ensure_llm()
 
             from meeting_minutes_app.meeting_pipeline import meeting_minutes as mm
+            from meeting_minutes_app.meeting_pipeline import stt
+            from meeting_minutes_app.meeting_pipeline import minutes_generation as mg
             work_dir = tempfile.mkdtemp(prefix="ingest_audio_")
             try:
-                audio2 = mm.prepare_audio(audio_path, work_dir)
-                segments = mm.run_stt(
+                audio2 = stt.prepare_audio(audio_path, work_dir)
+                segments = stt.run_stt(
                     audio2,
                     model=mm.DEFAULT_STT_MODEL,
                     language=mm._c("realtime.language", None),
@@ -298,14 +300,14 @@ class IngestionPipeline:
             try:
                 if any(re.match(r'[Ss]peaker[\s_]?[A-Za-z0-9]', s.get("speaker", ""))
                        for s in segments):
-                    inferred = mm.infer_speaker_names(segments, self._llm, known_names=None)
+                    inferred = mg.infer_speaker_names(segments, self._llm, known_names=None)
                     for seg in segments:
                         if seg.get("speaker") in (inferred or {}):
                             seg["speaker"] = inferred[seg["speaker"]]
             except Exception:
                 print(f"[pipeline] ⚠ 화자 이름 추론 실패: {traceback.format_exc()}")
 
-            minutes = mm.generate_minutes(
+            minutes = mg.generate_minutes(
                 segments,
                 self._llm,
                 doc_type,
@@ -315,7 +317,7 @@ class IngestionPipeline:
                 session_dt=session_dt,
                 title=title,
             )
-            summary = mm.generate_summary(
+            summary = mg.generate_summary(
                 minutes,
                 self._llm,
                 doc_type,
@@ -325,9 +327,9 @@ class IngestionPipeline:
             aj: Optional[str] = None
             actions_md = ""
             try:
-                aj = mm.extract_action_items(minutes, self._llm, doc_type)
+                aj = mg.extract_action_items(minutes, self._llm, doc_type)
                 if aj:
-                    actions_md = mm.format_actions_md(aj)
+                    actions_md = mg.format_actions_md(aj)
             except Exception:
                 print(f"[pipeline] ⚠ 액션 아이템 추출 실패: {traceback.format_exc()}")
             speakers = sorted({s.get("speaker", "") for s in segments if s.get("speaker")})
@@ -674,7 +676,7 @@ def _expected_recording_note_path(title: str, session_dt: str = "") -> str:
     """ObsidianClient.write_recording_note()가 사용할 기본 상대 경로를 미리 계산한다."""
     try:
         from meeting_minutes_app.wiki_core.obsidian import _expand_path_template, safe_filename
-        from meeting_minutes_app.common.date_utils import iso_to_yymmdd
+        from meeting_minutes_app.meeting_pipeline.date_utils import iso_to_yymmdd
     except Exception:
         safe_filename = lambda s: re.sub(r'[\\/:*?"<>|]', "_", s).strip()[:80]  # noqa: E731
         _expand_path_template = lambda path, date_str="": str(path or "").strip("/")  # noqa: E731

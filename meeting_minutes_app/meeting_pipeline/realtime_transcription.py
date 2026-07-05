@@ -82,9 +82,13 @@ def _c(key: str, default=None):
     return _cfg_mod.get(key, default) if _cfg_ok else default
 
 
+from meeting_minutes_app.common.text_filters import is_cjk_hallucination as _is_cjk_hallucination
+from meeting_minutes_app.common.realtime_ws_session import build_ws_session_config
+
+
 def _strip_existing_fact_check(md: str) -> str:
     try:
-        return _mm._strip_fact_verification_sections(md)  # type: ignore[attr-defined]
+        return _publish._strip_fact_verification_sections(md)  # type: ignore[attr-defined]
     except Exception:
         import re as _re
         return _re.sub(r"\n+## 사실 검증\n.*?(?=\n## |\Z)", "", md or "", flags=_re.DOTALL).rstrip()
@@ -213,13 +217,18 @@ _this_dir = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, _this_dir)
 try:
     from meeting_minutes_app.meeting_pipeline.meeting_minutes import (
-        OPENAI_API_KEY, SSL_VERIFY,
-        make_openai_client, get_api_key,
-        LLMClient, generate_minutes, generate_summary, refine_script,
-        save, TYPE_LABELS,
-        build_script_md, infer_speaker_names, _parse_diarized,
+        OPENAI_API_KEY, SSL_VERIFY, get_api_key, LLMClient, TYPE_LABELS,
     )
+    from meeting_minutes_app.common.llm_client import make_openai_client
+    from meeting_minutes_app.meeting_pipeline.minutes_generation import (
+        generate_minutes, generate_summary, refine_script,
+        save, infer_speaker_names,
+    )
+    from meeting_minutes_app.meeting_pipeline.script_formatting import build_script_md
+    from meeting_minutes_app.meeting_pipeline.stt import _parse_diarized
     from meeting_minutes_app.meeting_pipeline import meeting_minutes as _mm
+    from meeting_minutes_app.meeting_pipeline import minutes_generation as _mg
+    from meeting_minutes_app.meeting_pipeline import publish as _publish
 except (ImportError, Exception) as e:
     import traceback as _tb
     print(f"❌ meeting_minutes.py 임포트 실패: {e}")
@@ -267,28 +276,6 @@ C_RED    = "\033[31m"
 C_GRAY   = "\033[90m"
 C_RESET  = "\033[0m"
 C_BOLD   = "\033[1m"
-
-# ── CJK 환각 필터 (중국어·일본어 텍스트 제거) ──────────
-import re as _re
-# 한글·영문·숫자·기본 문장부호·공백 이외의 CJK 문자 비율이 높으면 환각으로 판정
-_CJK_RANGES = (
-    r'\u3000-\u303F'   # CJK 기호
-    r'\u3040-\u309F'   # 히라가나
-    r'\u30A0-\u30FF'   # 가타카나
-    r'\u4E00-\u9FFF'   # CJK 통합 한자
-    r'\uF900-\uFAFF'   # CJK 호환 한자
-)
-_RE_CJK = _re.compile(f'[{_CJK_RANGES}]')
-_RE_ALLOWED = _re.compile(r'[가-힣a-zA-Z0-9\s.,!?\'\"()\-:;/&@#%+*=\[\]{}~`]')
-
-
-def _is_cjk_hallucination(text: str, threshold: float = 0.3) -> bool:
-    """텍스트 내 CJK(중국어/일본어) 문자 비율이 threshold 이상이면 True."""
-    if not text or len(text.strip()) < 2:
-        return False
-    cjk_count = len(_RE_CJK.findall(text))
-    return (cjk_count / len(text)) >= threshold
-
 
 # 상단 고정 헤더 줄 수 (row 1: 상태, row 2: 구분선)
 _HEADER_LINES = 2
@@ -718,7 +705,7 @@ def cmd_recover(log_path: str, output_dir: str, llm_preferred: str,
     _plan_match = None
     _gen_memo = memo
     try:
-        _plan_match, _gen_memo = _mm.plan_context_memo(topic or stem, session_dt, memo)
+        _plan_match, _gen_memo = _publish.plan_context_memo(topic or stem, session_dt, memo)
         if _plan_match:
             print(f"  계획 회의 매칭: {_plan_match.get('path')} (사유: {_plan_match.get('reason','')})")
     except Exception as _pe:
@@ -744,10 +731,10 @@ def cmd_recover(log_path: str, output_dir: str, llm_preferred: str,
                                topic=topic, session_dt=session_dt)
     actions_json = ""
     try:
-        actions_json = _mm.extract_action_items(minutes, llm, doc_type) if doc_type == "meeting" else ""
+        actions_json = _mg.extract_action_items(minutes, llm, doc_type) if doc_type == "meeting" else ""
         if actions_json:
             save(actions_json, os.path.join(output_dir, f"{stem}_actions.json"), "액션 아이템(JSON)")
-            save(_mm.format_actions_md(actions_json),
+            save(_mg.format_actions_md(actions_json),
                  os.path.join(output_dir, f"{stem}_actions.md"), "액션 아이템(마크다운)")
     except Exception:
         actions_json = ""
@@ -778,14 +765,14 @@ def cmd_recover(log_path: str, output_dir: str, llm_preferred: str,
 
     # [공용] Obsidian 발행 + 계획 매칭/병합 확인 (batch/web 와 동일)
     try:
-        _ra_md = _mm.format_actions_md(actions_json) if actions_json else ""
+        _ra_md = _mg.format_actions_md(actions_json) if actions_json else ""
         _evidence_links = []
         try:
             from meeting_minutes_app.meeting_pipeline import meeting_workflow as _mw_pub
             _evidence_links = _mw_pub.evidence_to_wikilinks((_context_flags or {}).get("evidence", []))
         except Exception:
             _evidence_links = []
-        _mm.enrich_and_publish(
+        _publish.enrich_and_publish(
             title=(topic or f"복구 {session_dt}"),
             doc_type=doc_type, minutes_md=minutes, llm=llm,
             summary_md=summary, actions_md=_ra_md,
@@ -1794,31 +1781,7 @@ class RealtimeSession:
         try:
             with conn_mgr as conn:
                 # 전사 세션 설정
-                session_cfg: Dict[str, Any] = {
-                    "input_audio_format": "pcm16",
-                    "input_audio_transcription": {
-                        "model": ws_model,
-                    },
-                    "turn_detection": {
-                        "type": _c("realtime.ws_vad_type", "server_vad") or "server_vad",
-                    },
-                }
-
-                # 언어 설정
-                if self.language and self.language != "auto":
-                    session_cfg["input_audio_transcription"]["language"] = self.language
-
-                # VAD eagerness (semantic_vad 전용)
-                vad_type = session_cfg["turn_detection"]["type"]
-                if vad_type == "semantic_vad":
-                    session_cfg["turn_detection"]["eagerness"] = (
-                        _c("realtime.ws_vad_eagerness", "medium") or "medium"
-                    )
-
-                # 노이즈 리덕션
-                nr_type = _c("realtime.ws_noise_reduction", "near_field")
-                if nr_type:
-                    session_cfg["input_audio_noise_reduction"] = {"type": nr_type}
+                session_cfg = build_ws_session_config(ws_model, self.language, _c)
 
                 conn.transcription_session.update(session=session_cfg)
 
@@ -1988,10 +1951,10 @@ class RealtimeSession:
             session_dt = ""
         _plan_match = None
         try:
-            _plan_match = _mm._lookup_plan(self.topic or f"realtime_{self.logger.session_ts}", session_dt)
+            _plan_match = _publish._lookup_plan(self.topic or f"realtime_{self.logger.session_ts}", session_dt)
         except Exception:
             _plan_match = None
-        _known = (_mm._clean_attendee_names((_plan_match.get("meta") or {}).get("attendees"))
+        _known = (_publish._clean_attendee_names((_plan_match.get("meta") or {}).get("attendees"))
                   if _plan_match else None)
         if _known:
             print(f"  화자 추론 힌트(참석자): {', '.join(_known)}")
@@ -2029,7 +1992,7 @@ class RealtimeSession:
         # [공용] 사전 자료 주입 (계획 매칭은 화자추론 단계에서 1회 탐색해 재사용)
         _gen_memo = self.memo
         try:
-            _, _gen_memo = _mm.plan_context_memo(self.topic or stem, session_dt, self.memo, match=_plan_match)
+            _, _gen_memo = _publish.plan_context_memo(self.topic or stem, session_dt, self.memo, match=_plan_match)
             if _plan_match:
                 print(f"  계획 회의 매칭: {_plan_match.get('path')} (사유: {_plan_match.get('reason','')})")
         except Exception as _pe:
@@ -2072,9 +2035,9 @@ class RealtimeSession:
             actions_json = ""
             actions_md = ""
             try:
-                actions_json = _mm.extract_action_items(minutes, self.llm, self.doc_type) if self.doc_type == "meeting" else ""
+                actions_json = _mg.extract_action_items(minutes, self.llm, self.doc_type) if self.doc_type == "meeting" else ""
                 if actions_json:
-                    actions_md = _mm.format_actions_md(actions_json)
+                    actions_md = _mg.format_actions_md(actions_json)
                     save(actions_json, os.path.join(self.output_dir, f"{stem}_actions.json"), "액션 아이템(JSON)")
                     save(actions_md, os.path.join(self.output_dir, f"{stem}_actions.md"), "액션 아이템(마크다운)")
             except Exception:
@@ -2118,7 +2081,7 @@ class RealtimeSession:
                     _evidence_links = _mw_pub.evidence_to_wikilinks((_context_flags or {}).get("evidence", []))
                 except Exception:
                     _evidence_links = []
-                _pub = _mm.enrich_and_publish(
+                _pub = _publish.enrich_and_publish(
                     title=(self.topic or f"실시간 {session_dt}"),
                     doc_type=self.doc_type, minutes_md=minutes, llm=self.llm,
                     summary_md=summary_text, actions_md=actions_md,

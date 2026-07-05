@@ -28,18 +28,8 @@ from web.backend.paths import AR_ROOT  # noqa: F401 — ensures sys.path setup
 
 router = APIRouter(tags=["realtime"])
 
-# CJK 환각 필터
-_CJK_RANGES = (
-    r'\u3000-\u303F\u3040-\u309F\u30A0-\u30FF'
-    r'\u4E00-\u9FFF\uF900-\uFAFF'
-)
-_RE_CJK = re.compile(f'[{_CJK_RANGES}]')
-
-
-def _is_cjk_hallucination(text: str, threshold: float = 0.3) -> bool:
-    if not text or len(text.strip()) < 2:
-        return False
-    return (len(_RE_CJK.findall(text)) / len(text)) >= threshold
+from meeting_minutes_app.common.text_filters import is_cjk_hallucination as _is_cjk_hallucination
+from meeting_minutes_app.common.realtime_ws_session import build_ws_session_config
 
 
 class BrowserRealtimeSession:
@@ -178,23 +168,7 @@ class BrowserRealtimeSession:
         try:
             with conn_mgr as conn:
                 # 전사 세션 설정
-                session_cfg: Dict[str, Any] = {
-                    "input_audio_format": "pcm16",
-                    "input_audio_transcription": {"model": stt_model},
-                    "turn_detection": {
-                        "type": cfg.get("realtime.ws_vad_type", "server_vad") or "server_vad",
-                    },
-                }
-                if language and language != "auto":
-                    session_cfg["input_audio_transcription"]["language"] = language
-                vad_type = session_cfg["turn_detection"]["type"]
-                if vad_type == "semantic_vad":
-                    session_cfg["turn_detection"]["eagerness"] = (
-                        cfg.get("realtime.ws_vad_eagerness", "medium") or "medium"
-                    )
-                nr_type = cfg.get("realtime.ws_noise_reduction", "near_field")
-                if nr_type:
-                    session_cfg["input_audio_noise_reduction"] = {"type": nr_type}
+                session_cfg = build_ws_session_config(stt_model, language, cfg.get)
 
                 conn.transcription_session.update(session=session_cfg)
 
@@ -624,6 +598,9 @@ class BrowserRealtimeSession:
 
         try:
             from meeting_minutes_app.meeting_pipeline import meeting_minutes as mm
+            from meeting_minutes_app.meeting_pipeline import minutes_generation as _mg
+            from meeting_minutes_app.meeting_pipeline import publish as _pub
+            from meeting_minutes_app.meeting_pipeline import script_formatting as _sf
 
             # 회의록 생성 LLM은 config.json(models.llm)을 따른다 (gpt 하드코딩 제거)
             llm = mm.LLMClient(preferred=mm._c("models.llm", "gpt") or "gpt")
@@ -631,7 +608,7 @@ class BrowserRealtimeSession:
             # 교정 스크립트
             refined_text = None
             try:
-                refined_text = mm.refine_script(
+                refined_text = _mg.refine_script(
                     self.segments, llm, doc_type, topic=topic
                 )
                 if refined_text:
@@ -646,7 +623,7 @@ class BrowserRealtimeSession:
             _plan_match = None
             _gen_memo = None
             try:
-                _plan_match, _gen_memo = mm.plan_context_memo(title or topic, session_dt, None)
+                _plan_match, _gen_memo = _pub.plan_context_memo(title or topic, session_dt, None)
             except Exception as _pe:
                 print(f"[finalize] plan-context skip: {_pe}")
 
@@ -698,7 +675,7 @@ class BrowserRealtimeSession:
             # 회의록
             minutes = None
             try:
-                minutes = mm.generate_minutes(
+                minutes = _mg.generate_minutes(
                     refined_text if refined_text else self.segments,
                     llm, doc_type, topic=topic, session_dt=session_dt,
                     memo=_gen_memo,
@@ -710,7 +687,7 @@ class BrowserRealtimeSession:
 
             # 요약
             try:
-                summary = mm.generate_summary(
+                summary = _mg.generate_summary(
                     minutes if minutes else refined_text if refined_text else "",
                     llm, doc_type, topic=topic, session_dt=session_dt,
                 )
@@ -721,7 +698,7 @@ class BrowserRealtimeSession:
 
             # 스크립트
             try:
-                script = mm.build_script_md(self.segments)
+                script = _sf.build_script_md(self.segments)
                 if script:
                     db.upsert_document(self.session_id, "script", script)
             except Exception:
@@ -730,7 +707,7 @@ class BrowserRealtimeSession:
             # 액션 아이템 (회의 타입만)
             if doc_type == "meeting":
                 try:
-                    actions = mm.extract_action_items(
+                    actions = _mg.extract_action_items(
                         minutes if minutes else "",
                         llm,
                         doc_type=doc_type,
@@ -793,7 +770,7 @@ class BrowserRealtimeSession:
                     _aj = locals().get("actions")
                     if _aj:
                         try:
-                            _actions_md = mm.format_actions_md(_aj)
+                            _actions_md = _mg.format_actions_md(_aj)
                         except Exception:
                             pass
                 _evidence_links: List[str] = []
@@ -806,7 +783,7 @@ class BrowserRealtimeSession:
                     _evidence_links = []
                 _publish_result: Dict[str, Any] = {}
                 if _minutes:
-                    _publish_result = mm.enrich_and_publish(
+                    _publish_result = _pub.enrich_and_publish(
                         title=title or f"실시간 {session_dt}",
                         doc_type=doc_type, minutes_md=_minutes, llm=llm,
                         summary_md=_summary, actions_md=_actions_md,

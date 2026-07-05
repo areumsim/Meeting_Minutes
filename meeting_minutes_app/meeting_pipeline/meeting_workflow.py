@@ -407,7 +407,7 @@ def _extract_claims(
     )
     user = f"{topic_line}회의록:\n\n{minutes[:5000]}"
     try:
-        from meeting_minutes_app.common.json_utils import parse_json_loose
+        from meeting_minutes_app.meeting_pipeline.json_utils import parse_json_loose
         raw = (llm.chat(system, user, temp=0.1, max_tokens=1200) or "").strip()
         arr = parse_json_loose(raw, expect="list", default=[])
         return [x for x in arr if isinstance(x, dict) and x.get("claim")][:max_claims]
@@ -568,7 +568,7 @@ def _compare_claim_with_notes(
         f"Vault 노트:\n{notes_block}"
     )
     try:
-        from meeting_minutes_app.common.json_utils import parse_json_loose
+        from meeting_minutes_app.meeting_pipeline.json_utils import parse_json_loose
         raw = (llm.chat(system, user, temp=0.0, max_tokens=400) or "").strip()
         data = parse_json_loose(raw, expect="dict", default={})
         if isinstance(data, dict) and data.get("verdict") in ("match", "conflict", "unknown"):

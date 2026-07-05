@@ -13,7 +13,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from meeting_minutes_app.meeting_pipeline import meeting_minutes as mm  # noqa: E402
+from meeting_minutes_app.meeting_pipeline import stt as mm  # noqa: E402
 
 
 class _FakeResponse:

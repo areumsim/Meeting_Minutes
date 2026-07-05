@@ -269,7 +269,7 @@ def _build_query(name: str, label: str, topic: str) -> str:
 
 def _parse_json_object(raw: str) -> Dict[str, Any]:
     try:
-        from meeting_minutes_app.common.json_utils import parse_json_loose
+        from meeting_minutes_app.meeting_pipeline.json_utils import parse_json_loose
         return parse_json_loose(raw, expect="dict", default={}) or {}
     except ImportError:
         # json_utils 없을 때 최소 폴백

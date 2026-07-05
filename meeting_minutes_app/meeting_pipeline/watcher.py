@@ -11,6 +11,8 @@ watcher.py – 폴더 감시 자동 처리 (Watch Mode)
     python run_meeting.py legacy-watcher ./recordings --profile weekly
     python run_meeting.py legacy-watcher ./recordings --profile weekly --notify email
     python run_meeting.py legacy-watcher ./recordings --no-move
+
+(참고: 상시 다중 폴더 감시가 필요하면 audio_watcher.py / "watch" 명령을 사용하세요.)
 """
 
 from __future__ import annotations

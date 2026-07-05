@@ -6,7 +6,7 @@ LLM이 반환하는 JSON은 코드펜스, 앞뒤 설명 문장, trailing comma,
 파싱 성공률을 높인다 (외부 의존성 없음).
 
 사용:
-    from meeting_minutes_app.common.json_utils import parse_json_loose
+    from meeting_minutes_app.meeting_pipeline.json_utils import parse_json_loose
     items = parse_json_loose(raw, expect="list", default=[])
 
 복구 단계:

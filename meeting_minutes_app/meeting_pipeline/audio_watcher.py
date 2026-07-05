@@ -9,6 +9,9 @@ watchdog 라이브러리가 있으면 FS 이벤트 기반으로, 없으면 폴�
 단독 실행 (watch 데몬):
     python run_meeting.py audio-watcher --folders "D:\\Recordings" "C:\\Vault\\recordings"
     python run_meeting.py audio-watcher --reprocess "D:\\Recordings\\file.m4a"
+
+(참고: 파일별로 --type/--translate/--notify 등 세부 옵션이 필요하면
+ watcher.py / "legacy-watcher" 명령을 사용하세요.)
 """
 
 from __future__ import annotations

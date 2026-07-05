@@ -1,0 +1,68 @@
+{
+  "meeting_note_separate": {
+    "path": "00_Meetings/테스트프로젝트/260701 테스트 회의.md",
+    "calls": [
+      [
+        "00_Meetings/테스트프로젝트/260701 테스트 회의 - 전사.md",
+        "---\ntitle: \"테스트 회의 - 전사\"\ndate: \"2026-07-01\"\nsession_date: \"2026-07-01\"\ntype: \"transcript\"\nparent_note: \"00_Meetings/테스트프로젝트/260701 테스트 회의.md\"\ncreated: \"2026-07-01T10:30:00\"\nprocessed_at: \"2026-07-01T10:30:00\"\ntags:\n  - \"전사\"\n  - \"meeting\"\n---\n\n# 테스트 회의 - 전사\n\n## 전사 (Transcript)\n\n화자1: 안녕하세요\n화자2: 네 안녕하세요\n"
+      ],
+      [
+        "00_Meetings/테스트프로젝트/260701 테스트 회의.md",
+        "---\ntitle: \"테스트 회의\"\ndate: \"2026-07-01\"\nsession_date: \"2026-07-01\"\nsession_dt: \"2026-07-01 10:00\"\ntype: \"meeting\"\nproject: \"테스트프로젝트\"\ntopic: \"주제\"\nattendees:\n  - \"김철수\"\n  - \"이영희\"\ntags:\n  - \"회의록\"\n  - \"meeting\"\ncreated: \"2026-07-01T10:30:00\"\nprocessed_at: \"2026-07-01T10:30:00\"\nreview_status: \"pending\"\nconfidence: \"medium\"\nsource_type: \"generated\"\ntranscript_note: \"00_Meetings/테스트프로젝트/260701 테스트 회의 - 전사.md\"\n---\n\n# 테스트 회의\n\n## 요약\n\n요약 내용\n\n\n---\n\n본문 내용입니다.\n\n## 용어·배경\n\n- **용어**: 설명\n\n## 액션 아이템\n\n- [ ] 할 일\n\n## 참고 자료\n\n- [[관련노트1]]\n- [참고](https://example.com)\n"
+      ]
+    ]
+  },
+  "meeting_note_append": {
+    "path": "00_Meetings/테스트프로젝트/260703 테스트 회의2.md",
+    "calls": [
+      [
+        "00_Meetings/테스트프로젝트/260703 테스트 회의2.md",
+        "---\ntitle: \"테스트 회의2\"\ndate: \"2026-07-03\"\nsession_date: \"2026-07-03\"\ntype: \"seminar\"\nproject: \"테스트프로젝트\"\ntopic: \"주제2\"\ntags:\n  - \"회의록\"\n  - \"seminar\"\ncreated: \"2026-07-01T11:00:00\"\nprocessed_at: \"2026-07-01T11:00:00\"\nreview_status: \"pending\"\nconfidence: \"medium\"\nsource_type: \"generated\"\n---\n\n# 테스트 회의2\n\n본문2\n\n## 전사 (Transcript)\n\n전사 내용\n"
+      ]
+    ]
+  },
+  "recording_note_full": {
+    "path": "00_Meetings/테스트프로젝트/260702 녹음 테스트.md",
+    "calls": [
+      [
+        "00_Meetings/테스트프로젝트/260702 녹음 테스트 - 전사.md",
+        "---\ntitle: \"녹음 테스트 - 전사\"\ndate: \"2026-07-02\"\ntype: \"transcript\"\nparent_note: \"00_Meetings/테스트프로젝트/260702 녹음 테스트.md\"\nsource_audio: \"audio.mp3\"\ncreated: \"2026-07-02T14:30:00\"\ntags:\n  - \"전사\"\n  - \"meeting\"\n---\n\n# 녹음 테스트 - 전사\n\n## 전사 (Transcript)\n\n녹음 전사 내용\n"
+      ],
+      [
+        "00_Meetings/테스트프로젝트/260702 녹음 테스트.md",
+        "---\ntitle: \"녹음 테스트\"\ndate: \"2026-07-02\"\nsession_date: \"2026-07-02\"\nsession_dt: \"2026-07-02 14:00\"\ntype: \"meeting\"\nproject: \"테스트프로젝트\"\ntopic: \"녹음주제\"\nattendees:\n  - \"박민수\"\ntags:\n  - \"녹음처리\"\n  - \"meeting\"\nstatus: \"processed\"\nsource_audio: \"audio.mp3\"\ncreated: \"2026-07-02 14:00\"\nprocessed_at: \"2026-07-02T14:30:00\"\nreview_status: \"pending\"\nconfidence: \"medium\"\nsource_type: \"generated\"\nduration: \"2분 5초\"\n---\n\n# 녹음 테스트\n\n## 요약\n\n녹음 요약\n\n\n---\n\n## 핵심 포인트\n\n- 포인트1\n\n- 포인트2\n\n\n녹음 본문\n\n## 결정 사항\n\n- 결정1\n\n\n## 액션 아이템\n\n- [ ] 녹음 액션\n\n## 미해결 질문\n\n- 질문1\n\n\n## 중요 주장\n\n- 주장1\n\n\n## 용어·배경\n\n- **녹음용어**: 설명\n\n## 관련 노트\n\n- [[관련노트2]]\n\n\n## 원문 전사\n\n- [[00_Meetings/테스트프로젝트/260702 녹음 테스트 - 전사|전체 STT 전사]]\n"
+      ]
+    ]
+  },
+  "recording_note_minimal": {
+    "path": "00_Meetings/테스트프로젝트/260703 녹음 최소.md",
+    "calls": [
+      [
+        "00_Meetings/테스트프로젝트/260703 녹음 최소.md",
+        "---\ntitle: \"녹음 최소\"\ndate: \"2026-07-03\"\nsession_date: \"2026-07-03\"\ntype: \"meeting\"\nproject: \"테스트프로젝트\"\ntags:\n  - \"녹음처리\"\n  - \"meeting\"\nstatus: \"processed\"\ncreated: \"2026-07-03\"\nprocessed_at: \"2026-07-02T15:00:00\"\nreview_status: \"pending\"\nconfidence: \"medium\"\nsource_type: \"generated\"\n---\n\n# 녹음 최소\n\n최소 본문\n"
+      ]
+    ]
+  },
+  "update_planned_note": {
+    "path": "00_Meetings/공통/260701 계획회의.md",
+    "calls": [
+      [
+        "00_Meetings/테스트프로젝트/260701 계획 회의 - 전사.md",
+        "---\ntitle: \"계획 회의 - 전사\"\ndate: \"2026-07-01\"\nsession_date: \"2026-07-01\"\ntype: \"transcript\"\nparent_note: \"00_Meetings/공통/260701 계획회의.md\"\ncreated: \"2026-07-01T11:00:00\"\nprocessed_at: \"2026-07-01T11:00:00\"\ntags:\n  - \"전사\"\n  - \"meeting\"\n---\n\n# 계획 회의 - 전사\n\n## 전사 (Transcript)\n\n병합 전사\n"
+      ],
+      [
+        "00_Meetings/공통/260701 계획회의.md",
+        "---\ntitle: \"계획 회의\"\ndate: \"2026-07-01\"\nsession_date: \"2026-07-01\"\nsession_dt: \"2026-07-01 10:05\"\ntime: \"10:00\"\ntype: \"meeting\"\nproject: \"테스트프로젝트\"\ntopic: \"계획주제\"\nattendees:\n  - \"김철수\"\n  - \"이영희\"\nstatus: \"done\"\ntags:\n  - \"회의록\"\n  - \"meeting\"\ncreated: \"2026-06-30T09:00:00\"\nrecorded: \"2026-07-01T11:00:00\"\nprocessed_at: \"2026-07-01T11:00:00\"\ntranscript_note: \"00_Meetings/테스트프로젝트/260701 계획 회의 - 전사.md\"\n---\n\n# 계획 회의\n\n## 사전 조사\n\n- 조사 내용\n\n\n---\n\n## 회의 기록 (2026-07-03 12:00)\n\n### 한눈에 보는 요약\n\n병합 요약\n\n실제 본문\n\n### 용어·배경\n\n- **병합용어**: 설명\n\n### 액션 아이템\n\n- [ ] 병합 액션\n\n### 참고 자료\n\n- [[관련노트3]]\n"
+      ]
+    ]
+  },
+  "merge_recording_into_plan": {
+    "path": "plan.md",
+    "calls": [
+      [
+        "plan.md",
+        "---\nattendees:\n  - \"이영희\"\n  - \"김철수\"\nstatus: \"done\"\nrecorded: \"2026-07-03T12:00:00\"\nmerged_from: \"rec.md\"\n---\n\n계획 본문 내용\n\n\n---\n\n## 회의 기록 (2026-07-03 12:00)\n\n녹음 본문 내용\n"
+      ]
+    ]
+  }
+}

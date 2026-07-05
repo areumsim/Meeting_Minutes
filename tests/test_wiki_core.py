@@ -13,10 +13,10 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from meeting_minutes_app.common import json_utils as ju  # noqa: E402
+from meeting_minutes_app.meeting_pipeline import json_utils as ju  # noqa: E402
 from meeting_minutes_app.wiki_core import wiki_knowledge as wk  # noqa: E402
 from meeting_minutes_app.wiki_core import vault_indexer as vi  # noqa: E402
-from meeting_minutes_app.common import date_utils as du  # noqa: E402
+from meeting_minutes_app.meeting_pipeline import date_utils as du  # noqa: E402
 
 
 # ━━━━━━━━━━━━━━━━━━━━ json_utils ━━━━━━━━━━━━━━━━━━━━

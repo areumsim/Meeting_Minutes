@@ -32,6 +32,8 @@ try:
 except ImportError:
     sd = None  # type: ignore
 
+from meeting_minutes_app.common.text_filters import is_cjk_hallucination as _is_cjk_hallucination
+
 # ── 색상 코드 (realtime_transcription.py 와 동일) ──
 C_CYAN   = "\033[36m"
 C_YELLOW = "\033[33m"
@@ -43,20 +45,6 @@ C_RESET  = "\033[0m"
 # ── 상수 ──
 WS_SAMPLE_RATE = 24000   # Realtime API: 24kHz PCM16 mono 필수
 CHANNELS       = 1
-
-# ── CJK 환각 필터 ──
-import re as _re
-_CJK_RANGES = (
-    r'\u3000-\u303F\u3040-\u309F\u30A0-\u30FF'
-    r'\u4E00-\u9FFF\uF900-\uFAFF'
-)
-_RE_CJK = _re.compile(f'[{_CJK_RANGES}]')
-
-
-def _is_cjk_hallucination(text: str, threshold: float = 0.3) -> bool:
-    if not text or len(text.strip()) < 2:
-        return False
-    return (len(_RE_CJK.findall(text)) / len(text)) >= threshold
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

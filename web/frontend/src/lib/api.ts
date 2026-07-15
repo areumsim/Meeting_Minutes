@@ -109,6 +109,16 @@ export const testObsidianPath = async (): Promise<{ ok: boolean; message: string
   }
 };
 
+// 앱(서버) 종료 — 콘솔 창 없는 배포에서 웹으로 깔끔히 끄기.
+export const shutdownApp = async (): Promise<boolean> => {
+  try {
+    const res = await fetch("/api/shutdown", { method: "POST" });
+    return res.ok;
+  } catch {
+    return true; // 서버가 즉시 죽어 응답이 끊길 수 있음 → 성공으로 간주
+  }
+};
+
 // 볼트 인덱스 재빌드 — folder-only 위키 검색을 위해 .md 폴더를 다시 색인.
 export const reindexVault = async (): Promise<{ ok: boolean; message: string }> => {
   try {

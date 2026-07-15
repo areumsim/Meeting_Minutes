@@ -5,7 +5,7 @@ import {
 import { motion, AnimatePresence } from "motion/react";
 import {
   getConfig, updateConfig, getConfigSchema, isPackagedMode,
-  testOpenAIKey, testAnthropicKey, testObsidianPath, reindexVault,
+  testOpenAIKey, testAnthropicKey, testObsidianPath, reindexVault, shutdownApp,
   getProfiles, createProfile, deleteProfile, clearSessions,
   getApiKey, setApiKey, getAnthropicKey, setAnthropicKey,
 } from "../lib/api";
@@ -22,6 +22,7 @@ interface Field {
   sensitive?: boolean;
   mirror?: [string, string][];
   placeholder?: string;
+  scalar?: boolean;  // 최상위 스칼라 키(예: output_dir) — section 자체가 값
 }
 interface Group {
   id: string;
@@ -51,7 +52,7 @@ const CLIENT_FALLBACK_SCHEMA: Group[] = [
   },
 ];
 
-const pathOf = (f: Field) => `${f.section}.${f.key}`;
+const pathOf = (f: Field) => (f.key ? `${f.section}.${f.key}` : f.section);
 
 export default function SettingsView() {
   const [schema, setSchema] = useState<Group[] | null>(null);
@@ -70,6 +71,11 @@ export default function SettingsView() {
   const [showNewProfile, setShowNewProfile] = useState(false);
   const [newProfile, setNewProfile] = useState({ name: "", description: "", type: "meeting", language: "ko", translate: false });
 
+  // 고급: 전체 설정(JSON) 직접 편집
+  const [showRaw, setShowRaw] = useState(false);
+  const [rawText, setRawText] = useState("");
+  const [rawMsg, setRawMsg] = useState<{ ok: boolean; text: string } | null>(null);
+
   const load = async () => {
     const pm = await isPackagedMode();
     setPackaged(pm);
@@ -81,7 +87,8 @@ export default function SettingsView() {
     const v: Record<string, any> = {};
     for (const group of sch) {
       for (const f of group.fields) {
-        v[pathOf(f)] = cfg?.[f.section]?.[f.key] ?? f.default ?? (f.type === "bool" ? false : "");
+        const raw = f.key ? cfg?.[f.section]?.[f.key] : cfg?.[f.section]; // scalar: section 자체
+        v[pathOf(f)] = raw ?? f.default ?? (f.type === "bool" ? false : "");
       }
     }
     // 모바일: 키는 localStorage 에 별도 저장
@@ -106,9 +113,10 @@ export default function SettingsView() {
     setSaving(true);
     setError("");
     try {
-      const bySection: Record<string, Record<string, any>> = {};
+      const bySection: Record<string, any> = {};
       const put = (section: string, key: string, val: any) => {
-        (bySection[section] ||= {})[key] = val;
+        if (key) { (bySection[section] ||= {})[key] = val; }
+        else { bySection[section] = val; }  // 최상위 스칼라(output_dir 등)
       };
       for (const group of schema) {
         for (const f of group.fields) {
@@ -161,6 +169,33 @@ export default function SettingsView() {
     const res = await reindexVault();
     setTestMsg((prev) => ({ ...prev, reindex: res }));
     setTesting("");
+  };
+
+  const toggleRaw = async () => {
+    if (!showRaw) {
+      const cfg = await getConfig();
+      setRawText(JSON.stringify(cfg, null, 2));
+      setRawMsg(null);
+    }
+    setShowRaw((s) => !s);
+  };
+
+  const saveRaw = async () => {
+    setRawMsg(null);
+    let obj: any;
+    try {
+      obj = JSON.parse(rawText);
+    } catch (e: any) {
+      setRawMsg({ ok: false, text: `JSON 형식 오류: ${e?.message || e}` });
+      return;
+    }
+    try {
+      await updateConfig(obj);
+      setRawMsg({ ok: true, text: "전체 설정이 저장되었습니다." });
+      await load();  // 친절한 폼도 갱신
+    } catch (e: any) {
+      setRawMsg({ ok: false, text: `저장 실패: ${e?.message || e}` });
+    }
   };
 
   const handleCreateProfile = async () => {
@@ -235,6 +270,32 @@ export default function SettingsView() {
         {saved ? "저장되었습니다!" : "설정 저장"}
       </button>
 
+      {/* 고급: 전체 설정(JSON) 직접 편집 */}
+      {packaged && (
+        <section className="bg-white border border-brand-200 rounded-2xl p-4 md:p-5 mb-3 shadow-sm">
+          <button onClick={toggleRaw} className="flex items-center gap-2 text-sm font-bold text-brand-700 hover:text-brand-900">
+            <Settings size={16} /> 고급: 전체 설정(JSON) 직접 편집 {showRaw ? "▲" : "▼"}
+          </button>
+          {showRaw && (
+            <div className="mt-3 space-y-2">
+              <p className="text-xs text-brand-400">위 폼에 없는 항목(도메인 매핑·카테고리·별칭·Webhook 등)까지 config.json 전체를 직접 편집합니다. 키는 마스킹되어 보이며 그대로 두면 유지됩니다.</p>
+              <textarea
+                value={rawText}
+                onChange={(e) => setRawText(e.target.value)}
+                spellCheck={false}
+                className="w-full h-96 px-3 py-2 bg-zinc-900 text-zinc-100 border border-zinc-700 rounded-lg outline-none font-mono text-xs leading-relaxed resize-y"
+              />
+              {rawMsg && (
+                <div className={`text-sm ${rawMsg.ok ? "text-emerald-600" : "text-red-600"}`}>{rawMsg.text}</div>
+              )}
+              <button onClick={saveRaw} className="flex items-center gap-2 px-5 py-2.5 bg-brand-950 text-white rounded-xl text-sm font-bold hover:bg-brand-900 transition-all">
+                <Save size={16} /> 전체 설정 저장
+              </button>
+            </div>
+          )}
+        </section>
+      )}
+
       {/* Profiles */}
       <section className="bg-white border border-brand-200 rounded-2xl p-4 md:p-5 mb-3">
         <div className="flex items-center justify-between mb-6">
@@ -298,6 +359,24 @@ export default function SettingsView() {
           ))}
         </div>
       </section>
+
+      {/* 앱 종료 (패키지 모드) */}
+      {packaged && (
+        <section className="bg-white border border-brand-200 rounded-2xl p-4 md:p-5 mb-3 shadow-sm">
+          <h3 className="text-base font-bold mb-1">앱 종료</h3>
+          <p className="text-xs text-brand-400 mb-3">프로그램을 완전히 종료합니다. 종료 후 이 브라우저 탭은 닫으세요. 다시 쓰려면 MeetingMinutes.exe 를 다시 실행하세요.</p>
+          <button
+            onClick={async () => {
+              if (!confirm("앱을 종료할까요? 진행 중인 처리가 있으면 중단됩니다.")) return;
+              await shutdownApp();
+              alert("앱이 종료되었습니다. 이 탭을 닫으세요.");
+            }}
+            className="flex items-center gap-2 px-5 py-2.5 bg-zinc-800 text-white rounded-xl text-sm font-bold hover:bg-zinc-900 transition-all"
+          >
+            앱 종료
+          </button>
+        </section>
+      )}
 
       {/* Danger Zone */}
       <section className="bg-white border border-red-200 rounded-2xl p-6 md:p-8">

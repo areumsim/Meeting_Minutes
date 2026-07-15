@@ -20,6 +20,22 @@ import threading
 import urllib.request
 from pathlib import Path
 
+# console=False(windowed) 빌드에서는 sys.stdout/stderr 가 None 이라 print/uvicorn 로깅이
+# 깨진다. 우선 devnull 로 채워 크래시를 막고, 데이터 폴더를 안 뒤 로그파일로 재지정한다.
+_WINDOWED = getattr(sys, "stdout", None) is None
+
+
+def _fill_std_streams(target=None):
+    for name in ("stdout", "stderr"):
+        if getattr(sys, name, None) is None:
+            try:
+                setattr(sys, name, target or open(os.devnull, "w"))
+            except Exception:
+                pass
+
+
+_fill_std_streams()
+
 
 def setup_paths():
     """sys.path 설정 + 데이터 폴더 초기화 + 데이터 베이스로 chdir.
@@ -89,6 +105,18 @@ def main():
     args = parser.parse_args()
 
     data_base, _ = setup_paths()
+
+    # windowed 빌드: 콘솔이 없으므로 stdout/stderr(및 uvicorn 로그)를 로그파일로 보낸다.
+    if _WINDOWED:
+        try:
+            logdir = Path(data_base) / "data" / "logs"
+            logdir.mkdir(parents=True, exist_ok=True)
+            logf = open(logdir / "web_exe.log", "a", encoding="utf-8", errors="replace")
+            sys.stdout = logf
+            sys.stderr = logf
+        except Exception:
+            pass
+
     port = _find_free_port(args.port)
 
     print(f"\n{'='*60}")
@@ -98,7 +126,7 @@ def main():
     print(f"  데이터 위치: {data_base}")
     print(f"  {'-'*56}")
     print(f"  브라우저가 자동으로 열립니다.")
-    print(f"  종료하려면 이 창을 닫으세요.")
+    print(f"  종료: 웹 화면 [설정] → '앱 종료' (또는 작업관리자에서 MeetingMinutes 종료)")
     print(f"{'='*60}\n")
 
     if not args.no_browser:

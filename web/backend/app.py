@@ -90,6 +90,19 @@ app.include_router(wiki_router, prefix="/api")
 app.include_router(tools_router, prefix="/api")
 
 
+@app.post("/api/shutdown")
+def shutdown():
+    """웹에서 앱(서버)을 종료. 콘솔 창이 없는 배포(windowed)에서 깔끔히 끄기 위한 용도."""
+    import threading, os, time
+
+    def _die():
+        time.sleep(0.4)
+        os._exit(0)
+
+    threading.Thread(target=_die, daemon=True).start()
+    return {"ok": True}
+
+
 @app.get("/api/health")
 def health():
     ffmpeg_ok = False

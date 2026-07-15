@@ -177,7 +177,7 @@ exe = EXE(
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
-    console=True,  # 콘솔 창 표시 (로그 확인용)
+    console=False,  # 콘솔 창 없이 실행(windowed). 로그는 MeetingMinutesData/data/logs/, 종료는 웹 [설정]→앱 종료
     icon=None,     # 아이콘 파일이 있으면 여기에 지정
 )
 

@@ -85,6 +85,9 @@ def update_config(data: dict):
     if not CONFIG_PATH.exists():
         return {"error": "config.json not found"}
 
+    # 주석(_readme 등)·config_version 은 전체 설정 저장(고급 JSON 편집) 시 함께 넘어올 수 있으므로
+    # 검증 대상에서 제외하고 무시한다.
+    data = {k: v for k, v in data.items() if not k.startswith("_") and k != "config_version"}
     unknown = [s for s in data if s not in _ALLOWED_SECTIONS]
     if unknown:
         raise HTTPException(status_code=422, detail=f"허용되지 않는 섹션: {unknown}")

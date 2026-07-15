@@ -16,17 +16,20 @@ import subprocess
 import sys
 from pathlib import Path
 
+from meeting_minutes_app.common import app_paths
+
 # ══════════════════════════════════════════════════════════════════
 #  경로
 # ══════════════════════════════════════════════════════════════════
 APP_DIR    = Path(__file__).parent.resolve()  # meeting_minutes_app/meeting_pipeline/
-BASE_DIR   = APP_DIR.parent.parent            # repo root
-OUTPUT_DIR = BASE_DIR / "output"
+BASE_DIR   = APP_DIR.parent.parent            # repo root (번들 리소스 위치)
+# 쓰기 대상은 app_paths(단일 소스)로 — dev=repo root, frozen=exe 옆 MeetingMinutesData/
+OUTPUT_DIR = app_paths.get_output_dir()
 SCRIPT     = APP_DIR / "meeting_minutes.py"
 SCRIPT_MODULE = "meeting_minutes_app.meeting_pipeline.meeting_minutes"
 WATCHER    = APP_DIR / "watcher.py"
 WATCHER_MODULE = "meeting_minutes_app.meeting_pipeline.watcher"
-LOG_DIR    = BASE_DIR / "data" / "logs"
+LOG_DIR    = app_paths.get_logs_dir()
 LOG_FILE   = LOG_DIR / "run_py.log"
 
 # 지원 확장자

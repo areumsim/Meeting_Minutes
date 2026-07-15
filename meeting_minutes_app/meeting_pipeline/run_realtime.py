@@ -22,13 +22,16 @@ from typing import Optional
 # ══════════════════════════════════════════════════════════════════
 #  경로
 # ══════════════════════════════════════════════════════════════════
+from meeting_minutes_app.common import app_paths
+
 APP_DIR        = Path(__file__).parent.resolve()  # meeting_minutes_app/meeting_pipeline/
-BASE_DIR       = APP_DIR.parent.parent             # repo root
-OUTPUT_DIR     = BASE_DIR / "output"
+BASE_DIR       = APP_DIR.parent.parent             # repo root (번들 리소스 위치)
+# 쓰기 대상은 app_paths(단일 소스)로 — dev=repo root, frozen=exe 옆 MeetingMinutesData/
+OUTPUT_DIR     = app_paths.get_output_dir()
 ACTIVE_SESSION = OUTPUT_DIR / ".active_session"
 SCRIPT         = APP_DIR / "realtime_transcription.py"
 SCRIPT_MODULE  = "meeting_minutes_app.meeting_pipeline.realtime_transcription"
-LOG_DIR        = BASE_DIR / "data" / "logs"
+LOG_DIR        = app_paths.get_logs_dir()
 LOG_FILE       = LOG_DIR / "run_py.log"
 
 # ══════════════════════════════════════════════════════════════════
@@ -451,8 +454,9 @@ def _do_pcm_convert(pcm_files: list):
     for pcm in pcm_files:
         wav = pcm.with_suffix(".wav")
         print(f"  {pcm.name}  ...  ", end="", flush=True)
+        from meeting_minutes_app.common import app_paths as _ap
         r = subprocess.run(
-            ["ffmpeg", "-y", "-f", "s16le", "-ar", "16000",
+            [_ap.get_ffmpeg_path(), "-y", "-f", "s16le", "-ar", "16000",
              "-ac", "1", "-i", str(pcm), str(wav)],
             capture_output=True,
         )

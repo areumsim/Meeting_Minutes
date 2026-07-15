@@ -96,6 +96,11 @@ FALLBACK_STT_MODEL = _c("models.stt_fallback", "gpt-4o-transcribe") or "gpt-4o-t
 MINUTES_MODEL      = _c("models.minutes_model", "gpt-4o") or "gpt-4o"
 SUMMARY_MODEL      = _c("models.summary_model", "gpt-4o") or "gpt-4o"
 
+# ffmpeg/ffprobe 경로 — 번들(vendor/ffmpeg) 우선, 없으면 PATH fallback
+from meeting_minutes_app.common import app_paths as _app_paths
+FFMPEG = _app_paths.get_ffmpeg_path()
+FFPROBE = _app_paths.get_ffprobe_path()
+
 MAX_FILE_SIZE_MB = 25
 MAX_CHUNK_DURATION_SEC = 1200  # gpt-4o-transcribe* 최대 1400s → 안전 마진 포함
 
@@ -232,7 +237,7 @@ def run_cmd(cmd: List[str], check: bool = True) -> subprocess.CompletedProcess:
 def audio_duration(p: str) -> float:
     try:
         r = run_cmd(
-            ["ffprobe", "-v", "quiet", "-print_format", "json", "-show_format", p],
+            [FFPROBE, "-v", "quiet", "-print_format", "json", "-show_format", p],
         )
         return float(json.loads(r.stdout)["format"]["duration"])
     except Exception:
@@ -241,7 +246,7 @@ def audio_duration(p: str) -> float:
 
 def check_ffmpeg() -> bool:
     try:
-        run_cmd(["ffmpeg", "-version"])
+        run_cmd([FFMPEG, "-version"])
         return True
     except Exception:
         return False

@@ -27,7 +27,13 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 HERE = Path(__file__).resolve().parent      # meeting_minutes_app/wiki_core/
-BASE_DIR = HERE.parent.parent                # project root
+
+# 데이터 베이스는 app_paths 단일 소스에서 파생한다.
+# frozen 시 exe 옆 MeetingMinutesData/ (쓰기 가능), dev 시 저장소 루트.
+# 과거엔 BASE_DIR = HERE.parent.parent (=저장소 루트)라 frozen 시 data/가
+# 읽기전용 _MEIPASS로 들어가 재실행마다 소멸하는 버그가 있었다.
+from meeting_minutes_app.common import app_paths as _paths
+BASE_DIR = _paths.get_base_dir()
 
 # UTF-8 재설정 — Windows CP949 환경 대응 (ingestion_pipeline.py 동일 패턴)
 for _stream in (sys.stdout, sys.stderr):
@@ -61,9 +67,8 @@ def _feature_enabled(sub_key: Optional[str] = None) -> bool:
     return True
 
 
-DATA_DIR = BASE_DIR / "data"
-_output_cfg = str(_c("output_dir", "output") or "output")
-OUTPUT_DIR = (BASE_DIR / _output_cfg).resolve()
+DATA_DIR = _paths.get_data_dir()
+OUTPUT_DIR = _paths.get_output_dir()
 
 # 논문/학술 자료 판정 키워드
 _PAPER_TYPE_VALUES = {"paper", "논문", "seminar", "lecture", "세미나", "강의", "학술"}

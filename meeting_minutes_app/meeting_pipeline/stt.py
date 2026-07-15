@@ -26,7 +26,7 @@ from meeting_minutes_app.meeting_pipeline.meeting_minutes import (
     DEFAULT_STT_MODEL, FALLBACK_STT_MODEL, MAX_FILE_SIZE_MB, MAX_CHUNK_DURATION_SEC,
     MIN_STT_CHARS_PER_SEC, MAX_STT_RETRY_SPLIT_DEPTH, UPLOAD_FORMATS,
     logger, step, info, ok, warn, debug_save,
-    ts, file_mb, run_cmd, audio_duration,
+    ts, file_mb, run_cmd, audio_duration, FFMPEG,
 )
 
 
@@ -47,7 +47,7 @@ def prepare_audio(input_path: str, work_dir: str) -> str:
     info(f"mp3 변환 중... (원본 {size:.1f}MB)")
     out = os.path.join(work_dir, Path(input_path).stem + ".mp3")
     run_cmd([
-        "ffmpeg", "-y", "-i", input_path,
+        FFMPEG, "-y", "-i", input_path,
         "-vn", "-ar", "16000", "-ac", "1", "-b:a", "48k", out,
     ])
     new_size = file_mb(out)
@@ -58,7 +58,7 @@ def prepare_audio(input_path: str, work_dir: str) -> str:
 def _extract_audio_segment(audio_path: str, offset: float, duration: float, out_path: str) -> str:
     """audio_path의 [offset, offset+duration) 구간을 out_path(mp3)로 추출."""
     run_cmd([
-        "ffmpeg", "-y", "-i", audio_path,
+        FFMPEG, "-y", "-i", audio_path,
         "-ss", str(offset), "-t", str(duration),
         "-ar", "16000", "-ac", "1", "-b:a", "48k", out_path,
     ])

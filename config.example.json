@@ -205,10 +205,10 @@
   "wiki": {
     "_comment": "LLM Wiki Q&A 및 실시간 사실 검증 설정.",
     "citation_required": true,
-    "max_context_notes": 5,
+    "max_context_notes": 8,
     "unverified_marker": "확인 불가",
     "conflict_marker": "⚠️ 충돌",
-    "context_max_chars": 2000,
+    "context_max_chars": 6000,
     "_online_search_comment": "true 시 vault에 없는 내용을 웹 검색으로 보완(Claude web_research 사용, 비용 발생)",
     "online_search_enabled": false,
     "_online_search_trigger_comment": "technical=기술 용어 감지 시만, always=항상, never=사용 안 함",

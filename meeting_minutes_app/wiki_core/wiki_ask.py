@@ -45,10 +45,14 @@ _CONFLICT_MARKER = "⚠️ 충돌"
 _SYSTEM_PROMPT_TEMPLATE = """당신은 Obsidian 볼트의 지식을 기반으로 정확하게 답변하는 개인 LLM Wiki 어시스턴트입니다.
 
 규칙:
-1. 아래에 제공된 노트 컨텍스트만을 근거로 답변하세요. 외부 지식을 사용하지 마세요.
-2. 모든 주장에는 반드시 [출처: [[노트 제목]]] 또는 [출처: [[노트 제목#헤딩]]] 형식으로 인용하세요.
-   컨텍스트 블록 제목(### [[...]])에 헤딩이 포함돼 있으면 그 형식을 그대로 사용하세요.
-3. 제공된 노트에서 확인할 수 없는 내용은 "{unverified}"라고 명시하세요.
+1. 아래 노트 컨텍스트(제목·헤딩·본문 전부)를 근거로 답하세요. 컨텍스트에 문장으로 똑같이
+   적혀 있지 않더라도, 노트에서 **직접 도출·추론 가능한 인물/기관/용어/사실은 적극적으로 답하세요.**
+   특히 블록 제목 "### [[노트#헤딩]]"의 헤딩은 인용 대상일 뿐 아니라 **그 자체가 사실 정보**입니다
+   (예: 헤딩에 사람 이름·소속·그룹명이 들어 있으면 그것이 곧 답의 근거가 됩니다). 질문의 표현이
+   노트와 달라도(예: "연대"="양자컴퓨팅") 합리적으로 연결해 답하세요. 외부 지식으로 지어내지는 마세요.
+2. 주장에는 가능한 한 [출처: [[노트 제목]]] 또는 [출처: [[노트 제목#헤딩]]] 형식으로 인용하세요.
+3. 노트에서 합리적으로 도출할 수 있으면 답을 제시하고, **근거가 전혀 없을 때만** "{unverified}"라고
+   명시하세요. 컨텍스트에 관련 단서가 있는데 표현이 다르다는 이유로 "{unverified}"를 쓰지 마세요.
 4. 두 노트가 서로 상충하는 정보를 담고 있으면 "{conflict}"을 표시하고 두 입장을 모두 제시하세요.
 5. 답변은 한국어로 작성하고, 반드시 아래 6개 섹션 구조를 그대로 사용하세요 (내용 없는 섹션도 헤딩은 유지하고 "해당 없음"이라고 쓰세요):
 
@@ -219,12 +223,15 @@ class WikiQA:
                     source="index",
                     order=i,
                 )
+                # 헤딩은 정답(인물/그룹명 등)을 담는 경우가 많은데 본문(content)에는 헤딩 줄이
+                # 빠져 있다. 헤딩을 본문 앞에 붙여 LLM이 인용링크가 아닌 '사실 텍스트'로 보게 한다.
+                sec_body = f"# {heading}\n{content}" if heading else content
                 results.append({
                     "title": title,
                     "heading": heading,
                     "path": hit.get("note_path", ""),
                     "snippet": hit.get("snippet", ""),
-                    "content": _truncate_note(content, self._max_chars),
+                    "content": _truncate_note(sec_body, self._max_chars),
                     "score": hit.get("score", 0),
                     "rank_score": rank_score,
                     "source": "index_section",
@@ -357,11 +364,13 @@ class WikiQA:
     def _supplement_online(
         self, question: str, answer: str, sources: List[Dict]
     ) -> str:
-        """볼트에 없는 내용을 웹 검색으로 보완한다."""
+        """볼트에 없는 내용을 웹 검색으로 보완한다.
+
+        이 함수는 볼트 답변이 이미 '{unverified}'로 판정된 경우에만 호출된다(ask 참고).
+        즉 볼트로는 답을 못 찾은 상태이므로, 기술어 휴리스틱으로 막지 않고 웹 검색을 실행한다
+        (한국어/소문자 기술 질문이 '비기술'로 오분류돼 폴백이 스킵되던 문제 수정). trigger='never'만 차단."""
         trigger = _c("wiki.online_search_trigger", "technical")
         if trigger == "never":
-            return answer
-        if trigger == "technical" and not _has_technical_terms(question):
             return answer
         try:
             web_result = self._llm.web_research(question)

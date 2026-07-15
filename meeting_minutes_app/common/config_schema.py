@@ -124,7 +124,8 @@ SCHEMA: List[Dict[str, Any]] = [
         "desc": "위키 Q&A·사실검증 세부 설정.",
         "fields": [
             {"section": "wiki", "key": "citation_required", "label": "출처 필수", "type": "bool", "default": True},
-            {"section": "wiki", "key": "max_context_notes", "label": "최대 참고 노트 수", "type": "number", "default": 5},
+            {"section": "wiki", "key": "max_context_notes", "label": "최대 참고 노트 수", "type": "number", "default": 8},
+            {"section": "wiki", "key": "context_max_chars", "label": "노트당 최대 글자수", "type": "number", "default": 6000, "desc": "위키 답변에 넣는 노트별 본문 길이. 크게 하면 근거가 풍부해지나 비용↑."},
             {"section": "wiki", "key": "online_search_trigger", "label": "온라인 검색 시점", "type": "select", "default": "technical", "options": [{"value": "technical", "label": "technical — 기술용어 감지 시"}, {"value": "always", "label": "always — 항상"}, {"value": "never", "label": "never — 사용 안 함"}]},
             {"section": "wiki", "key": "realtime_search_interval", "label": "실시간 검색 간격(세그먼트)", "type": "number", "default": 3},
             {"section": "wiki", "key": "claim_verify_max", "label": "검증할 최대 주장 수", "type": "number", "default": 8},

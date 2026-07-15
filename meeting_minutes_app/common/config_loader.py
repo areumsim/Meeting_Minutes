@@ -12,21 +12,20 @@ config_loader.py — config.json 통합 로더
 
 import os
 import json
+import copy
 import sys
 from pathlib import Path
 from typing import Any, Optional
 
-def _find_project_root() -> Path:
-    """Return the directory that owns config.json/config.example.json."""
-    here = Path(__file__).resolve()
-    for parent in [here.parent, *here.parents]:
-        if (parent / "config.json").exists() or (parent / "config.example.json").exists():
-            return parent
-    return here.parent
+from meeting_minutes_app.common import app_paths
 
-
-_PROJECT_ROOT = _find_project_root()
-_CONFIG_PATH = _PROJECT_ROOT / "config.json"
+# 경로 단일 소스(app_paths) 사용 — frozen 시 exe 옆 MeetingMinutesData/config.json,
+# dev 시 저장소 루트/config.json. (과거의 __file__ 상위 탐색은 frozen에서 읽기전용
+# _MEIPASS를 가리키는 버그가 있었다.)
+# _PROJECT_ROOT 는 vault_indexer 등이 상대 경로(data/vault_index.json)를 해석하는
+# 기준으로 참조하므로 데이터 베이스로 노출한다.
+_PROJECT_ROOT = app_paths.get_base_dir()
+_CONFIG_PATH = app_paths.get_config_path()
 _cache: Optional[dict] = None
 
 
@@ -113,6 +112,100 @@ def set_nested(key_path: str, value: Any, persist: bool = True) -> None:
         _cache = on_disk
     except Exception as e:
         print(f"[config] ⚠  config.json 저장 실패: {e}", file=sys.stderr)
+
+
+# 사용자가 직접 채우는 맵/리스트 — 마이그레이션 시 내부까지 재귀 병합하지 않고
+# 통째로 하나의 값으로 취급한다(삭제한 기본 항목이 되살아나지 않도록).
+_OPAQUE_KEYS = {
+    "entity_aliases", "entity_alias_patterns", "entity_query_hints",
+    "project_domains", "ref_domains", "meeting_categories",
+    "allowed_tokens", "watch_folders",
+    "domain_keywords", "domain_relevance_keywords",
+    "supported_extensions",
+}
+
+
+def _deep_merge_missing(dst: dict, src: dict) -> bool:
+    """src 에 있으나 dst 에 없는 키만 dst 에 추가. 기존 dst 값은 절대 덮어쓰지 않는다.
+    중첩 dict 는 재귀 병합하되 _OPAQUE_KEYS 는 리프처럼 통째로만 취급.
+    변경이 있었으면 True."""
+    changed = False
+    for k, v in src.items():
+        if k not in dst:
+            dst[k] = copy.deepcopy(v)
+            changed = True
+        elif isinstance(v, dict) and isinstance(dst[k], dict) and k not in _OPAQUE_KEYS:
+            if _deep_merge_missing(dst[k], v):
+                changed = True
+    return changed
+
+
+def migrate() -> bool:
+    """config.json 을 최신 스키마로 마이그레이션한다.
+
+    - config.example.json(전체 기본값)을 기준으로 누락된 키만 주입(기존 사용자 값 보존).
+    - config_schema 의 필드 기본값도 belt-and-suspenders 로 보장.
+    - config_version 을 현재 코드 버전으로 승격.
+    변경이 있어 디스크에 기록했으면 True. 실패해도 예외를 던지지 않는다(부팅 차단 방지)."""
+    global _cache
+    if not _CONFIG_PATH.exists():
+        return False
+
+    try:
+        with open(_CONFIG_PATH, "r", encoding="utf-8") as f:
+            user_cfg = json.load(f)
+    except Exception as e:
+        print(f"[config] ⚠  마이그레이션: config.json 읽기 실패({e}) — 건너뜀", file=sys.stderr)
+        return False
+    if not isinstance(user_cfg, dict):
+        return False
+
+    changed = False
+
+    # 1) config.example.json 의 전체 기본값에서 누락 키 주입
+    try:
+        example_path = app_paths.get_example_config_path()
+        if example_path.exists():
+            with open(example_path, "r", encoding="utf-8") as f:
+                defaults = json.load(f)
+            if isinstance(defaults, dict):
+                if _deep_merge_missing(user_cfg, defaults):
+                    changed = True
+    except Exception as e:
+        print(f"[config] ⚠  마이그레이션: 예시 기본값 병합 건너뜀({e})", file=sys.stderr)
+
+    # 2) 스키마 필드 기본값 보장(예시에 없을 수 있는 UI 전용 키 대비)
+    target_version = 1
+    try:
+        from meeting_minutes_app.common import config_schema
+        target_version = config_schema.CONFIG_VERSION
+        for field in config_schema.iter_fields():
+            section, key = field["section"], field["key"]
+            node = user_cfg.get(section)
+            if not isinstance(node, dict):
+                node = {}
+                user_cfg[section] = node
+            if key not in node:
+                node[key] = copy.deepcopy(field.get("default"))
+                changed = True
+    except Exception as e:
+        print(f"[config] ⚠  마이그레이션: 스키마 기본값 보장 건너뜀({e})", file=sys.stderr)
+
+    # 3) config_version 승격
+    if user_cfg.get("config_version") != target_version:
+        user_cfg["config_version"] = target_version
+        changed = True
+
+    if changed:
+        try:
+            with open(_CONFIG_PATH, "w", encoding="utf-8") as f:
+                json.dump(user_cfg, f, ensure_ascii=False, indent=2)
+            _cache = user_cfg
+            print(f"[config] config.json 마이그레이션 완료 (config_version={target_version})")
+        except Exception as e:
+            print(f"[config] ⚠  마이그레이션 저장 실패: {e}", file=sys.stderr)
+            return False
+    return changed
 
 
 def reload():

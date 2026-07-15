@@ -6,6 +6,9 @@
     "복사: cp config.example.json config.json    (Mac/Linux)"
   ],
 
+  "_config_version_comment": "스키마 버전 — 앱 시작 시 자동 마이그레이션(누락 키 기본값 주입)에 사용. 직접 수정하지 마세요.",
+  "config_version": 1,
+
   "api": {
     "_comment": "API 키 — 환경변수(OPENAI_API_KEY 등)가 있으면 환경변수 우선",
     "openai_api_key":    "sk-proj-...",

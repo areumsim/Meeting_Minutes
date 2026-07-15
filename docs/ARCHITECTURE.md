@@ -469,8 +469,7 @@ evidence:
   "vault_path":        "D:\\Obsidian\\MyVault",
   "project":           "양자",
   "project_domains": {
-    "양자": "Archive/도메인_아카이브",
-    "PhysicalAI": "Archive/PhysicalAI_통합아카이브"
+    "양자": "Archive/도메인_아카이브"
   },
   "ref_domains": {
     "양자": "퀀텀",
@@ -483,6 +482,7 @@ evidence:
   "auto_register_categories": true,
   "meeting_categories": {
     "양자": { "mode": "domain", "keywords": ["양자", "퀀텀", "..."] },
+    "PhysicalAI": { "mode": "folder", "folder": "00_Meetings/PhysicalAI", "keywords": ["PhysicalAI", "..."] },
     "백서온톨로지": { "mode": "folder", "folder": "00_Meetings/백서온톨로지", "keywords": ["백서", "온톨로지", "..."] },
     "팀회의": { "mode": "folder", "folder": "00_Meetings/팀회의", "keywords": ["팀회의", "..."] }
   }
@@ -522,7 +522,7 @@ evidence:
 3. `obsidian.auto_register_categories=true`(기본)면 LLM이 발견한 새 카테고리를
    `config_loader.set_nested()`로 `config.json`의 `meeting_categories`에 `mode:"folder"`로
    즉시 등록 — 다음부터는 같은 주제가 LLM 호출 없이 키워드만으로 인식된다. 새 카테고리는
-   항상 `00_Meetings/<이름>`으로만 생성되고, PhysicalAI처럼 전용 아카이브 구조(`mode:"domain"`)로
+   항상 `00_Meetings/<이름>`으로만 생성되고, 양자처럼 전용 아카이브 구조(`mode:"domain"`)로
    승격하려면 `meeting_categories`와 `project_domains` 양쪽에 수동으로 등록해야 한다.
 4. 전부 실패(매칭 없음 + LLM도 실패)하면 `00_Meetings/기타`로 폴백 — static `obsidian.project`
    기본값으로 조용히 흘러가지 않는다.
@@ -536,7 +536,7 @@ evidence:
 ### 도메인 스코프 검색 (prep-brief / wiki-ask / 실시간 관련노트)
 
 `vault_retrieval.detect_query_domain(text)`가 질문/메모/제목에서 카테고리를 감지하면
-`domain_search_prefixes(category)`가 검색 범위를 좁힌다 — `mode:"domain"` 카테고리(양자/PhysicalAI)면
+`domain_search_prefixes(category)`가 검색 범위를 좁힌다 — `mode:"domain"` 카테고리(양자)면
 `[전용 아카이브 경로, "01_References"]`, `mode:"folder"` 카테고리(팀회의/외부회의 등)면
 `[00_Meetings/<카테고리 폴더>, "01_References"]`. (2026-07 수정 — 과거엔 `project_domains`에 등록된
 도메인 카테고리만 감지 대상이었고, 폴더형 카테고리는 전용 스코프가 없어 항상 볼트 전체 검색으로

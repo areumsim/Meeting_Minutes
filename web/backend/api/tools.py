@@ -154,10 +154,11 @@ def prep_brief(payload: dict):
             obs = None
 
         regular, papers = wk._get_brief_related_notes(title, topic, indexer, obs, limit=5, memo="")
-        actions = wk.load_action_registry(wk.DATA_DIR / "action_registry.json")
-        decisions = wk.load_decision_registry(wk.DATA_DIR / "decision_registry.json")
-        open_actions = wk._filter_actions_by_topic(actions, title, topic)
-        recent_decisions = wk._filter_decisions_by_topic(decisions, title, topic)
+        action_reg = wk.load_action_registry(wk.DATA_DIR / "action_registry.json")
+        decision_reg = wk.load_decision_registry(wk.DATA_DIR / "decision_registry.json")
+        # 필터 함수는 registry dict가 아니라 내부 리스트를 받고, 2번째 인자는 topic 문자열.
+        open_actions = wk._filter_actions_by_topic(action_reg.get("actions", []), topic, limit=10)
+        recent_decisions = wk._filter_decisions_by_topic(decision_reg.get("decisions", []), topic, limit=10)
 
         now = datetime.now()
         brief = wk.build_prep_brief(

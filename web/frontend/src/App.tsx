@@ -8,13 +8,14 @@ import FileUpload from "./components/FileUpload";
 import TextInput from "./components/TextInput";
 import WikiAsk from "./components/WikiAsk";
 import SettingsView from "./components/Settings";
-import { getApiKey } from "./lib/api";
+import { getApiKey, getConfig } from "./lib/api";
 
 type View = "dashboard" | "recorder" | "upload" | "text" | "wiki" | "detail" | "settings";
 
 export default function App() {
   const [viewState, setViewState] = useState<View>("dashboard");
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
+  const [ffmpegMissing, setFfmpegMissing] = useState(false);
 
   const view = viewState;
   const setView = (v: View) => {
@@ -27,11 +28,26 @@ export default function App() {
     setViewState(v);
   };
 
-  // Initial guard: need OpenAI API Key
+  // 최초 실행 유도(OpenAI 키/Obsidian 볼트 미설정) + ffmpeg 상태 확인
   useEffect(() => {
-    if (!getApiKey()) {
-      setView("settings");
-    }
+    (async () => {
+      try {
+        const res = await fetch("/api/health");
+        if (res.ok) {
+          const h = await res.json();
+          setFfmpegMissing(h.ffmpeg_available === false);
+        }
+      } catch { /* 백엔드 없음(모바일) — 무시 */ }
+
+      try {
+        const cfg = await getConfig();
+        const hasKey = !!(cfg?.api?.openai_api_key) || !!getApiKey();
+        const hasVault = !!(cfg?.obsidian?.vault_path);
+        if (!hasKey || !hasVault) setView("settings");
+      } catch {
+        if (!getApiKey()) setView("settings");
+      }
+    })();
   }, []);
 
   const navigateToDetail = (id: string) => {
@@ -78,6 +94,12 @@ export default function App() {
 
       {/* Main Content */}
       <main className="flex-1 w-full md:ml-64 p-4 md:p-8 lg:p-12 pt-[calc(env(safe-area-inset-top,0px)+1rem)] relative">
+        {ffmpegMissing && (
+          <div className="mb-4 rounded-xl border border-amber-300 bg-amber-50 text-amber-800 px-4 py-3 text-sm">
+            ⚠️ <strong>ffmpeg가 설치되어 있지 않습니다.</strong> 오디오 파일 업로드/변환 기능이 동작하지 않을 수 있습니다.
+            프로그램 폴더의 <code className="font-mono">vendor/ffmpeg/</code> 에 <code className="font-mono">ffmpeg.exe</code>를 넣거나 시스템 PATH에 ffmpeg를 추가하세요.
+          </div>
+        )}
         <AnimatePresence mode="wait">
           <motion.div
             key={view + (selectedSessionId || "")}

@@ -24,15 +24,76 @@ const DEFAULT_CONFIG = {
   }
 };
 
+// 패키지(exe) 모드 감지 — FastAPI 백엔드가 같은 오리진에 함께 떠 있으면 true.
+// 부팅 시 1회만 /api/health 로 확인해 캐시한다(모바일 단독 배포는 false).
+let _packagedMode: boolean | null = null;
+export async function isPackagedMode(): Promise<boolean> {
+  if (_packagedMode !== null) return _packagedMode;
+  _packagedMode = await backendAvailable();
+  return _packagedMode;
+}
+
 export const getConfig = async () => {
+  // 패키지 모드: config.json 이 단일 진실. GET /api/config (키는 마스킹되어 옴).
+  if (await isPackagedMode()) {
+    try {
+      const res = await fetch("/api/config");
+      if (res.ok) {
+        const cfg = await res.json();
+        if (cfg && !cfg.error) return cfg;
+      }
+    } catch { /* 폴백 */ }
+  }
   const local = localStorage.getItem("APP_CONFIG");
   if (local) return JSON.parse(local);
   return DEFAULT_CONFIG;
 };
 
 export const updateConfig = async (data: any) => {
+  // 패키지 모드: PUT /api/config 로 config.json 에 저장. 마스킹된(***) 값은 서버가 스킵.
+  if (await isPackagedMode()) {
+    const res = await fetch("/api/config", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    });
+    if (!res.ok) {
+      const d = await res.json().catch(() => null);
+      throw new Error(d?.detail || `설정 저장 실패 (${res.status})`);
+    }
+    return res.json();
+  }
   localStorage.setItem("APP_CONFIG", JSON.stringify(data));
   return { success: true };
+};
+
+// config 스키마(웹 Settings 자동 렌더링용) — 백엔드가 있을 때만 제공.
+export const getConfigSchema = async (): Promise<any[] | null> => {
+  if (!(await isPackagedMode())) return null;
+  try {
+    const res = await fetch("/api/config/schema");
+    if (res.ok) return res.json();
+  } catch { /* ignore */ }
+  return null;
+};
+
+// 연결 테스트 — 백엔드 엔드포인트 호출. { ok, message } (한국어) 반환.
+export const testOpenAIKey = async (): Promise<{ ok: boolean; message: string }> => {
+  try {
+    const res = await fetch("/api/config/test/openai", { method: "POST" });
+    return await res.json();
+  } catch (e: any) {
+    return { ok: false, message: `연결 테스트 실패: ${e?.message || e}` };
+  }
+};
+
+export const testObsidianPath = async (): Promise<{ ok: boolean; message: string }> => {
+  try {
+    const res = await fetch("/api/config/test/obsidian", { method: "POST" });
+    return await res.json();
+  } catch (e: any) {
+    return { ok: false, message: `연결 테스트 실패: ${e?.message || e}` };
+  }
 };
 
 // Profiles Management
@@ -238,8 +299,35 @@ const splitFileIntoChunks = async (file: File, chunkMinutes = 10): Promise<Blob[
   return chunks;
 };
 
+// 서버 세션(SQLite)이 완료/에러가 될 때까지 폴링하며 IndexedDB로 미러링.
+// 백그라운드 실행 — await 하지 않는다.
+async function pollAndMirrorSession(sessionId: string, intervalMs = 3000, maxTries = 600) {
+  for (let i = 0; i < maxTries; i++) {
+    const ok = await mirrorServerSession(sessionId);
+    if (ok) {
+      const s: any = await sessionsStore.getItem(sessionId);
+      if (s && (s.status === "completed" || s.status === "error")) return;
+    }
+    await new Promise((r) => setTimeout(r, intervalMs));
+  }
+}
+
 // File Upload via Direct Whisper API (자동 청크 분할 지원)
 export const uploadFile = async (formData: FormData) => {
+  // 패키지(백엔드) 모드: 서버 배치 파이프라인(/api/upload)으로 위임.
+  // STT·회의록 생성이 서버에서 수행되어 OpenAI 키가 브라우저에 노출되지 않는다.
+  if (await isPackagedMode()) {
+    const res = await fetch("/api/upload", { method: "POST", body: formData });
+    if (!res.ok) {
+      const d = await res.json().catch(() => null);
+      throw new Error(d?.detail || `업로드 실패 (${res.status})`);
+    }
+    const data = await res.json();
+    const sessionId = data.sessionId;
+    void pollAndMirrorSession(sessionId); // 백그라운드 미러링
+    return { sessionId, status: "processing" };
+  }
+
   const file = formData.get("file") as File;
   const apikey = getApiKey();
   if (!apikey) throw new Error("OpenAI API Key is missing.");
@@ -296,6 +384,11 @@ export const uploadFile = async (formData: FormData) => {
 
 // Text Input Direct Processing
 export const processTextInput = async (text: string, metadata: any) => {
+  // 텍스트 직접 입력은 아직 서버 엔드포인트가 없어 모바일(브라우저-직접) 경로만 지원.
+  // 패키지 모드에서는 키가 서버에만 있으므로 명확히 안내.
+  if (await isPackagedMode()) {
+    throw new Error("데스크톱 앱에서는 텍스트 직접 입력이 아직 지원되지 않습니다. 오디오 파일 업로드 또는 실시간 녹음을 사용하세요.");
+  }
   const sessionId = crypto.randomUUID();
   const session = {
     id: sessionId,
@@ -457,6 +550,11 @@ const callOpenAIWithFallback = async (prompt: string, apikey: string, primaryMod
 
 // Client-side Session Document Generation
 export const generateSummaryForSession = async (sessionId: string, userNotes?: string) => {
+   // 패키지 모드: 회의록 생성은 서버 배치 파이프라인이 담당(키 서버 보관). 브라우저-직접
+   // 재생성은 아직 서버 엔드포인트가 없어 미지원 — 조용한 키 오류 대신 명확히 안내.
+   if (await isPackagedMode()) {
+     throw new Error("데스크톱 앱에서는 브라우저 재생성이 지원되지 않습니다(서버가 자동 생성).");
+   }
    const session: any = await sessionsStore.getItem(sessionId);
    const segments: any = await segmentsStore.getItem(sessionId) || [];
    if (!session || segments.length === 0) return;

@@ -1,60 +1,83 @@
-﻿#!/usr/bin/env python
+#!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
 run_ui_exe.py — PyInstaller용 Web UI 엔트리포인트
 ================================================
 exe로 패키징될 때 사용되는 진입점.
-- npm/node 의존성 체크 없음 (빌드된 정적 파일 포함)
-- 브라우저 자동 열기
+- npm/node/pip 의존성 체크 없음 (빌드된 정적 파일·번들 의존성 사용)
+- 쓰기 가능한 데이터 폴더(MeetingMinutesData/) 자동 생성 + config 시드
+- 빈 포트 자동 선택 → 서버 준비 확인 후 기본 브라우저 자동 오픈
 - 단일 서버 모드 (프로덕션 전용)
 """
 
 import os
 import sys
+import socket
 import argparse
 import webbrowser
 import time
 import threading
+import urllib.request
 from pathlib import Path
 
 
-def get_base_dir():
-    """PyInstaller 번들 또는 개발 환경의 베이스 디렉토리 반환."""
-    if getattr(sys, 'frozen', False):
-        # PyInstaller 번들: exe가 있는 디렉토리
-        return Path(sys.executable).parent
-    # meeting_minutes_app/meeting_pipeline/run_ui_exe.py -> repo root (3단계 상위)
-    return Path(__file__).resolve().parent.parent.parent
-
-
 def setup_paths():
-    """sys.path 설정 — 기존 모듈 import를 위해."""
-    base = get_base_dir()
+    """sys.path 설정 + 데이터 폴더 초기화 + 데이터 베이스로 chdir.
 
-    # PyInstaller 번들에서는 _MEIPASS 내부의 소스를 사용
+    반환: (data_base, resource_root)
+    """
+    # 번들 리소스(_MEIPASS) 또는 저장소 루트를 sys.path에 추가해 기존 모듈 import 지원
     if getattr(sys, 'frozen', False):
-        internal = Path(sys._MEIPASS)
-        app_dir = internal / "meeting_minutes_app"
+        resource_root = Path(sys._MEIPASS)
     else:
-        internal = base
-        app_dir = base / "meeting_minutes_app"
-
-    for p in [str(app_dir), str(internal), str(base)]:
+        resource_root = Path(__file__).resolve().parent.parent.parent
+    app_dir = resource_root / "meeting_minutes_app"
+    for p in [str(app_dir), str(resource_root)]:
         if p not in sys.path:
             sys.path.insert(0, p)
 
-    # config.json, profiles.json 등은 exe 옆에서 읽어야 함
-    os.chdir(str(base))
+    from meeting_minutes_app.common import app_paths
 
-    return base, internal
+    # 데이터 폴더 생성 + config.json 시드(없을 때만)
+    data_base = app_paths.ensure_base_dir()
+
+    # config.json/data/·./output 등 상대경로가 데이터 폴더 기준으로 해석되도록 chdir
+    os.chdir(str(data_base))
+    return data_base, resource_root
 
 
-def open_browser_delayed(port: int, delay: float = 1.5):
-    """서버 시작 후 브라우저를 지연 오픈."""
-    def _open():
-        time.sleep(delay)
-        webbrowser.open(f"http://localhost:{port}")
-    t = threading.Thread(target=_open, daemon=True)
+def _find_free_port(preferred: int) -> int:
+    """preferred 포트가 비어 있으면 그대로, 아니면 OS가 주는 빈 포트를 사용."""
+    def _is_free(port: int) -> bool:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            try:
+                s.bind(("127.0.0.1", port))
+                return True
+            except OSError:
+                return False
+    if _is_free(preferred):
+        return preferred
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
+def open_browser_when_ready(port: int, timeout: float = 30.0):
+    """/api/health 가 응답할 때까지 폴링한 뒤 브라우저를 연다."""
+    def _wait_and_open():
+        url = f"http://localhost:{port}"
+        health = f"{url}/api/health"
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            try:
+                with urllib.request.urlopen(health, timeout=1) as resp:
+                    if resp.status == 200:
+                        break
+            except Exception:
+                time.sleep(0.4)
+        webbrowser.open(url)
+    t = threading.Thread(target=_wait_and_open, daemon=True)
     t.start()
 
 
@@ -65,23 +88,27 @@ def main():
     parser.add_argument("--no-browser", action="store_true", help="브라우저 자동 열기 안 함")
     args = parser.parse_args()
 
-    base_dir, internal_dir = setup_paths()
+    data_base, _ = setup_paths()
+    port = _find_free_port(args.port)
 
     print(f"\n{'='*60}")
     print(f"  Meeting Minutes Web UI")
-    print(f"  {'─'*56}")
-    print(f"  URL: http://localhost:{args.port}")
-    print(f"  Base: {base_dir}")
+    print(f"  {'-'*56}")
+    print(f"  서버 실행 중...  http://localhost:{port}")
+    print(f"  데이터 위치: {data_base}")
+    print(f"  {'-'*56}")
+    print(f"  브라우저가 자동으로 열립니다.")
+    print(f"  종료하려면 이 창을 닫으세요.")
     print(f"{'='*60}\n")
 
     if not args.no_browser:
-        open_browser_delayed(args.port)
+        open_browser_when_ready(port)
 
     import uvicorn
     uvicorn.run(
         "web.backend.app:app",
         host=args.host,
-        port=args.port,
+        port=port,
         log_level="info",
     )
 

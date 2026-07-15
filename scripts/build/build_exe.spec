@@ -30,6 +30,15 @@ datas = [
 if os.path.exists(os.path.join(ROOT, 'config.example.json')):
     datas.append((os.path.join(ROOT, 'config.example.json'), '.'))
 
+# ── ffmpeg 번들 (vendor/ffmpeg/*.exe 가 있으면 포함, 없으면 스킵) ──
+# 런타임에 app_paths.get_ffmpeg_path()가 _MEIPASS/vendor/ffmpeg/ 를 먼저 찾는다.
+binaries = []
+_vendor_ffmpeg = os.path.join(ROOT, 'vendor', 'ffmpeg')
+for _exe in ('ffmpeg.exe', 'ffprobe.exe'):
+    _p = os.path.join(_vendor_ffmpeg, _exe)
+    if os.path.exists(_p):
+        binaries.append((_p, os.path.join('vendor', 'ffmpeg')))
+
 # ── 숨겨진 import (PyInstaller가 자동 감지 못하는 것들) ──
 hiddenimports = [
     # FastAPI / Uvicorn 에코시스템
@@ -129,7 +138,7 @@ hiddenimports = [
 a = Analysis(
     [os.path.join(APP, 'meeting_pipeline', 'run_ui_exe.py')],
     pathex=[ROOT],
-    binaries=[],
+    binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],

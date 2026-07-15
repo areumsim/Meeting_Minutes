@@ -11,11 +11,12 @@ from pathlib import Path
 from typing import Optional, List, Dict
 from datetime import datetime
 
-if getattr(sys, 'frozen', False):
-    DB_PATH = Path(sys.executable).parent / "web" / "meeting_assistant.db"
-    DB_PATH.parent.mkdir(parents=True, exist_ok=True)
-else:
-    DB_PATH = Path(__file__).parent.parent / "meeting_assistant.db"
+# DB 경로는 app_paths 단일 소스 사용 — frozen 시 exe 옆
+# MeetingMinutesData/web/meeting_assistant.db, dev 시 web/meeting_assistant.db.
+from web.backend.paths import EXE_DIR
+
+DB_PATH = Path(EXE_DIR) / "web" / "meeting_assistant.db"
+DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 
 
 @contextmanager

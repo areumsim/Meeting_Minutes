@@ -33,6 +33,17 @@ except Exception as _mcp_import_err:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # 데이터 폴더 보장(run_ui_exe 외 경로로 기동될 때 대비) + config 마이그레이션
+    try:
+        from meeting_minutes_app.common import app_paths
+        app_paths.ensure_base_dir()
+    except Exception as e:
+        print(f"[startup] 데이터 폴더 초기화 경고: {e}")
+    try:
+        from meeting_minutes_app.common import config_loader
+        config_loader.migrate()
+    except Exception as e:
+        print(f"[startup] config 마이그레이션 경고: {e}")
     init_db()
     try:
         from web.backend.session_scanner import scan_output_dir
@@ -79,7 +90,13 @@ app.include_router(wiki_router, prefix="/api")
 
 @app.get("/api/health")
 def health():
-    return {"status": "ok"}
+    ffmpeg_ok = False
+    try:
+        from meeting_minutes_app.common import app_paths
+        ffmpeg_ok = app_paths.ffmpeg_available()
+    except Exception:
+        pass
+    return {"status": "ok", "ffmpeg_available": ffmpeg_ok}
 
 
 # ── 프론트엔드 정적 파일 서빙 (프로덕션) ──
@@ -90,8 +107,13 @@ else:
 if FRONTEND_DIST.exists():
     app.mount("/assets", StaticFiles(directory=str(FRONTEND_DIST / "assets")), name="assets")
 
+    from fastapi import HTTPException
+
     @app.get("/{full_path:path}")
     async def serve_spa(full_path: str):
+        # API/WS/MCP 경로는 SPA fallback이 가로채지 않는다(매칭 실패 시 404).
+        if full_path.startswith(("api/", "ws/", "mcp", "assets/")):
+            raise HTTPException(status_code=404)
         file_path = FRONTEND_DIST / full_path
         if file_path.exists() and file_path.is_file():
             return FileResponse(str(file_path))

@@ -18,13 +18,13 @@ type Tab = "script" | "minutes" | "summary" | "actions" | "fact_check" | "wiki_c
 
 // 그래프 노드 타입 -> 섹션 표시 라벨 (이 컴포넌트의 다른 탭 라벨과 톤을 맞춰 영문 사용)
 const GRAPH_TYPE_LABELS: Record<string, string> = {
-  meeting: "Meetings",
-  person: "People",
-  organization: "Organizations",
-  topic: "Topics",
-  decision: "Decisions",
-  action: "Actions",
-  note: "Notes",
+  meeting: "회의",
+  person: "인물",
+  organization: "조직",
+  topic: "주제",
+  decision: "결정",
+  action: "액션",
+  note: "노트",
 };
 
 export default function SessionDetail({ id, onBack }: Props) {
@@ -159,15 +159,15 @@ export default function SessionDetail({ id, onBack }: Props) {
   };
 
   const tabs: { key: Tab; label: string; icon: React.ReactNode }[] = [
-    { key: "minutes", label: "Minutes", icon: <FileText size={14} /> },
-    { key: "summary", label: "Summary", icon: <Zap size={14} /> },
-    { key: "fact_check", label: "Fact Check", icon: <AlertCircle size={14} /> },
-    { key: "script", label: "Script", icon: <List size={14} /> },
-    { key: "actions", label: "Actions", icon: <CheckCircle size={14} /> },
-    { key: "wiki_context", label: "Wiki Context", icon: <FileText size={14} /> },
-    { key: "wiki_proposal", label: "Wiki Proposal", icon: <FileText size={14} /> },
-    { key: "refined_script", label: "Refined", icon: <FileText size={14} /> },
-    { key: "graph", label: "Graph", icon: <Network size={14} /> },
+    { key: "minutes", label: "회의록", icon: <FileText size={14} /> },
+    { key: "summary", label: "요약", icon: <Zap size={14} /> },
+    { key: "fact_check", label: "사실확인", icon: <AlertCircle size={14} /> },
+    { key: "script", label: "스크립트", icon: <List size={14} /> },
+    { key: "actions", label: "액션", icon: <CheckCircle size={14} /> },
+    { key: "wiki_context", label: "위키 맥락", icon: <FileText size={14} /> },
+    { key: "wiki_proposal", label: "위키 제안", icon: <FileText size={14} /> },
+    { key: "refined_script", label: "정제본", icon: <FileText size={14} /> },
+    { key: "graph", label: "그래프", icon: <Network size={14} /> },
   ];
 
   const isTabAvailable = (t: Tab) => (t === "graph" ? !!graph : !!getDoc(t));
@@ -184,8 +184,8 @@ export default function SessionDetail({ id, onBack }: Props) {
     return (
       <div className="text-center py-20">
         <AlertCircle size={48} className="mx-auto text-red-400 mb-4" />
-        <p className="text-lg font-bold text-brand-500">Session not found</p>
-        <button onClick={onBack} className="mt-4 text-brand-500 hover:text-brand-900 font-medium">Go back</button>
+        <p className="text-lg font-bold text-brand-500">세션을 찾을 수 없습니다</p>
+        <button onClick={onBack} className="mt-4 text-brand-500 hover:text-brand-900 font-medium">돌아가기</button>
       </div>
     );
   }
@@ -198,17 +198,17 @@ export default function SessionDetail({ id, onBack }: Props) {
           <ArrowLeft size={20} className="text-brand-500" />
         </button>
         <div className="flex-1">
-          <h2 className="text-2xl font-bold tracking-tight">{session.title || "Untitled"}</h2>
+          <h2 className="text-2xl font-bold tracking-tight">{session.title || "제목 없음"}</h2>
           <div className="flex items-center gap-4 mt-1 text-sm text-brand-500">
             <span className="flex items-center gap-1">
               {session.status === "completed" ? <CheckCircle size={14} className="text-emerald-500" /> :
                session.status === "processing" ? <Loader2 size={14} className="text-amber-500 animate-spin" /> :
                <AlertCircle size={14} className="text-red-500" />}
-              {session.status}
+              {({ completed: "완료", processing: "처리 중", error: "오류" } as Record<string, string>)[session.status] || session.status}
             </span>
-            <span>{session.type}</span>
+            <span>{({ meeting: "회의", seminar: "세미나", lecture: "강의" } as Record<string, string>)[session.type] || session.type}</span>
             {session.duration_sec > 0 && <span>{formatDuration(session.duration_sec)}</span>}
-            {session.translate ? <span className="text-amber-600">Translated</span> : null}
+            {session.translate ? <span className="text-amber-600">번역됨</span> : null}
             {session.source === "cli" && <span className="text-zinc-400">CLI</span>}
           </div>
         </div>
@@ -220,8 +220,8 @@ export default function SessionDetail({ id, onBack }: Props) {
       {session.status === "processing" ? (
         <div className="bg-white border border-brand-200 rounded-3xl p-16 text-center">
           <Loader2 size={48} className="mx-auto text-amber-500 animate-spin mb-6" />
-          <h3 className="text-xl font-bold mb-2">Processing in progress...</h3>
-          <p className="text-brand-500">AI is generating your meeting documents. This page will update automatically.</p>
+          <h3 className="text-xl font-bold mb-2">처리 중입니다...</h3>
+          <p className="text-brand-500">AI가 회의 문서를 생성하고 있습니다. 이 화면은 자동으로 갱신됩니다.</p>
         </div>
       ) : (
         <div className="bg-white border border-brand-200 rounded-3xl shadow-xl overflow-hidden">
@@ -280,7 +280,7 @@ export default function SessionDetail({ id, onBack }: Props) {
                                     ))}
                                   </ul>
                                 ) : (
-                                  <span className="text-brand-400">No related nodes.</span>
+                                  <span className="text-brand-400">연결된 노드가 없습니다.</span>
                                 )}
                               </div>
                             )}
@@ -293,7 +293,7 @@ export default function SessionDetail({ id, onBack }: Props) {
               ) : (
                 <div className="text-center py-16 text-brand-400">
                   <Network size={32} className="mx-auto mb-4" />
-                  <p>No graph data available.</p>
+                  <p>그래프 데이터가 없습니다.</p>
                 </div>
               )
             ) : activeDoc ? (
@@ -304,19 +304,19 @@ export default function SessionDetail({ id, onBack }: Props) {
                     className="flex items-center gap-2 px-4 py-2 bg-brand-50 text-brand-700 rounded-xl text-sm font-medium hover:bg-brand-100 transition-all"
                   >
                     {copied ? <CheckCircle size={14} className="text-emerald-500" /> : <Copy size={14} />}
-                    {copied ? "Copied!" : "Copy"}
+                    {copied ? "복사됨!" : "복사"}
                   </button>
                   <button
                     onClick={handleDownload}
                     className="hidden md:flex items-center gap-2 px-4 py-2 bg-brand-50 text-brand-700 rounded-xl text-sm font-medium hover:bg-brand-100 transition-all"
                   >
-                    <Download size={14} /> Download
+                    <Download size={14} /> 다운로드
                   </button>
                   <button
                     onClick={handleShare}
                     className="flex items-center gap-2 px-4 py-2 bg-brand-900 text-white rounded-xl text-sm font-medium hover:bg-brand-950 transition-all shadow-md"
                   >
-                    <ShareIcon size={14} /> Share
+                    <ShareIcon size={14} /> 공유
                   </button>
                 </div>
 
@@ -359,13 +359,13 @@ export default function SessionDetail({ id, onBack }: Props) {
                 {(activeTab === "summary" || activeTab === "minutes") && (
                   <div className="mt-12 pt-8 border-t border-zinc-200">
                     <h4 className="text-sm font-bold text-zinc-900 mb-3 flex items-center gap-2">
-                      <RefreshCw size={14} className="text-brand-500" /> Regenerate with Notes
+                      <RefreshCw size={14} className="text-brand-500" /> 노트 반영해 재생성
                     </h4>
-                    <p className="text-xs text-zinc-500 mb-4">Add specific notes, corrections, or instructions to regenerate this document.</p>
+                    <p className="text-xs text-zinc-500 mb-4">수정 사항이나 지시를 추가해 이 문서를 다시 생성합니다.</p>
                     <textarea
                       value={userNotes}
                       onChange={(e) => setUserNotes(e.target.value)}
-                      placeholder="e.g. Please format the action items as a table, and focus more on the Q&A segment."
+                      placeholder="예: 액션 아이템을 표로 정리하고, Q&A 부분을 더 자세히 다뤄주세요."
                       className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-brand-900 outline-none text-sm min-h-[100px] resize-y mb-4"
                     />
                     <button
@@ -373,8 +373,8 @@ export default function SessionDetail({ id, onBack }: Props) {
                       disabled={regenerating || !userNotes.trim()}
                       className="flex items-center gap-2 px-5 py-2.5 bg-black text-white rounded-xl text-sm font-bold disabled:opacity-50 transition-all hover:bg-brand-900"
                     >
-                      {regenerating ? <Loader2 size={16} className="animate-spin" /> : <RefreshCw size={16} />} 
-                      {regenerating ? "Regenerating..." : "Regenerate AI Document"}
+                      {regenerating ? <Loader2 size={16} className="animate-spin" /> : <RefreshCw size={16} />}
+                      {regenerating ? "재생성 중..." : "AI 문서 재생성"}
                     </button>
                   </div>
                 )}
@@ -382,7 +382,7 @@ export default function SessionDetail({ id, onBack }: Props) {
             ) : (
               <div className="text-center py-16 text-brand-400">
                 <FileText size={32} className="mx-auto mb-4" />
-                <p>No {activeTab} document available.</p>
+                <p>해당 문서가 없습니다.</p>
               </div>
             )}
           </div>

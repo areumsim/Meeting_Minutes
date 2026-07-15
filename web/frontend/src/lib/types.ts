@@ -81,11 +81,11 @@ export interface RealtimeSegment {
 }
 
 export const MODE_PRESETS: Record<number, { label: string; language: string; translate: boolean; type: string }> = {
-  1: { label: "Korean Meeting", language: "ko", translate: false, type: "meeting" },
-  2: { label: "English -> Korean Meeting", language: "en", translate: true, type: "meeting" },
-  3: { label: "English Only Meeting", language: "en", translate: false, type: "meeting" },
-  4: { label: "Seminar (EN->KO)", language: "en", translate: true, type: "seminar" },
-  5: { label: "Lecture (EN->KO)", language: "en", translate: true, type: "lecture" },
-  6: { label: "Korean Seminar", language: "ko", translate: false, type: "seminar" },
-  7: { label: "Korean Lecture", language: "ko", translate: false, type: "lecture" },
+  1: { label: "한국어 회의", language: "ko", translate: false, type: "meeting" },
+  2: { label: "영어 회의 (→한국어 번역)", language: "en", translate: true, type: "meeting" },
+  3: { label: "영어 회의 (번역 없음)", language: "en", translate: false, type: "meeting" },
+  4: { label: "세미나 (영어→한국어)", language: "en", translate: true, type: "seminar" },
+  5: { label: "강의 (영어→한국어)", language: "en", translate: true, type: "lecture" },
+  6: { label: "한국어 세미나", language: "ko", translate: false, type: "seminar" },
+  7: { label: "한국어 강의", language: "ko", translate: false, type: "lecture" },
 };

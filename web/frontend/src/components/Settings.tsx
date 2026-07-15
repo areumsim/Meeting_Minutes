@@ -5,7 +5,7 @@ import {
 import { motion, AnimatePresence } from "motion/react";
 import {
   getConfig, updateConfig, getConfigSchema, isPackagedMode,
-  testOpenAIKey, testObsidianPath,
+  testOpenAIKey, testAnthropicKey, testObsidianPath,
   getProfiles, createProfile, deleteProfile, clearSessions,
   getApiKey, setApiKey, getAnthropicKey, setAnthropicKey,
 } from "../lib/api";
@@ -18,7 +18,7 @@ interface Field {
   type: "text" | "password" | "bool" | "select" | "number";
   default?: any;
   desc?: string;
-  options?: string[];
+  options?: (string | { value: string; label: string })[];
   sensitive?: boolean;
   mirror?: [string, string][];
   placeholder?: string;
@@ -146,9 +146,12 @@ export default function SettingsView() {
     setSaving(false);
   };
 
-  const runTest = async (kind: "openai" | "obsidian") => {
+  const runTest = async (kind: "openai" | "anthropic" | "obsidian") => {
     setTesting(kind);
-    const res = kind === "openai" ? await testOpenAIKey() : await testObsidianPath();
+    const res =
+      kind === "openai" ? await testOpenAIKey() :
+      kind === "anthropic" ? await testAnthropicKey() :
+      await testObsidianPath();
     setTestMsg((prev) => ({ ...prev, [kind]: res }));
     setTesting("");
   };
@@ -175,21 +178,21 @@ export default function SettingsView() {
 
   return (
     <div className="max-w-3xl mx-auto px-1 md:px-0">
-      <h2 className="text-3xl font-bold tracking-tight mb-2">설정</h2>
-      <p className="text-brand-500 mb-8">
+      <h2 className="text-2xl font-bold tracking-tight mb-1">설정</h2>
+      <p className="text-sm text-brand-500 mb-4">
         {packaged
           ? "모든 설정은 이 PC의 config.json 에 저장됩니다."
           : "설정은 이 기기(브라우저)에만 저장됩니다."}
       </p>
 
       {schema.map((group) => (
-        <section key={group.id} className="bg-white border border-brand-200 rounded-2xl p-6 md:p-8 mb-6 shadow-sm">
-          <h3 className="text-lg font-bold mb-1 flex items-center gap-2 text-brand-900">
-            <Settings size={18} /> {group.label}
+        <section key={group.id} className="bg-white border border-brand-200 rounded-2xl p-4 md:p-5 mb-3 shadow-sm">
+          <h3 className="text-base font-bold mb-1 flex items-center gap-2 text-brand-900">
+            <Settings size={16} /> {group.label}
           </h3>
-          {group.desc && <p className="text-sm text-brand-500 mb-5">{group.desc}</p>}
+          {group.desc && <p className="text-xs text-brand-500 mb-3">{group.desc}</p>}
 
-          <div className="space-y-5">
+          <div className="space-y-3">
             {group.fields.map((f) => (
               <FieldRow key={pathOf(f)} field={f} value={values[pathOf(f)]} onChange={(v) => setField(pathOf(f), v)} />
             ))}
@@ -197,7 +200,10 @@ export default function SettingsView() {
 
           {/* 연결 테스트 버튼 (패키지 모드) */}
           {packaged && group.id === "api" && (
-            <TestRow label="OpenAI 연결 테스트" busy={testing === "openai"} result={testMsg.openai} onClick={() => runTest("openai")} />
+            <>
+              <TestRow label="OpenAI 연결 테스트" busy={testing === "openai"} result={testMsg.openai} onClick={() => runTest("openai")} />
+              <TestRow label="Claude 연결 테스트" busy={testing === "anthropic"} result={testMsg.anthropic} onClick={() => runTest("anthropic")} />
+            </>
           )}
           {packaged && group.id === "obsidian" && (
             <TestRow label="Obsidian 경로 확인" busy={testing === "obsidian"} result={testMsg.obsidian} onClick={() => runTest("obsidian")} />
@@ -219,7 +225,7 @@ export default function SettingsView() {
       </button>
 
       {/* Profiles */}
-      <section className="bg-white border border-brand-200 rounded-2xl p-6 md:p-8 mb-6">
+      <section className="bg-white border border-brand-200 rounded-2xl p-4 md:p-5 mb-3">
         <div className="flex items-center justify-between mb-6">
           <h3 className="text-lg font-bold">처리 프로필</h3>
           <button
@@ -311,10 +317,12 @@ function FieldRow({ field, value, onChange }: { field: Field; value: any; onChan
     <div className="space-y-2">
       <label className="text-xs font-bold text-zinc-400 uppercase tracking-widest">{field.label}</label>
       {field.type === "select" ? (
-        <select value={value ?? ""} onChange={(e) => onChange(e.target.value)} className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl outline-none focus:ring-2 focus:ring-brand-500 text-sm">
-          {(field.options || []).map((o) => (
-            <option key={o} value={o}>{o}</option>
-          ))}
+        <select value={value ?? ""} onChange={(e) => onChange(e.target.value)} className="w-full px-3 py-2 bg-zinc-50 border border-zinc-200 rounded-lg outline-none focus:ring-2 focus:ring-brand-500 text-sm">
+          {(field.options || []).map((o) => {
+            const val = typeof o === "string" ? o : o.value;
+            const lbl = typeof o === "string" ? o : o.label;
+            return <option key={val} value={val}>{lbl}</option>;
+          })}
         </select>
       ) : (
         <input
@@ -322,7 +330,7 @@ function FieldRow({ field, value, onChange }: { field: Field; value: any; onChan
           value={value ?? ""}
           onChange={(e) => onChange(e.target.value)}
           placeholder={field.placeholder || ""}
-          className="w-full px-4 py-3 bg-zinc-50 border border-zinc-200 rounded-xl outline-none focus:ring-2 focus:ring-brand-500 text-sm font-mono tracking-wide"
+          className="w-full px-3 py-2 bg-zinc-50 border border-zinc-200 rounded-lg outline-none focus:ring-2 focus:ring-brand-500 text-sm font-mono tracking-wide"
         />
       )}
       {field.desc && <p className="text-xs text-brand-400">{field.desc}</p>}

@@ -461,7 +461,7 @@ export default function Recorder({ onComplete }: { onComplete: (id: string) => v
 
     } catch (err) {
       console.error("Recording start error:", err);
-      alert("Could not start connecting to OpenAI. Check API Key in Settings.");
+      alert("OpenAI 연결을 시작할 수 없습니다. 설정에서 API 키를 확인하세요.");
       setStatus("idle");
     }
   };
@@ -672,14 +672,14 @@ export default function Recorder({ onComplete }: { onComplete: (id: string) => v
               </div>
               <div>
                 <h3 className="text-2xl font-bold tracking-tight">
-                  {status === "generating" ? "Generating Documents..." :
-                   status === "completed" ? "Session Complete" :
-                   status === "connecting" ? "Connecting..." :
-                   isRecording ? (isPaused ? "Recording Paused" : "Recording Live") : "Ready to Record"}
+                  {status === "generating" ? "문서 생성 중..." :
+                   status === "completed" ? "세션 완료" :
+                   status === "connecting" ? "연결 중..." :
+                   isRecording ? (isPaused ? "녹음 일시정지" : "녹음 중") : "녹음 준비 완료"}
                 </h3>
                 <div className="flex items-center gap-2 text-zinc-400 text-sm mt-1">
                   <Activity className="w-4 h-4" />
-                  <span>{wsStatus || (isRecording ? "Streaming to OpenAI..." : "Microphone ready")}</span>
+                  <span>{wsStatus || (isRecording ? "OpenAI로 스트리밍 중..." : "마이크 준비됨")}</span>
                 </div>
               </div>
             </div>
@@ -735,13 +735,13 @@ export default function Recorder({ onComplete }: { onComplete: (id: string) => v
         <div className="flex-1 flex flex-col p-4 md:p-10">
           {/* Settings Toggle */}
           <div className="flex items-center justify-between mb-4 md:mb-6 shrink-0">
-            <h4 className="text-sm font-bold text-zinc-400 uppercase tracking-widest">Session Configuration</h4>
+            <h4 className="text-sm font-bold text-zinc-400 uppercase tracking-widest">세션 설정</h4>
             <button
               onClick={() => setIsSettingsCollapsed(!isSettingsCollapsed)}
               className="flex items-center gap-2 text-xs font-bold text-zinc-500 hover:text-zinc-900 transition-colors"
             >
               <ChevronDown className={`w-4 h-4 transition-transform ${isSettingsCollapsed ? "-rotate-90" : ""}`} />
-              {isSettingsCollapsed ? "Show Settings" : "Hide Settings"}
+              {isSettingsCollapsed ? "설정 보기" : "설정 숨기기"}
             </button>
           </div>
 
@@ -757,13 +757,13 @@ export default function Recorder({ onComplete }: { onComplete: (id: string) => v
                   <div className="space-y-6">
                     <div className="space-y-2">
                       <label className="text-xs font-bold text-zinc-400 uppercase tracking-widest flex items-center gap-2">
-                        <Info className="w-3 h-3" /> Session Title
+                        <Info className="w-3 h-3" /> 세션 제목
                       </label>
                       <input
                         type="text"
                         value={title}
                         onChange={(e) => setTitle(e.target.value)}
-                        placeholder="e.g. Weekly Product Sync"
+                        placeholder="예: 주간 제품 회의"
                         disabled={isRecording}
                         className="w-full px-5 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-zinc-900 focus:border-transparent outline-none transition-all disabled:opacity-50 font-medium"
                       />
@@ -771,13 +771,13 @@ export default function Recorder({ onComplete }: { onComplete: (id: string) => v
 
                     <div className="space-y-2">
                       <label className="text-xs font-bold text-zinc-400 uppercase tracking-widest flex items-center gap-2">
-                        <User className="w-3 h-3" /> Participants
+                        <User className="w-3 h-3" /> 참석자
                       </label>
                       <input
                         type="text"
                         value={speakers}
                         onChange={(e) => setSpeakers(e.target.value)}
-                        placeholder="e.g. John, Sarah, Mike"
+                        placeholder="예: 홍길동, 김영희, 이철수"
                         disabled={isRecording}
                         className="w-full px-5 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-zinc-900 focus:border-transparent outline-none transition-all disabled:opacity-50 font-medium"
                       />
@@ -785,12 +785,12 @@ export default function Recorder({ onComplete }: { onComplete: (id: string) => v
 
                     <div className="space-y-2">
                       <label className="text-xs font-bold text-zinc-400 uppercase tracking-widest flex items-center gap-2">
-                        <Settings2 className="w-3 h-3" /> Topic / Context
+                        <Settings2 className="w-3 h-3" /> 주제 / 맥락
                       </label>
                       <textarea
                         value={topic}
                         onChange={(e) => setTopic(e.target.value)}
-                        placeholder="Provide context for better AI accuracy..."
+                        placeholder="정확도를 높이려면 회의 배경을 적어주세요..."
                         disabled={isRecording}
                         className="w-full px-5 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-zinc-900 focus:border-transparent outline-none transition-all disabled:opacity-50 h-32 resize-none font-medium"
                       />
@@ -801,7 +801,7 @@ export default function Recorder({ onComplete }: { onComplete: (id: string) => v
                     modeNum={modeNum}
                     onChange={setModeNum}
                     disabled={isRecording}
-                    hint="Audio is streamed directly to OpenAI Realtime API for sub-second latency transcription."
+                    hint="오디오를 OpenAI Realtime API로 직접 스트리밍해 1초 미만 지연으로 전사합니다."
                   />
                 </div>
               </motion.div>
@@ -825,7 +825,7 @@ export default function Recorder({ onComplete }: { onComplete: (id: string) => v
                        <div className="inline-flex items-center gap-2 bg-white/80 backdrop-blur-md px-3 py-1.5 rounded-full shadow-sm">
                         <div className={`w-2 h-2 rounded-full ${status === "generating" ? "bg-amber-500 animate-pulse" : status === "completed" ? "bg-emerald-500" : "bg-red-500 animate-pulse"}`} />
                         <span className="text-[10px] font-bold text-brand-400 uppercase tracking-widest">
-                          {status === "generating" ? "Processing" : status === "completed" ? "Done" : "Live Streaming"}
+                          {status === "generating" ? "처리 중" : status === "completed" ? "완료" : "실시간 스트리밍"}
                         </span>
                       </div>
                     </div>
@@ -837,7 +837,7 @@ export default function Recorder({ onComplete }: { onComplete: (id: string) => v
                           <Activity className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 text-brand-400" size={14} />
                         </div>
                         <p className="text-sm font-medium tracking-wide">
-                          {status === "generating" ? "Generating meeting documents..." : "Listening to audio..."}
+                          {status === "generating" ? "회의 문서를 생성하는 중..." : "오디오를 듣는 중..."}
                         </p>
                       </div>
                     ) : (
@@ -934,7 +934,7 @@ export default function Recorder({ onComplete }: { onComplete: (id: string) => v
                       </div>
 
                       <p className="text-[10px] md:text-xs text-brand-400 font-bold uppercase tracking-[0.3em] animate-pulse">
-                        {isPaused ? "Recording Paused" : "Session in progress"}
+                        {isPaused ? "녹음 일시정지" : "세션 진행 중"}
                       </p>
                     </div>
                   )}
@@ -942,7 +942,7 @@ export default function Recorder({ onComplete }: { onComplete: (id: string) => v
                   {status === "generating" && (
                     <div className="flex items-center gap-3 text-amber-600">
                       <Loader2 className="animate-spin" size={20} />
-                      <span className="text-sm font-bold">AI is generating meeting documents...</span>
+                      <span className="text-sm font-bold">AI가 회의 문서를 생성하는 중...</span>
                     </div>
                   )}
                 </motion.div>
@@ -966,9 +966,9 @@ export default function Recorder({ onComplete }: { onComplete: (id: string) => v
                     )}
                   </button>
                   <div className="text-center">
-                    <p className="text-lg font-bold text-zinc-900">Start New Session</p>
+                    <p className="text-lg font-bold text-zinc-900">새 세션 시작</p>
                     <p className="text-sm text-zinc-500 mt-1">
-                      Real-time transcription via OpenAI Realtime API
+                      OpenAI Realtime API로 실시간 전사
                     </p>
                   </div>
                 </motion.div>

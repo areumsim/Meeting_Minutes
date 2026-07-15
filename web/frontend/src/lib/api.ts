@@ -91,6 +91,15 @@ export const testOpenAIKey = async (): Promise<{ ok: boolean; message: string }>
   }
 };
 
+export const testAnthropicKey = async (): Promise<{ ok: boolean; message: string }> => {
+  try {
+    const res = await fetch("/api/config/test/anthropic", { method: "POST" });
+    return await res.json();
+  } catch (e: any) {
+    return { ok: false, message: `연결 테스트 실패: ${e?.message || e}` };
+  }
+};
+
 export const testObsidianPath = async (): Promise<{ ok: boolean; message: string }> => {
   try {
     const res = await fetch("/api/config/test/obsidian", { method: "POST" });

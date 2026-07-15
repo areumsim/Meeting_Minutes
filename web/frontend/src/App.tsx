@@ -20,7 +20,7 @@ export default function App() {
   const view = viewState;
   const setView = (v: View) => {
     if ((window as any).isRecordingActive) {
-      if (!window.confirm("A realtime recording is currently in progress. Exiting will stop the recording. Are you sure?")) {
+      if (!window.confirm("실시간 녹음이 진행 중입니다. 나가면 녹음이 중지됩니다. 계속할까요?")) {
         return;
       }
       (window as any).stopActiveRecording && (window as any).stopActiveRecording();
@@ -69,27 +69,27 @@ export default function App() {
           </div>
 
           <div className="space-y-2">
-            <NavItem icon={<List size={18} />} label="Dashboard" active={view === "dashboard"} onClick={() => setView("dashboard")} />
-            <NavItem icon={<Mic size={18} />} label="Record" active={view === "recorder"} onClick={() => setView("recorder")} />
-            <NavItem icon={<FileAudio size={18} />} label="Upload" active={view === "upload"} onClick={() => setView("upload")} />
-            <NavItem icon={<FileText size={18} />} label="Text Analysis" active={view === "text"} onClick={() => setView("text")} />
-            <NavItem icon={<MessageCircleQuestion size={18} />} label="Ask Wiki" active={view === "wiki"} onClick={() => setView("wiki")} />
+            <NavItem icon={<List size={18} />} label="대시보드" active={view === "dashboard"} onClick={() => setView("dashboard")} />
+            <NavItem icon={<Mic size={18} />} label="녹음" active={view === "recorder"} onClick={() => setView("recorder")} />
+            <NavItem icon={<FileAudio size={18} />} label="업로드" active={view === "upload"} onClick={() => setView("upload")} />
+            <NavItem icon={<FileText size={18} />} label="텍스트 분석" active={view === "text"} onClick={() => setView("text")} />
+            <NavItem icon={<MessageCircleQuestion size={18} />} label="위키 질문" active={view === "wiki"} onClick={() => setView("wiki")} />
           </div>
         </div>
 
         <div className="mt-auto p-8 border-t border-brand-100">
-          <NavItem icon={<Settings size={18} />} label="Settings" active={view === "settings"} onClick={() => setView("settings")} />
+          <NavItem icon={<Settings size={18} />} label="설정" active={view === "settings"} onClick={() => setView("settings")} />
         </div>
       </nav>
 
       {/* Bottom Tab Bar (iPhone / Mobile) */}
       <nav className="md:hidden fixed bottom-0 left-0 right-0 bg-white/90 backdrop-blur-xl border-t border-brand-200 z-50 flex items-center justify-around pb-[env(safe-area-inset-bottom,0px)] pt-1 px-1 shadow-[0_-10px_30px_rgba(0,0,0,0.05)]">
-        <TabItem icon={<List size={20} />} label="Home" active={view === "dashboard"} onClick={() => setView("dashboard")} />
-        <TabItem icon={<Mic size={20} />} label="Record" active={view === "recorder"} onClick={() => setView("recorder")} />
-        <TabItem icon={<FileAudio size={20} />} label="Upload" active={view === "upload"} onClick={() => setView("upload")} />
-        <TabItem icon={<FileText size={20} />} label="Text" active={view === "text"} onClick={() => setView("text")} />
-        <TabItem icon={<MessageCircleQuestion size={20} />} label="Wiki" active={view === "wiki"} onClick={() => setView("wiki")} />
-        <TabItem icon={<Settings size={20} />} label="Settings" active={view === "settings"} onClick={() => setView("settings")} />
+        <TabItem icon={<List size={20} />} label="홈" active={view === "dashboard"} onClick={() => setView("dashboard")} />
+        <TabItem icon={<Mic size={20} />} label="녹음" active={view === "recorder"} onClick={() => setView("recorder")} />
+        <TabItem icon={<FileAudio size={20} />} label="업로드" active={view === "upload"} onClick={() => setView("upload")} />
+        <TabItem icon={<FileText size={20} />} label="텍스트" active={view === "text"} onClick={() => setView("text")} />
+        <TabItem icon={<MessageCircleQuestion size={20} />} label="위키" active={view === "wiki"} onClick={() => setView("wiki")} />
+        <TabItem icon={<Settings size={20} />} label="설정" active={view === "settings"} onClick={() => setView("settings")} />
       </nav>
 
       {/* Main Content */}

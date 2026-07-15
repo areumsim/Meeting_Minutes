@@ -156,6 +156,37 @@ def test_openai():
         return {"ok": False, "message": f"연결 실패: {e}"}
 
 
+@router.post("/config/test/anthropic")
+def test_anthropic():
+    """저장된 Anthropic(Claude) 키의 유효성을 가볍게 확인. 키는 응답에 포함하지 않음."""
+    try:
+        from meeting_minutes_app.common import config_loader
+        key = config_loader.get_api_key("api.anthropic_api_key", "ANTHROPIC_API_KEY")
+        verify = config_loader.get("ssl.verify", True)
+    except Exception as e:
+        return {"ok": False, "message": f"설정 로드 실패: {e}"}
+
+    if not key:
+        return {"ok": False, "message": "Anthropic API 키가 설정되지 않았습니다."}
+
+    try:
+        import httpx
+        # /v1/models 는 x-api-key + anthropic-version 헤더만으로 조회 가능(과금 없음)
+        resp = httpx.get(
+            "https://api.anthropic.com/v1/models",
+            headers={"x-api-key": key, "anthropic-version": "2023-06-01"},
+            timeout=10.0,
+            verify=bool(verify),
+        )
+        if resp.status_code == 200:
+            return {"ok": True, "message": "Anthropic 연결 성공 — 키가 유효합니다."}
+        if resp.status_code == 401:
+            return {"ok": False, "message": "API 키가 유효하지 않습니다 (401 인증 실패)."}
+        return {"ok": False, "message": f"Anthropic 응답 오류 ({resp.status_code})."}
+    except Exception as e:
+        return {"ok": False, "message": f"연결 실패: {e}"}
+
+
 @router.post("/config/test/obsidian")
 def test_obsidian():
     """Obsidian 볼트 경로 존재/디렉터리 여부 확인."""

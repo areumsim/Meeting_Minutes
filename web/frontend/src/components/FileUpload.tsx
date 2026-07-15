@@ -52,7 +52,7 @@ export default function FileUpload({ onComplete }: { onComplete: (id: string) =>
       onComplete(data.sessionId);
     } catch (err) {
       console.error(err);
-      alert("Upload failed. Check console for details.");
+      alert(`업로드 실패: ${err instanceof Error ? err.message : "콘솔에서 상세 내용을 확인하세요."}`);
       setUploading(false);
     }
   };
@@ -63,18 +63,18 @@ export default function FileUpload({ onComplete }: { onComplete: (id: string) =>
   };
 
   return (
-    <div className="max-w-4xl mx-auto px-1 md:px-0">
-      <h2 className="text-3xl md:text-4xl font-bold tracking-tight mb-2">Upload File</h2>
-      <p className="text-brand-500 mb-6 md:mb-10 text-sm md:text-base">Upload audio or video files for STT and translation.</p>
+    <div className="max-w-3xl mx-auto px-1 md:px-0">
+      <h2 className="text-2xl font-bold tracking-tight mb-1">파일 업로드</h2>
+      <p className="text-brand-500 mb-4 text-sm">오디오/영상 파일을 올리면 전사·번역·회의록을 자동 생성합니다.</p>
 
-      <div className="bg-white border border-brand-100 md:border-zinc-200 rounded-2xl md:rounded-3xl shadow-sm md:shadow-xl p-5 md:p-10 flex flex-col gap-6 md:gap-8">
+      <div className="bg-white border border-zinc-200 rounded-2xl shadow-sm p-4 md:p-5 flex flex-col gap-4">
         {/* Drop Zone */}
         <div
           onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
           onDragLeave={() => setDragOver(false)}
           onDrop={handleDrop}
           onClick={() => fileRef.current?.click()}
-          className={`border-2 border-dashed rounded-2xl p-8 md:p-12 text-center cursor-pointer transition-all ${
+          className={`border-2 border-dashed rounded-xl p-5 md:p-7 text-center cursor-pointer transition-all ${
             dragOver ? "border-brand-900 bg-brand-50" : file ? "border-emerald-300 bg-emerald-50/30" : "border-brand-200 hover:border-brand-400 bg-zinc-50/50 hover:bg-zinc-50"
           }`}
         >
@@ -98,17 +98,17 @@ export default function FileUpload({ onComplete }: { onComplete: (id: string) =>
                 onClick={(e) => { e.stopPropagation(); setFile(null); }}
                 className="mt-2 md:mt-0 px-4 py-2 bg-white border border-red-200 text-sm text-red-500 hover:text-red-700 hover:bg-red-50 rounded-xl font-semibold md:ml-4 shadow-sm transition-colors"
               >
-                Change File
+                파일 변경
               </button>
             </div>
           ) : (
             <div className="flex flex-col items-center">
-              <div className="w-16 h-16 md:w-20 md:h-20 bg-brand-100 text-brand-600 rounded-full flex items-center justify-center mb-4 md:mb-6 shadow-sm">
-                <Upload className="w-8 h-8 md:w-10 md:h-10" />
+              <div className="w-14 h-14 bg-brand-100 text-brand-600 rounded-full flex items-center justify-center mb-3 shadow-sm">
+                <Upload className="w-7 h-7" />
               </div>
-              <h3 className="text-lg md:text-xl font-bold text-brand-900 mb-2">Tap to Select File</h3>
-              <p className="text-sm text-brand-500">or drag and drop here (iPad/PC)</p>
-              <div className="flex flex-wrap items-center justify-center gap-2 mt-5 text-xs font-semibold text-brand-400">
+              <h3 className="text-base font-bold text-brand-900 mb-1">클릭해서 파일 선택</h3>
+              <p className="text-sm text-brand-500">또는 여기로 끌어다 놓기</p>
+              <div className="flex flex-wrap items-center justify-center gap-2 mt-3 text-xs font-semibold text-brand-400">
                 <span className="bg-white px-2.5 py-1 rounded-md border border-brand-100">MP3</span>
                 <span className="bg-white px-2.5 py-1 rounded-md border border-brand-100">WAV</span>
                 <span className="bg-white px-2.5 py-1 rounded-md border border-brand-100">M4A</span>
@@ -119,40 +119,40 @@ export default function FileUpload({ onComplete }: { onComplete: (id: string) =>
         </div>
 
         {/* Settings */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-8 md:mt-2">
-          <div className="space-y-5 md:space-y-6">
-            <div className="space-y-2">
-              <label className="text-xs font-bold text-zinc-400 uppercase tracking-widest">Title</label>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="space-y-3">
+            <div className="space-y-1.5">
+              <label className="text-xs font-bold text-zinc-400 uppercase tracking-widest">제목</label>
               <input
                 type="text"
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
-                placeholder={file?.name || "Session title"}
-                className="w-full px-4 md:px-5 py-3 md:py-4 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-zinc-900 outline-none transition-all font-medium text-sm md:text-base"
+                placeholder={file?.name || "회의 제목"}
+                className="w-full px-3 py-2.5 bg-zinc-50 border border-zinc-200 rounded-lg focus:ring-2 focus:ring-zinc-900 outline-none transition-all font-medium text-sm"
               />
             </div>
-            <div className="space-y-2">
-              <label className="text-xs font-bold text-zinc-400 uppercase tracking-widest">Topic / Context</label>
+            <div className="space-y-1.5">
+              <label className="text-xs font-bold text-zinc-400 uppercase tracking-widest">주제 / 맥락</label>
               <textarea
                 value={topic}
                 onChange={(e) => setTopic(e.target.value)}
-                placeholder="Provide context for better accuracy..."
-                className="w-full px-4 md:px-5 py-3 md:py-4 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-zinc-900 outline-none transition-all h-24 md:h-32 resize-none font-medium text-sm md:text-base"
+                placeholder="정확도를 높이려면 회의 배경을 적어주세요..."
+                className="w-full px-3 py-2.5 bg-zinc-50 border border-zinc-200 rounded-lg focus:ring-2 focus:ring-zinc-900 outline-none transition-all h-20 resize-none font-medium text-sm"
               />
             </div>
-            <div className="space-y-2">
-              <label className="text-xs font-bold text-zinc-400 uppercase tracking-widest">Participants <span className="text-brand-300 font-normal normal-case">(Optional)</span></label>
+            <div className="space-y-1.5">
+              <label className="text-xs font-bold text-zinc-400 uppercase tracking-widest">참석자 <span className="text-brand-300 font-normal normal-case">(선택)</span></label>
               <input
                 type="text"
                 value={speakers}
                 onChange={(e) => setSpeakers(e.target.value)}
-                placeholder="e.g. John, Sarah, Mike"
-                className="w-full px-4 md:px-5 py-3 md:py-4 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-zinc-900 outline-none transition-all font-medium text-sm md:text-base"
+                placeholder="예: 홍길동, 김영희, 이철수"
+                className="w-full px-3 py-2.5 bg-zinc-50 border border-zinc-200 rounded-lg focus:ring-2 focus:ring-zinc-900 outline-none transition-all font-medium text-sm"
               />
             </div>
           </div>
 
-          <div className="space-y-6">
+          <div className="space-y-3">
             <ModeSelector modeNum={modeNum} onChange={setModeNum} />
 
             {/* Quick Profiles */}
@@ -163,7 +163,7 @@ export default function FileUpload({ onComplete }: { onComplete: (id: string) =>
                   className="flex items-center gap-2 text-xs font-bold text-zinc-500 hover:text-zinc-900 transition-colors"
                 >
                   <ChevronDown className={`w-4 h-4 transition-transform ${showProfiles ? "" : "-rotate-90"}`} />
-                  Quick Profiles ({profiles.length})
+                  빠른 프로필 ({profiles.length})
                 </button>
                 <AnimatePresence>
                   {showProfiles && (
@@ -200,10 +200,10 @@ export default function FileUpload({ onComplete }: { onComplete: (id: string) =>
         <button
           onClick={handleSubmit}
           disabled={!file || uploading}
-          className="w-full mt-10 flex items-center justify-center gap-3 py-4 bg-zinc-900 text-white rounded-2xl font-bold hover:bg-zinc-800 transition-all shadow-xl disabled:opacity-50 disabled:cursor-not-allowed active:scale-[0.98]"
+          className="w-full mt-1 flex items-center justify-center gap-2 py-3 bg-zinc-900 text-white rounded-xl font-bold hover:bg-zinc-800 transition-all shadow-lg disabled:opacity-50 disabled:cursor-not-allowed active:scale-[0.98]"
         >
-          {uploading ? <Loader2 className="animate-spin" size={20} /> : <Upload size={20} />}
-          {uploading ? "Processing..." : "Upload & Process"}
+          {uploading ? <Loader2 className="animate-spin" size={18} /> : <Upload size={18} />}
+          {uploading ? "처리 중..." : "업로드 & 처리"}
         </button>
       </div>
     </div>

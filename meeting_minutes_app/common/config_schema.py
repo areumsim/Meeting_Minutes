@@ -95,30 +95,57 @@ SCHEMA: List[Dict[str, Any]] = [
     {
         "id": "models",
         "label": "모델",
-        "desc": "회의록/요약 생성에 사용할 LLM과 음성 인식 모델을 선택합니다.",
+        "desc": "회의록/요약 생성에 쓸 AI와 음성 인식 모델을 고릅니다. 비용은 100만 토큰당 대략치(입력/출력)이며 변동될 수 있습니다.",
         "fields": [
             {
                 "section": "models", "key": "llm",
-                "label": "회의록 생성 LLM", "type": "select", "default": "claude",
-                "options": ["gpt", "claude"],
+                "label": "회의록 생성 AI", "type": "select", "default": "claude",
+                "desc": "GPT(OpenAI) 또는 Claude(Anthropic) 중 선택. Claude 선택 시 Anthropic 키 필요.",
+                "options": [
+                    {"value": "gpt", "label": "GPT (OpenAI)"},
+                    {"value": "claude", "label": "Claude (Anthropic)"},
+                ],
             },
             {
                 "section": "models", "key": "stt",
                 "label": "음성 인식(STT) 모델", "type": "select",
-                "default": "gpt-4o-mini-transcribe-2025-12-15",
+                "default": "gpt-4o-mini-transcribe",
+                "desc": "음성을 글로 옮기는 모델. mini가 저렴·빠르고, 일반형이 더 정확합니다.",
                 "options": [
-                    "gpt-4o-mini-transcribe",
-                    "gpt-4o-mini-transcribe-2025-12-15",
-                    "gpt-4o-transcribe",
-                    "gpt-4o-transcribe-diarize",
-                    "whisper-1",
+                    {"value": "gpt-4o-mini-transcribe", "label": "gpt-4o-mini-transcribe — 저렴·빠름 (추천)"},
+                    {"value": "gpt-4o-transcribe", "label": "gpt-4o-transcribe — 고정확·비쌈"},
+                    {"value": "whisper-1", "label": "whisper-1 — 구형·안정적"},
                 ],
             },
-            {"section": "models", "key": "gpt_model", "label": "GPT 모델", "type": "text", "default": "gpt-4o-mini"},
-            {"section": "models", "key": "claude_model", "label": "Claude 모델", "type": "text", "default": "claude-opus-4-6"},
-            {"section": "models", "key": "minutes_model", "label": "회의록 생성 모델(GPT)", "type": "text", "default": "gpt-4o"},
-            {"section": "models", "key": "summary_model", "label": "요약 생성 모델(GPT)", "type": "text", "default": "gpt-4o"},
-            {"section": "models", "key": "translate_model", "label": "번역 모델", "type": "text", "default": "gpt-4o-mini"},
+            {
+                "section": "models", "key": "claude_model",
+                "label": "Claude 모델", "type": "select", "default": "claude-opus-4-8",
+                "desc": "회의록 생성 AI를 Claude로 선택한 경우 사용.",
+                "options": [
+                    {"value": "claude-opus-4-8", "label": "Opus 4.8 — 최고 성능 (약 $5/$25)"},
+                    {"value": "claude-sonnet-5", "label": "Sonnet 5 — 균형·빠름 (약 $3/$15)"},
+                    {"value": "claude-haiku-4-5", "label": "Haiku 4.5 — 가장 저렴·빠름 (약 $1/$5)"},
+                    {"value": "claude-opus-4-6", "label": "Opus 4.6 — 구버전 (약 $5/$25)"},
+                ],
+            },
+            {
+                "section": "models", "key": "gpt_model",
+                "label": "GPT 모델", "type": "select", "default": "gpt-4o-mini",
+                "desc": "회의록 생성 AI를 GPT로 선택한 경우 사용.",
+                "options": [
+                    {"value": "gpt-4o-mini", "label": "gpt-4o-mini — 저렴·빠름 (추천)"},
+                    {"value": "gpt-4o", "label": "gpt-4o — 고품질·비쌈"},
+                ],
+            },
+            {
+                "section": "models", "key": "translate_model",
+                "label": "번역 모델", "type": "select", "default": "gpt-4o-mini",
+                "desc": "영어→한국어 번역에 사용.",
+                "options": [
+                    {"value": "gpt-4o-mini", "label": "gpt-4o-mini — 저렴·빠름 (추천)"},
+                    {"value": "gpt-4o", "label": "gpt-4o — 고품질"},
+                ],
+            },
         ],
     },
     {

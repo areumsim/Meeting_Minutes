@@ -53,7 +53,7 @@ export default function WikiAsk() {
 
   return (
     <div className="max-w-4xl mx-auto px-1 md:px-0 pb-20 md:pb-0">
-      <h2 className="text-3xl md:text-4xl font-bold tracking-tight mb-2">Ask Vault Wiki</h2>
+      <h2 className="text-2xl font-bold tracking-tight mb-1">볼트 위키 질문</h2>
       <p className="text-brand-500 mb-6 md:mb-10 text-sm md:text-base">
         Obsidian Vault에 쌓인 회의·세미나 기록을 근거로 질문에 답합니다.
       </p>

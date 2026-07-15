@@ -51,8 +51,8 @@ SCHEMA: List[Dict[str, Any]] = [
     },
     {
         "id": "obsidian",
-        "label": "Obsidian 연동",
-        "desc": "회의록을 Obsidian 볼트에 저장합니다. 사용하지 않으면 파일(output 폴더)로만 저장됩니다.",
+        "label": "Obsidian 연동 (선택)",
+        "desc": "볼트 폴더만 지정하면 REST API 없이도 회의록이 그 폴더의 .md로 저장되고 위키 검색에 쓰입니다. Local REST API는 Obsidian 앱에 실시간 반영이 필요할 때만 켜세요. 아무것도 안 하면 output 폴더에 파일로만 저장됩니다.",
         "fields": [
             {
                 "section": "obsidian", "key": "enabled",

@@ -319,17 +319,30 @@ def enrich_and_publish(
     project_override = route.get("project", "") if route and route.get("mode") == "domain" else ""
     output_folder = route.get("output_folder", "") if route and route.get("mode") == "folder" else ""
 
-    # Obsidian 클라이언트 (설정 없거나 연결 실패 시 None → 볼트 기록만 생략)
+    # Obsidian 클라이언트 (REST 우선, 실패 시 폴더-only 파일 기록으로 폴백)
     obs = None
     try:
         from meeting_minutes_app.wiki_core.obsidian import ObsidianClient
         obs = ObsidianClient.from_config(project_override=project_override)
         if obs is not None and not obs.ping():
-            warn("Obsidian 연결 실패 → 볼트 기록 건너뜀")
+            warn("Obsidian REST 연결 실패 → 폴더-only 기록으로 전환")
             obs.close(); obs = None
     except Exception as e:
-        logger.warning(f"[publish] Obsidian 초기화 실패: {e}")
+        logger.warning(f"[publish] Obsidian REST 초기화 실패: {e}")
         obs = None
+
+    # REST 클라이언트가 없으면 vault 폴더(.md)에 직접 기록(folder-only). 폴더 미설정 시 None.
+    if obs is None:
+        try:
+            from meeting_minutes_app.wiki_core.obsidian_fs import FilesystemObsidianClient
+            fs = FilesystemObsidianClient.from_config(project_override=project_override)
+            if fs is not None:
+                obs = fs
+                info(f"Obsidian 볼트 폴더에 직접 기록(folder-only): {fs.vault_root}")
+            else:
+                info("Obsidian 볼트 폴더 미설정 → 볼트 기록 건너뜀(output 파일만 저장)")
+        except Exception as e:
+            logger.warning(f"[publish] 폴더 writer 초기화 실패: {e}")
 
     # 1) 용어 보완
     enr = {"glossary_md": "", "related_notes": [], "sources": []}

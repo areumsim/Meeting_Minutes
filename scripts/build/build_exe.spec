@@ -113,6 +113,7 @@ hiddenimports = [
     'meeting_minutes_app.common.notifier',
     'meeting_minutes_app.wiki_core',
     'meeting_minutes_app.wiki_core.obsidian',
+    'meeting_minutes_app.wiki_core.obsidian_fs',
     'meeting_minutes_app.wiki_core.vault_indexer',
     'meeting_minutes_app.wiki_core.vault_retrieval',
     'meeting_minutes_app.wiki_core.wiki_knowledge',

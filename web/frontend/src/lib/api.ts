@@ -68,11 +68,15 @@ export const updateConfig = async (data: any) => {
 };
 
 // config 스키마(웹 Settings 자동 렌더링용) — 백엔드가 있을 때만 제공.
+// 백엔드는 { version, groups } 형태로 주므로 groups 배열만 반환한다.
 export const getConfigSchema = async (): Promise<any[] | null> => {
   if (!(await isPackagedMode())) return null;
   try {
     const res = await fetch("/api/config/schema");
-    if (res.ok) return res.json();
+    if (res.ok) {
+      const data = await res.json();
+      return Array.isArray(data) ? data : (data?.groups ?? null);
+    }
   } catch { /* ignore */ }
   return null;
 };

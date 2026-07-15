@@ -5,7 +5,7 @@ import {
 import { motion, AnimatePresence } from "motion/react";
 import {
   getConfig, updateConfig, getConfigSchema, isPackagedMode,
-  testOpenAIKey, testAnthropicKey, testObsidianPath,
+  testOpenAIKey, testAnthropicKey, testObsidianPath, reindexVault,
   getProfiles, createProfile, deleteProfile, clearSessions,
   getApiKey, setApiKey, getAnthropicKey, setAnthropicKey,
 } from "../lib/api";
@@ -156,6 +156,13 @@ export default function SettingsView() {
     setTesting("");
   };
 
+  const handleReindex = async () => {
+    setTesting("reindex");
+    const res = await reindexVault();
+    setTestMsg((prev) => ({ ...prev, reindex: res }));
+    setTesting("");
+  };
+
   const handleCreateProfile = async () => {
     if (!newProfile.name.trim()) return;
     await createProfile(newProfile);
@@ -206,7 +213,11 @@ export default function SettingsView() {
             </>
           )}
           {packaged && group.id === "obsidian" && (
-            <TestRow label="Obsidian 경로 확인" busy={testing === "obsidian"} result={testMsg.obsidian} onClick={() => runTest("obsidian")} />
+            <>
+              <TestRow label="Obsidian 경로 확인" busy={testing === "obsidian"} result={testMsg.obsidian} onClick={() => runTest("obsidian")} />
+              <TestRow label="검색 인덱스 재빌드" busy={testing === "reindex"} result={testMsg.reindex} onClick={handleReindex} />
+              <p className="text-xs text-brand-400 mt-1">볼트(.md 폴더)를 바꾸거나 노트를 추가한 뒤 눌러 검색·위키를 최신화하세요.</p>
+            </>
           )}
         </section>
       ))}

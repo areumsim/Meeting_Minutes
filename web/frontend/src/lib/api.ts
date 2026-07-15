@@ -109,6 +109,30 @@ export const testObsidianPath = async (): Promise<{ ok: boolean; message: string
   }
 };
 
+// 볼트 인덱스 재빌드 — folder-only 위키 검색을 위해 .md 폴더를 다시 색인.
+export const reindexVault = async (): Promise<{ ok: boolean; message: string }> => {
+  try {
+    const res = await fetch("/api/reindex", { method: "POST" });
+    return await res.json();
+  } catch (e: any) {
+    return { ok: false, message: `재빌드 실패: ${e?.message || e}` };
+  }
+};
+
+// 회의 준비 브리핑 생성.
+export const prepBrief = async (title: string, topic: string): Promise<{ ok: boolean; brief?: string; message?: string }> => {
+  try {
+    const res = await fetch("/api/prep-brief", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title, topic }),
+    });
+    return await res.json();
+  } catch (e: any) {
+    return { ok: false, message: `브리핑 생성 실패: ${e?.message || e}` };
+  }
+};
+
 // Profiles Management
 const DEFAULT_PROFILES = [
   { name: "General Meeting", description: "Standard dual language", type: "meeting", language: "ko", translate: false, source: "builtin" },
@@ -397,10 +421,20 @@ export const uploadFile = async (formData: FormData) => {
 
 // Text Input Direct Processing
 export const processTextInput = async (text: string, metadata: any) => {
-  // 텍스트 직접 입력은 아직 서버 엔드포인트가 없어 모바일(브라우저-직접) 경로만 지원.
-  // 패키지 모드에서는 키가 서버에만 있으므로 명확히 안내.
+  // 패키지(백엔드) 모드: 서버가 텍스트→회의록 생성(키 미노출).
   if (await isPackagedMode()) {
-    throw new Error("데스크톱 앱에서는 텍스트 직접 입력이 아직 지원되지 않습니다. 오디오 파일 업로드 또는 실시간 녹음을 사용하세요.");
+    const res = await fetch("/api/process-text", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text, title: metadata.title, topic: metadata.topic, type: metadata.type }),
+    });
+    if (!res.ok) {
+      const d = await res.json().catch(() => null);
+      throw new Error(d?.detail || `처리 실패 (${res.status})`);
+    }
+    const data = await res.json();
+    void pollAndMirrorSession(data.sessionId);
+    return { sessionId: data.sessionId, status: "processing" };
   }
   const sessionId = crypto.randomUUID();
   const session = {
@@ -563,10 +597,19 @@ const callOpenAIWithFallback = async (prompt: string, apikey: string, primaryMod
 
 // Client-side Session Document Generation
 export const generateSummaryForSession = async (sessionId: string, userNotes?: string) => {
-   // 패키지 모드: 회의록 생성은 서버 배치 파이프라인이 담당(키 서버 보관). 브라우저-직접
-   // 재생성은 아직 서버 엔드포인트가 없어 미지원 — 조용한 키 오류 대신 명확히 안내.
+   // 패키지 모드: 서버가 기존 전사를 재사용해 노트를 반영, 회의록을 재생성.
    if (await isPackagedMode()) {
-     throw new Error("데스크톱 앱에서는 브라우저 재생성이 지원되지 않습니다(서버가 자동 생성).");
+     const res = await fetch(`/api/sessions/${sessionId}/regenerate`, {
+       method: "POST",
+       headers: { "Content-Type": "application/json" },
+       body: JSON.stringify({ notes: userNotes || "" }),
+     });
+     if (!res.ok) {
+       const d = await res.json().catch(() => null);
+       throw new Error(d?.detail || `재생성 실패 (${res.status})`);
+     }
+     void pollAndMirrorSession(sessionId);
+     return;
    }
    const session: any = await sessionsStore.getItem(sessionId);
    const segments: any = await segmentsStore.getItem(sessionId) || [];

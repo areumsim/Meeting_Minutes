@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { Mic, FileAudio, List, Settings, FileText, MessageCircleQuestion } from "lucide-react";
+import { Mic, FileAudio, List, Settings, FileText, MessageCircleQuestion, ClipboardList } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import Dashboard from "./components/Dashboard";
 import Recorder from "./components/Recorder";
@@ -7,10 +7,11 @@ import SessionDetail from "./components/SessionDetail";
 import FileUpload from "./components/FileUpload";
 import TextInput from "./components/TextInput";
 import WikiAsk from "./components/WikiAsk";
+import PrepBrief from "./components/PrepBrief";
 import SettingsView from "./components/Settings";
 import { getApiKey, getConfig } from "./lib/api";
 
-type View = "dashboard" | "recorder" | "upload" | "text" | "wiki" | "detail" | "settings";
+type View = "dashboard" | "recorder" | "upload" | "text" | "wiki" | "prep" | "detail" | "settings";
 
 export default function App() {
   const [viewState, setViewState] = useState<View>("dashboard");
@@ -74,6 +75,7 @@ export default function App() {
             <NavItem icon={<FileAudio size={18} />} label="업로드" active={view === "upload"} onClick={() => setView("upload")} />
             <NavItem icon={<FileText size={18} />} label="텍스트 분석" active={view === "text"} onClick={() => setView("text")} />
             <NavItem icon={<MessageCircleQuestion size={18} />} label="위키 질문" active={view === "wiki"} onClick={() => setView("wiki")} />
+            <NavItem icon={<ClipboardList size={18} />} label="회의 준비" active={view === "prep"} onClick={() => setView("prep")} />
           </div>
         </div>
 
@@ -114,6 +116,7 @@ export default function App() {
             {view === "upload" && <FileUpload onComplete={navigateToDetail} />}
             {view === "text" && <TextInput onComplete={navigateToDetail} />}
             {view === "wiki" && <WikiAsk />}
+            {view === "prep" && <PrepBrief />}
             {view === "settings" && <SettingsView />}
             {view === "detail" && selectedSessionId && (
               <SessionDetail id={selectedSessionId} onBack={() => setView("dashboard")} />

@@ -99,6 +99,9 @@ hiddenimports = [
     'web.backend.api.realtime',
     'web.backend.api.profiles',
     'web.backend.api.settings',
+    'web.backend.api.graph',
+    'web.backend.api.wiki',
+    'web.backend.api.tools',
 
     # meeting_minutes_app 서브패키지 (common/wiki_core/meeting_pipeline)
     'meeting_minutes_app',

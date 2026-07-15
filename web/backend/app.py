@@ -78,6 +78,7 @@ from web.backend.api.profiles import router as profiles_router
 from web.backend.api.settings import router as settings_router
 from web.backend.api.graph import router as graph_router
 from web.backend.api.wiki import router as wiki_router
+from web.backend.api.tools import router as tools_router
 
 app.include_router(sessions_router, prefix="/api")
 app.include_router(batch_router, prefix="/api")
@@ -86,6 +87,7 @@ app.include_router(profiles_router, prefix="/api")
 app.include_router(settings_router, prefix="/api")
 app.include_router(graph_router, prefix="/api")
 app.include_router(wiki_router, prefix="/api")
+app.include_router(tools_router, prefix="/api")
 
 
 @app.get("/api/health")

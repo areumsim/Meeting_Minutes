@@ -62,24 +62,24 @@ def norm_title(text: str) -> str:
     return re.sub(r"[\s_\-./\\]+", "", (text or "").lower())
 
 
-DOMAIN_ALIASES: Dict[str, str] = {
-    "한빗": "한빛",
-    "한빚": "한빛",
-    "한빝": "한빛",
-    "hanbit": "한빛",
-    "한빛베닛": "한빛솔루션",
-    "코롱베니트": "한빛솔루션",
-    "코론베니트": "한빛솔루션",
-    "qday": "Q-Day",
-    "큐데이": "Q-Day",
-    "nisq": "NISQ",
-    "큐램": "QRAM",
-    "양자램": "QRAM",
-    "퀀텀4 ai": "Quantum for AI",
-    "퀀텀4AI": "Quantum for AI",
-    "ai4 퀀텀": "AI for Quantum",
-    "ai4퀀텀": "AI for Quantum",
-}
+def _load_domain_aliases() -> Dict[str, str]:
+    """config.analysis.entity_aliases — STT 오인식 표기 → 정식 명칭 치환 맵.
+
+    과거엔 도메인 별칭("한빛", "NISQ" 등)이 여기 하드코딩돼 있었다 —
+    enrichment.normalize_entity_name과 같은 config 키를 공유한다.
+    """
+    try:
+        from meeting_minutes_app.common import config_loader as _cfg
+        raw = _cfg.get("analysis.entity_aliases", {}) or {}
+        if isinstance(raw, dict):
+            return {str(k): str(v) for k, v in raw.items()
+                    if not str(k).startswith("_")}
+    except Exception:
+        pass
+    return {}
+
+
+DOMAIN_ALIASES: Dict[str, str] = _load_domain_aliases()
 
 
 def normalize_domain_text(text: str) -> str:
@@ -89,7 +89,78 @@ def normalize_domain_text(text: str) -> str:
     return out
 
 
-def note_domain_score(title: str, content: str, query_text: str) -> float:
+# note_domain_score()의 가산점 마커 기본값 — 과거 하드코딩값(양자 도메인 전용).
+# wiki.domain_relevance_keywords로 오버라이드하지 않으면 이 기본값을 그대로 쓴다
+# (하위호환). 여러 도메인(예: 양자 + PhysicalAI)을 동시에 다루려면 config에
+# 두 도메인 마커를 모두 합쳐 넣으면 된다 — 이 목록은 "관련도 가산점" 용도라
+# 도메인 구분 없이 매칭되는 마커가 많을수록 검색 품질이 오른다.
+_DEFAULT_DOMAIN_RELEVANCE_MARKERS = (
+    "해커톤", "기념품", "후원", "한빛", "양자어닐", "볼츠만", "qml", "nisq", "qnn", "ionq", "q-day",
+)
+
+
+def _domain_relevance_markers() -> Sequence[str]:
+    raw = _c("wiki.domain_relevance_keywords", None)
+    if isinstance(raw, list) and raw:
+        return [str(m) for m in raw if str(m).strip()]
+    return _DEFAULT_DOMAIN_RELEVANCE_MARKERS
+
+
+def _domain_archive_paths() -> Dict[str, str]:
+    domains = _c("obsidian.project_domains", {}) or {}
+    return {str(k): str(v) for k, v in domains.items() if v}
+
+
+def _archive_domain_for_path(note_path: str) -> str:
+    """note_path가 특정 도메인 전용 아카이브 하위에 있으면 그 도메인 키를, 아니면 빈 문자열을 반환.
+    (예: "Archive/도메인_아카이브/..." → "양자")"""
+    if not note_path:
+        return ""
+    norm = note_path.replace("\\", "/")
+    for key, path in _domain_archive_paths().items():
+        p = path.rstrip("/")
+        if norm == p or norm.startswith(p + "/"):
+            return key
+    return ""
+
+
+def _domain_signal_count(domain: str, query_text: str) -> int:
+    categories = _c("obsidian.meeting_categories", {}) or {}
+    entry = categories.get(domain, {})
+    kws = entry.get("keywords", []) if isinstance(entry, dict) else []
+    if not isinstance(kws, list):
+        return 0
+    q = (query_text or "").lower()
+    return sum(1 for kw in kws if str(kw).strip() and str(kw).strip().lower() in q)
+
+
+def _domain_has_signal(domain: str, query_text: str) -> bool:
+    """query_text가 해당 도메인에 대한 실제 신호를 담고 있는가.
+    키워드 1개만 우연히 겹치는 것으로는 불충분하다 — 예를 들어 전혀 무관한 회의에서
+    "양자컴퓨터"라는 말이 스쳐 지나간 것만으로 "양자" 키워드 하나가 매칭되지만, 이는
+    실제로 그 도메인을 다루는 맥락이라 보기엔 근거가 너무 약하다(실제 발생했던 컨텍스트
+    오염 버그의 원인). 서로 다른 도메인 키워드가 최소 2개 이상 나와야 통과시킨다."""
+    return _domain_signal_count(domain, query_text) >= 2
+
+
+def is_domain_mismatched(note_path: str, query_text: str) -> bool:
+    """note_path가 도메인 전용 아카이브 소속인데 query_text에 그 도메인 고유 신호가
+    없으면 True(=배제해야 함). 일반 relevance 재채점 없이 순수 도메인 오염만 걸러낼 때
+    쓰는 가벼운 게이트 — 기존에 relevance 재채점이 없던 호출부(예: TF-IDF 인덱서가 이미
+    랭킹한 결과를 그대로 신뢰하던 곳)에 추가 필터링 부작용 없이 적용하기 위함."""
+    note_domain = _archive_domain_for_path(note_path)
+    return bool(note_domain) and not _domain_has_signal(note_domain, query_text)
+
+
+def note_domain_score(title: str, content: str, query_text: str, note_path: str = "") -> float:
+    # 후보 노트가 특정 도메인 전용 아카이브 소속이면, 쿼리에 그 도메인 고유 키워드가
+    # 실제로 있어야만 채택한다. 일반 단어 하나가 우연히 겹쳤다는 이유만으로(예: 무관한
+    # 사내 회의에서 "양자컴퓨터"라는 말이 스쳐 지나갔다는 것) 전혀 다른 도메인 아카이브의
+    # 노트가 "관련 노트"로 끌려 들어와 LLM이 무관한 내용을 회의록에 섞어버리는 컨텍스트
+    # 오염을 막기 위한 하드 게이트.
+    if is_domain_mismatched(note_path, query_text):
+        return 0.0
+
     hay = normalize_domain_text(f"{title} {content}")[:4000]
     q = normalize_domain_text(query_text)
     terms = keyword_terms(q)[:12]
@@ -97,10 +168,50 @@ def note_domain_score(title: str, content: str, query_text: str) -> float:
     for t in terms:
         if norm_title(t) and norm_title(t) in norm_title(hay):
             score += 1.0
-    for marker in ("해커톤", "기념품", "후원", "한빛", "양자어닐", "볼츠만", "qml", "nisq", "qnn", "ionq", "q-day"):
+    for marker in _domain_relevance_markers():
         if marker.lower() in q.lower() and marker.lower() in hay.lower():
             score += 2.0
     return score
+
+
+def detect_query_domain(text: str) -> str:
+    """검색 쿼리/메모/질문 텍스트에서 obsidian.meeting_categories 카테고리 키를 자동 감지한다.
+    도메인 모드(mode="domain", 전용 아카이브가 있는 양자/PhysicalAI 등)든 폴더 모드
+    (mode="folder", 00_Meetings 하위 폴더인 팀회의/외부회의 등)든 키워드 매칭 점수가 가장
+    높은 카테고리를 반환한다. 매칭 없으면 빈 문자열 — 호출자는 필터 없이(볼트 전체) 검색해야 한다."""
+    categories = _c("obsidian.meeting_categories", {}) or {}
+    if not categories:
+        return ""
+    hay = (text or "").lower()
+    scores: Dict[str, int] = {}
+    for key, entry in categories.items():
+        kws = entry.get("keywords", []) if isinstance(entry, dict) else []
+        if not isinstance(kws, list):
+            continue
+        scores[key] = sum(1 for kw in kws if str(kw).strip().lower() in hay)
+    matched = [k for k, v in scores.items() if v > 0]
+    return max(matched, key=lambda k: scores[k]) if matched else ""
+
+
+def domain_search_prefixes(category: str) -> List[str]:
+    """탐지된 카테고리의 검색 스코프 + 항상 공유되는 참조노트 폴더.
+    도메인 모드 → 전용 아카이브 경로, 폴더 모드 → 00_Meetings 하위 카테고리 폴더.
+    category가 비어있거나 알 수 없으면 빈 리스트(=필터 없음, 볼트 전체 검색)."""
+    if not category:
+        return []
+    categories = _c("obsidian.meeting_categories", {}) or {}
+    entry = categories.get(category, {})
+    if not isinstance(entry, dict):
+        return []
+    refs = str(_c("obsidian.refs_subdir", "01_References") or "01_References")
+    mode = entry.get("mode", "")
+    if mode == "domain":
+        domain_path = _domain_archive_paths().get(category, "")
+        return [domain_path, refs] if domain_path else []
+    if mode == "folder":
+        folder = str(entry.get("folder", "") or "")
+        return [folder, refs] if folder else []
+    return []
 
 
 def strip_frontmatter(content: str) -> str:
@@ -134,12 +245,15 @@ def keyword_terms(text: str) -> List[str]:
     return out
 
 
-def load_obsidian_client():
+def load_obsidian_client(project: str = ""):
+    """project를 넘기면 config.json의 obsidian.project 대신 이 값으로 연결한다 —
+    CLI `--project` 플래그로 config를 고치지 않고 세션 단위로 다른 도메인
+    (obsidian.project_domains 매핑)에 발행할 때 쓴다."""
     if not _c("obsidian.enabled", False):
         return None
     try:
         from meeting_minutes_app.wiki_core.obsidian import ObsidianClient
-        obs = ObsidianClient.from_config()
+        obs = ObsidianClient.from_config(project_override=project)
         if obs and obs.ping():
             return obs
         if obs:
@@ -169,8 +283,13 @@ def search_related_notes_rest(
     topic: str = "",
     search_text: str = "",
     limit: int = 5,
-) -> List[str]:
-    """Search Obsidian REST with conservative current-note filtering."""
+    return_paths: bool = False,
+) -> List[Any]:
+    """Search Obsidian REST with conservative current-note filtering.
+
+    return_paths=True면 [(title, vault_relative_path), ...]를 반환한다 —
+    호출부가 note_domain_score()에 path를 넘겨 도메인 오염 게이트를 적용할 수 있도록.
+    기본(False)은 기존 호출부와의 하위호환을 위해 title 문자열 리스트만 반환한다."""
     current_norm = norm_title(title)
     terms = keyword_terms(" ".join([title or "", topic or "", search_text or ""]))
     queries: List[str] = []
@@ -180,6 +299,7 @@ def search_related_notes_rest(
             queries.append(q[:500])
 
     ranked: Dict[str, float] = {}
+    paths: Dict[str, str] = {}
     for q in queries:
         try:
             for r in obs.search_simple(q, context_length=120, limit=max(limit * 2, 8)) or []:
@@ -195,9 +315,13 @@ def search_related_notes_rest(
                     continue
                 bonus = sum(2.0 for term in terms[:10] if norm_title(term) in note_norm)
                 ranked[note_title] = ranked.get(note_title, 0.0) + 1.0 + bonus
+                paths.setdefault(note_title, fname)
         except Exception:
             continue
-    return [t for t, _ in sorted(ranked.items(), key=lambda x: (-x[1], x[0]))[:limit]]
+    top = sorted(ranked.items(), key=lambda x: (-x[1], x[0]))[:limit]
+    if return_paths:
+        return [(t, paths.get(t, "")) for t, _ in top]
+    return [t for t, _ in top]
 
 
 def get_related_note_content(indexer, obs, title: str) -> str:
@@ -269,7 +393,10 @@ def build_related_notes_memo(
         "[내부 참고자료 - 최종 출력 금지]\n"
         "아래는 전사 내용으로 검색한 내부 참고자료입니다. 최종 회의록에 이 블록 제목이나 원문을 그대로 출력하지 마세요. "
         "회의록 작성 시 사실 확인과 배경 연결에만 사용하고, 필요한 내용은 '참고 근거와 주의사항' 또는 관련 노트 링크로 짧게 요약하세요. "
-        "새 회의에서 직접 언급되지 않은 내용은 '참고 배경'으로 구분하세요.\n\n"
+        "새 회의에서 직접 언급되지 않은 내용은 '참고 배경'으로 구분하세요. "
+        "⚠️ 아래 자료의 주제가 실제 스크립트 내용과 명백히 무관하면(예: 다른 프로젝트/도메인 얘기) "
+        "완전히 무시하고 회의록에 절대 반영하지 마세요 — 검색 알고리즘이 우연히 겹치는 단어 때문에 "
+        "무관한 자료를 가져왔을 수 있습니다.\n\n"
         + "\n\n".join(blocks)
     )
 
@@ -291,7 +418,8 @@ def build_related_sections_memo(
     return (
         "[내부 참고자료 (섹션 근거) - 최종 출력 금지]\n"
         "아래는 관련 노트의 특정 섹션(heading)만 발췌한 근거입니다. 최종 회의록에 이 블록 제목이나 원문을 "
-        "그대로 출력하지 마세요. 사실 확인과 배경 연결에만 사용하세요.\n\n"
+        "그대로 출력하지 마세요. 사실 확인과 배경 연결에만 사용하세요. "
+        "⚠️ 주제가 실제 스크립트와 명백히 무관하면 완전히 무시하고 회의록에 반영하지 마세요.\n\n"
         + "\n\n".join(blocks)
     )
 
@@ -337,7 +465,9 @@ def build_obsidian_context_memo(
                 if not note_title or not heading:
                     continue
                 content = indexer.get_section_content(hit["note_path"], heading)
-                if not content or note_domain_score(note_title, content, query_for_score) < 1.0:
+                if not content or note_domain_score(
+                    note_title, content, query_for_score, note_path=hit.get("note_path", "")
+                ) < 1.0:
                     continue
                 section_hits.append({"title": note_title, "heading": heading, "content": content})
                 if note_title not in related_titles:
@@ -349,19 +479,32 @@ def build_obsidian_context_memo(
             )
 
         if indexer and indexer.is_built:
-            for note_title in indexer.find_related(query, limit=limit):
+            path_prefixes = domain_search_prefixes(detect_query_domain(query))
+            # find_related()는 title만 반환해 도메인 게이트에 필요한 path 정보를 잃는다 —
+            # 같은 필터(min_score 또는 임베딩 코사인 매치)를 여기서 재현해 path를 보존한다.
+            for hit in indexer.search(query, limit=limit, path_prefixes=path_prefixes):
+                if not (hit.get("score", 0.0) >= 0.05 or hit.get("cosine", 0.0) > 0.0):
+                    continue
+                note_title = hit.get("wikilink_title") or hit.get("title", "")
+                if not note_title:
+                    continue
                 content = get_related_note_content(indexer, obs, note_title) or ""
-                if note_domain_score(note_title, content, query_for_score) < 1.0:
+                if note_domain_score(
+                    note_title, content, query_for_score, note_path=hit.get("path", "")
+                ) < 1.0:
                     continue
                 if note_title not in related_titles:
                     related_titles.append(note_title)
                     evidence.append({"note": note_title, "heading": None})
         if obs:
-            for note_title in search_related_notes_rest(
-                obs, title=title, topic=topic, search_text=search_text, limit=limit
+            for note_title, note_path in search_related_notes_rest(
+                obs, title=title, topic=topic, search_text=search_text, limit=limit,
+                return_paths=True,
             ):
                 content = get_related_note_content(indexer, obs, note_title) or ""
-                if note_domain_score(note_title, content, query_for_score) < 1.0:
+                if note_domain_score(
+                    note_title, content, query_for_score, note_path=note_path
+                ) < 1.0:
                     continue
                 if note_title not in related_titles:
                     related_titles.append(note_title)

@@ -66,7 +66,9 @@ def _conn(db_path: Optional[Path] = None):
     db_path를 넘기면 그 파일을 쓴다 (테스트에서 tmp_path DB를 쓰기 위함)."""
     path = db_path or DB_PATH
     path.parent.mkdir(parents=True, exist_ok=True)
-    c = sqlite3.connect(str(path), check_same_thread=False)
+    # timeout: 동시 접근(실시간 finalize + 배치 + MCP 읽기) 시 잠금 대기 —
+    # 없으면 즉시 "database is locked"로 실패해 그래프 쓰기가 조용히 누락된다
+    c = sqlite3.connect(str(path), check_same_thread=False, timeout=5.0)
     c.row_factory = sqlite3.Row
     c.execute("PRAGMA journal_mode=WAL")
     c.execute("PRAGMA foreign_keys=ON")
@@ -213,13 +215,25 @@ def get_node(node_id: str, *, db_path: Optional[Path] = None) -> Optional[Dict[s
     return _row_to_node(row) if row else None
 
 
-def get_node_by_key(type: str, canonical_key: str, *, db_path: Optional[Path] = None) -> Optional[Dict[str, Any]]:
+def get_node_by_key(
+    type: str, canonical_key: str, *,
+    conn: Optional[sqlite3.Connection] = None,
+    db_path: Optional[Path] = None,
+) -> Optional[Dict[str, Any]]:
     """(type, canonical_key) 정확 일치 조회 — upsert_node()가 쓰는 것과 동일한 조회.
-    호출부는 graph_sync.resolve_canonical_key(type, label)로 키를 계산해서 넘긴다."""
-    with _conn(db_path) as c:
-        row = c.execute(
+    호출부는 graph_sync.resolve_canonical_key(type, label)로 키를 계산해서 넘긴다.
+    conn을 넘기면 그 트랜잭션 내에서 조회(같은 트랜잭션에서 이미 upsert된, 아직
+    커밋되지 않은 노드도 보이게 하기 위함) — 안 넘기면 새 커넥션으로 조회."""
+    def _do(c: sqlite3.Connection) -> Optional[sqlite3.Row]:
+        return c.execute(
             "SELECT * FROM nodes WHERE type = ? AND canonical_key = ?", (type, canonical_key)
         ).fetchone()
+
+    if conn is not None:
+        row = _do(conn)
+    else:
+        with _conn(db_path) as c:
+            row = _do(c)
     return _row_to_node(row) if row else None
 
 

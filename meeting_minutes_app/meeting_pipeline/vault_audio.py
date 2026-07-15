@@ -20,7 +20,8 @@ import glob
 import tempfile
 import shutil
 from datetime import datetime
-from typing import Optional, List, Dict, Tuple
+from pathlib import Path
+from typing import Optional, List, Dict
 
 from meeting_minutes_app.wiki_core.obsidian import parse_frontmatter, build_frontmatter, _as_str_list
 
@@ -73,7 +74,8 @@ def merge_into_note_file(note_path: str, *, minutes: str, summary: str = "",
     계획(planned) 노트면 status→done, 참석자 합집합, audio_processed 표시."""
     try:
         content = open(note_path, encoding="utf-8").read()
-    except Exception:
+    except Exception as e:
+        print(f"    ⚠ 노트 읽기 실패 ({type(e).__name__}: {e}): {note_path}")
         return False
     meta, body = parse_frontmatter(content)
 
@@ -115,24 +117,37 @@ def merge_into_note_file(note_path: str, *, minutes: str, summary: str = "",
     try:
         open(note_path, "w", encoding="utf-8").write("\n".join(parts))
         return True
-    except Exception:
+    except Exception as e:
+        print(f"    ⚠ 노트 쓰기 실패 ({type(e).__name__}: {e}): {note_path}")
         return False
 
 
-# ── STT + 회의록 생성 ────────────────────────────────────────
+# ── STT + 회의록 생성 (공용 finalize 파이프라인 재사용) ────────
 def transcribe_and_minutes(audio_path: str, doc_type: str = "meeting",
                            topic: str = "", session_dt: str = "",
                            title: str = "",
                            known_names: Optional[List[str]] = None,
                            llm=None,
-                           return_segments: bool = False,
                            memo: str = ""):
-    """오디오 → (minutes, summary, actions_md, speakers). meeting_minutes 재사용.
-    memo: generate_minutes에 전달할 추가 컨텍스트 (web_research 결과 등).
+    """오디오 → (FinalizeResult, speakers). 회의록 생성은 batch/web/실시간과 동일한
+    공용 파이프라인(meeting_pipeline.finalize.run_post_session)을 재사용한다.
+
+    과거엔 이 함수가 STT→회의록→요약→액션만 손으로 호출해서, 계획 사전자료/Wiki
+    컨텍스트 주입/사실검증/Wiki 업데이트 제안이 이 경로(vault-audio)에서만 빠져
+    있었다 — finalize.py 도입 취지("과거엔 이 흐름이 4곳에 복사돼 있었다")와
+    같은 문제가 이 5번째 경로에도 있었던 것.
+
+    Obsidian 노트 병합은 이 함수가 하지 않는다 — 오디오가 노트에 임베드된
+    링크로 이미 노트가 100% 확정돼 있어(다른 경로처럼 제목/날짜 fuzzy 매칭 +
+    사용자 확인이 필요 없음) merge_into_note_file()이 직접 처리한다. 그래서
+    FinalizeOptions(do_publish=False, plan_match=None)로 finalize의 계획-매칭/
+    발행 스테이지는 건너뛴다. do_registries도 꺼두고, 병합 성공 후 실제 노트
+    경로(source_note)로 process_vault()가 직접 갱신한다.
     """
     from meeting_minutes_app.meeting_pipeline import meeting_minutes as mm
     from meeting_minutes_app.meeting_pipeline import stt
     from meeting_minutes_app.meeting_pipeline import minutes_generation as mg
+    from meeting_minutes_app.meeting_pipeline import finalize as fz
     if llm is None:
         llm = mm.LLMClient(preferred=mm._c("models.llm", "gpt") or "gpt")
     work = tempfile.mkdtemp(prefix="vault_audio_")
@@ -142,7 +157,7 @@ def transcribe_and_minutes(audio_path: str, doc_type: str = "meeting",
                               language=mm._c("realtime.language", None),
                               speaker_names=known_names, work_dir=work)
         if not segments:
-            return "", "", "", []
+            return None
         # 화자 추론(참석자 힌트)
         try:
             if any(re.match(r'[Ss]peaker[\s_]?[A-Za-z0-9]', s.get("speaker", ""))
@@ -153,21 +168,41 @@ def transcribe_and_minutes(audio_path: str, doc_type: str = "meeting",
                         seg["speaker"] = inferred[seg["speaker"]]
         except Exception:
             pass
-        minutes = mg.generate_minutes(segments, llm, doc_type, memo or None, None,
-                                      topic=topic, session_dt=session_dt, title=title)
-        summary = mg.generate_summary(minutes, llm, doc_type, topic=topic,
-                                      session_dt=session_dt)
-        actions_md = ""
-        try:
-            aj = mg.extract_action_items(minutes, llm, doc_type)
-            if aj:
-                actions_md = mg.format_actions_md(aj)
-        except Exception:
-            pass
         speakers = sorted({s.get("speaker", "") for s in segments if s.get("speaker")})
-        if return_segments:
-            return minutes, summary, actions_md, speakers, segments
-        return minutes, summary, actions_md, speakers
+
+        # wiki_context.json/wiki_proposal 저장 위치 — batch(pipeline.py)와 동일한
+        # 저장소 규칙(repo-root output 폴더 하위, 세션별 서브폴더).
+        artifacts_dir = None
+        try:
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            safe_title = "".join(c for c in (title or "vault_audio")
+                                 if c.isalnum() or c in " _-").strip()[:50]
+            repo_root = Path(__file__).resolve().parent.parent.parent
+            out_root = repo_root / str(mm._c("output_dir", "output") or "output")
+            artifacts_dir = out_root / f"vault_audio_{ts}_{safe_title}"
+            artifacts_dir.mkdir(parents=True, exist_ok=True)
+        except Exception as e:
+            print(f"    ⚠ wiki_context/proposal 저장 폴더 생성 실패 (무시): {e}")
+            artifacts_dir = None
+
+        res = fz.run_post_session(
+            fz.SessionInputs(
+                segments=segments, title=title, topic=topic, doc_type=doc_type,
+                session_dt=session_dt, base_memo=memo or None, source="vault_audio",
+                attendees=known_names or [],
+            ),
+            fz.FinalizeOptions(
+                llm=llm,
+                plan_match=None,
+                do_publish=False,
+                do_registries=False,
+                do_proposal=True,
+                do_graph_sync=False,
+                artifacts_dir=artifacts_dir,
+                proposal_dir=artifacts_dir,
+            ),
+        )
+        return res, speakers
     finally:
         shutil.rmtree(work, ignore_errors=True)
 
@@ -250,39 +285,72 @@ def process_vault(vault_root: str, notes_subdir: str = "00_Meetings",
     audios = [only_audio] if only_audio else find_audio_files(vault_root)
     done = 0
     for ap in audios:
-        note = find_embedding_note(vault_root, ap, notes_subdir)
-        if not note:
+        # 파일 하나 처리 중 오류(STT/LLM 호출 실패, 손상된 오디오 등)가 나도 나머지
+        # 파일 처리는 계속돼야 한다 — audio_watcher.py/_handle_file()과 같은 격리
+        # 패턴. 과거엔 여기서 예외가 나면 process_vault() 전체가 죽어 그 이후 볼트의
+        # 모든 노트 처리가 중단됐다.
+        try:
+            note = find_embedding_note(vault_root, ap, notes_subdir)
+            if not note:
+                continue
+            meta, _ = parse_frontmatter(open(note, encoding="utf-8").read())
+            if _already_processed(meta, ap):
+                continue
+            rel = os.path.relpath(note, vault_root).replace("\\", "/")
+            print(f"  🎙 {os.path.basename(ap)}  →  노트 '{meta.get('title') or rel}'")
+            if dry_run:
+                done += 1
+                continue
+            known = publish._clean_attendee_names(_as_str_list(meta.get("attendees")))
+            sdt = f"{meta.get('date','')} {meta.get('time','')}".strip()
+            note_title = meta.get("title") or os.path.basename(note)[:-3]
+            result = transcribe_and_minutes(
+                ap, doc_type=(meta.get("type") or "meeting"),
+                topic=meta.get("topic", "") or note_title,
+                session_dt=sdt, title=note_title, known_names=known or None,
+            )
+            if not result:
+                print("    STT 실패 → 건너뜀")
+                continue
+            res, speakers = result
+            if not res.minutes:
+                print("    회의록 생성 실패 → 건너뜀")
+                continue
+            if merge_into_note_file(note, minutes=res.minutes, summary=res.summary,
+                                    actions_md=res.actions_md, attendees=speakers,
+                                    audio_name=ap, doc_type=(meta.get("type") or "meeting")):
+                print(f"    ✅ 병합 완료 → {rel}")
+                # 액션/결정 레지스트리 갱신 — finalize에서는 병합 전이라 실제 노트
+                # 경로를 몰라 do_registries=False로 꺼뒀으므로, 병합 성공 후 실제
+                # 노트 경로(rel)로 여기서 직접 갱신한다.
+                try:
+                    from meeting_minutes_app.wiki_core.wiki_knowledge import (
+                        update_action_registry_from_actions,
+                        update_decision_registry_from_minutes,
+                        extract_decisions_from_minutes,
+                    )
+                    if res.actions_json:
+                        update_action_registry_from_actions(
+                            res.actions_json, source_meeting=note_title, source_note=rel)
+                    decisions = extract_decisions_from_minutes(res.minutes)
+                    if decisions:
+                        update_decision_registry_from_minutes(
+                            decisions, source_meeting=note_title, source_note=rel)
+                except Exception as e:
+                    print(f"    ⚠ registry 갱신 실패 (무시): {e}")
+                if notify:
+                    _send_email_summary(
+                        title=note_title,
+                        summary=res.summary, actions_md=res.actions_md, notify=notify,
+                        minutes_md=res.minutes,
+                        attachment_paths=[note] if os.path.isfile(note) else None)
+                done += 1
+            else:
+                print("    병합 실패")
+        except Exception as e:
+            print(f"  ⚠ {os.path.basename(ap)} 처리 중 오류 ({type(e).__name__}: {e}) "
+                  "→ 건너뛰고 다음 파일 계속")
             continue
-        meta, _ = parse_frontmatter(open(note, encoding="utf-8").read())
-        if _already_processed(meta, ap):
-            continue
-        rel = os.path.relpath(note, vault_root).replace("\\", "/")
-        print(f"  🎙 {os.path.basename(ap)}  →  노트 '{meta.get('title') or rel}'")
-        if dry_run:
-            done += 1
-            continue
-        known = publish._clean_attendee_names(_as_str_list(meta.get("attendees")))
-        sdt = f"{meta.get('date','')} {meta.get('time','')}".strip()
-        minutes, summary, actions_md, speakers = transcribe_and_minutes(
-            ap, doc_type=(meta.get("type") or "meeting"),
-            topic=meta.get("topic", "") or meta.get("title", ""),
-            session_dt=sdt, known_names=known or None,
-        )
-        if not minutes:
-            print("    STT/회의록 생성 실패 → 건너뜀")
-            continue
-        if merge_into_note_file(note, minutes=minutes, summary=summary,
-                                actions_md=actions_md, attendees=speakers,
-                                audio_name=ap, doc_type=(meta.get("type") or "meeting")):
-            print(f"    ✅ 병합 완료 → {rel}")
-            if notify:
-                _send_email_summary(
-                    title=(meta.get("title") or os.path.basename(note)[:-3]),
-                    summary=summary, actions_md=actions_md, notify=notify,
-                    attachment_paths=[note] if os.path.isfile(note) else None)
-            done += 1
-        else:
-            print("    병합 실패")
     return done
 
 

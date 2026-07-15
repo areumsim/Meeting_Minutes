@@ -86,130 +86,46 @@ from meeting_minutes_app.common.text_filters import is_cjk_hallucination as _is_
 from meeting_minutes_app.common.realtime_ws_session import build_ws_session_config
 
 
-def _strip_existing_fact_check(md: str) -> str:
-    try:
-        return _publish._strip_fact_verification_sections(md)  # type: ignore[attr-defined]
-    except Exception:
-        import re as _re
-        return _re.sub(r"\n+## 사실 검증\n.*?(?=\n## |\Z)", "", md or "", flags=_re.DOTALL).rstrip()
+def _make_cli_finalize_events(output_dir: str, stem: str, labels: Dict[str, str],
+                              header: str):
+    """finalize.run_post_session 산출물 → output 폴더 파일 저장.
 
+    _generate_output(실시간 종료)과 cmd_recover(세션 복구)가 공용으로 사용.
+    (과거 두 함수 + _apply_wiki_quality_loop에 복사돼 있던 저장/후처리 로직을
+    meeting_pipeline/finalize.py 오케스트레이터로 통합하면서 도입.)
+    """
+    from meeting_minutes_app.meeting_pipeline.finalize import FinalizeEvents
 
-def _apply_wiki_quality_loop(
-    *,
-    minutes: str,
-    llm,
-    doc_type: str,
-    title: str,
-    topic: str,
-    session_dt: str,
-    segments: List[Dict[str, Any]],
-    output_dir: str,
-    stem: str,
-    related_note_titles: List[str],
-    context_flags: Dict[str, Any],
-    actions_json: str = "",
-) -> tuple[str, List[Dict[str, Any]]]:
-    """Realtime/recover 후처리: 사실검증, wiki_context, registry, proposal 저장."""
-    claim_results: List[Dict[str, Any]] = []
+    class _CliEvents(FinalizeEvents):
+        def on_status(self, stage, message):
+            print(f"  {message}")
 
-    try:
-        from meeting_minutes_app.meeting_pipeline import meeting_workflow as mw
-        if minutes and _c("wiki.claim_verify", False):
-            print("  사실 검증 중 (vault 비교)...")
-            idx = mw.load_vault_indexer()
-            obs = mw.load_obsidian_client()
+        def on_document(self, dtype, content, fmt="markdown"):
             try:
-                verify_md, claim_results = mw.claim_verify(
-                    minutes,
-                    llm,
-                    indexer=idx,
-                    obs=obs,
-                    topic=topic,
-                    max_claims=int(_c("wiki.claim_verify_max", 8) or 8),
-                    current_title=title,
-                )
-            finally:
-                if obs:
-                    try:
-                        obs.close()
-                    except Exception:
-                        pass
-            if verify_md:
-                conflicts = verify_md.count("- ⚠️")
-                matches = verify_md.count("- ✅")
-                unknowns = verify_md.count("- ❓") + verify_md.count("- 🔍")
-                print(f"  사실 검증 완료: 충돌 {conflicts}, 일치 {matches}, 확인불가 {unknowns}")
-                fact_path = os.path.join(output_dir, f"{stem}_fact_check.md")
-                save(verify_md, fact_path, "사실 검증")
-                minutes = _strip_existing_fact_check(minutes).rstrip() + "\n\n" + verify_md
-            else:
-                print("  사실 검증 결과 없음: 검증 가능한 주장을 추출하지 못했습니다")
-    except Exception as e:
-        print(f"  {C_YELLOW}사실 검증 실패 (무시): {e}{C_RESET}")
-
-    try:
-        from meeting_minutes_app.wiki_core.wiki_knowledge import build_wiki_context_package, save_wiki_context_package
-        _ctx_pkg = build_wiki_context_package(
-            related_titles=related_note_titles,
-            data_dir=Path(__file__).resolve().parent.parent.parent / "data",
-            metadata={
-                "title": title,
-                "session_dt": session_dt,
-                "source": "realtime",
-                "doc_type": doc_type,
-                "segment_count": len(segments or []),
-            },
-            filter_query=" ".join([
-                title or "",
-                topic or "",
-                " ".join(str(s.get("text", "")) for s in (segments or [])[:20]),
-            ]),
-            related_details=(context_flags or {}).get("evidence", []),
-        )
-        if save_wiki_context_package(_ctx_pkg, Path(output_dir)):
-            print("  Wiki Context 저장: wiki_context.json")
-    except Exception as e:
-        print(f"  {C_YELLOW}wiki_context.json 저장 실패 (무시): {e}{C_RESET}")
-
-    if doc_type == "meeting":
-        try:
-            from meeting_minutes_app.wiki_core.wiki_knowledge import (
-                update_action_registry_from_actions,
-                update_decision_registry_from_minutes,
-                extract_decisions_from_minutes,
-            )
-            if actions_json:
-                update_action_registry_from_actions(
-                    actions_json,
-                    source_meeting=title,
-                    source_note="",
-                )
-            decisions = extract_decisions_from_minutes(minutes)
-            if decisions:
-                update_decision_registry_from_minutes(
-                    decisions,
-                    source_meeting=title,
-                    source_note="",
-                )
-        except Exception as e:
-            print(f"  {C_YELLOW}Wiki Registry 갱신 실패 (무시): {e}{C_RESET}")
-
-        if related_note_titles:
-            try:
-                from meeting_minutes_app.wiki_core.wiki_knowledge import build_wiki_update_proposal, save_wiki_update_proposal
-                proposal = build_wiki_update_proposal(
-                    meeting_title=title,
-                    minutes_text=minutes,
-                    related_titles=related_note_titles,
-                    llm=llm,
-                    claim_results=claim_results,
-                )
-                if save_wiki_update_proposal(proposal, Path(output_dir)):
-                    print("  Wiki Proposal 저장: wiki_proposal.md/json")
+                if dtype == "refined_script":
+                    save(content, os.path.join(output_dir, f"{stem}_refined_script.txt"),
+                         "교정 스크립트")
+                elif dtype == "minutes":
+                    save(header + content, os.path.join(output_dir, f"{stem}_minutes.md"),
+                         labels["title"])
+                elif dtype == "actions":
+                    save(content, os.path.join(output_dir, f"{stem}_actions.json"),
+                         "액션 아이템(JSON)")
+                elif dtype == "fact_check":
+                    save(content, os.path.join(output_dir, f"{stem}_fact_check.md"),
+                         "사실 검증")
+                elif dtype == "summary":
+                    save(content, os.path.join(output_dir, f"{stem}_summary.md"), "요약본(md)")
+                    save(content, os.path.join(output_dir, f"{stem}_summary.txt"), "요약본(txt)")
+                # script/transcript는 호출자가 직접 저장 (회의록 실패 시에도 보존),
+                # wiki_context/wiki_proposal은 finalize가 artifacts_dir에 직접 저장
             except Exception as e:
-                print(f"  {C_YELLOW}Wiki Update Proposal 생성 실패 (무시): {e}{C_RESET}")
+                print(f"  {C_YELLOW}{dtype} 저장 실패 (무시): {e}{C_RESET}")
 
-    return minutes, claim_results
+        def on_stage_error(self, stage, exc):
+            print(f"  {C_YELLOW}[{stage}] 실패 (무시): {exc}{C_RESET}")
+
+    return _CliEvents()
 
 
 # ── meeting_minutes 모듈 임포트 ──────────────
@@ -221,13 +137,11 @@ try:
     )
     from meeting_minutes_app.common.llm_client import make_openai_client
     from meeting_minutes_app.meeting_pipeline.minutes_generation import (
-        generate_minutes, generate_summary, refine_script,
         save, infer_speaker_names,
     )
     from meeting_minutes_app.meeting_pipeline.script_formatting import build_script_md
     from meeting_minutes_app.meeting_pipeline.stt import _parse_diarized
     from meeting_minutes_app.meeting_pipeline import meeting_minutes as _mm
-    from meeting_minutes_app.meeting_pipeline import minutes_generation as _mg
     from meeting_minutes_app.meeting_pipeline import publish as _publish
 except (ImportError, Exception) as e:
     import traceback as _tb
@@ -259,15 +173,15 @@ STT_MODELS = [
 DEFAULT_STT_MODEL       = _c("models.stt",            "gpt-4o-mini-transcribe") or "gpt-4o-mini-transcribe"
 DEFAULT_TRANSLATE_MODEL = _c("models.translate_model", "gpt-4o-mini") or "gpt-4o-mini"
 
-_PRICING = {
-    "whisper-1":                         0.006,
-    "gpt-4o-mini-transcribe":            0.003,
-    "gpt-4o-mini-transcribe-2025-12-15": 0.003,
-    "gpt-4o-transcribe":                 0.006,
-    "gpt-4o-transcribe-diarize":         0.006,
-    "gpt-4o":      {"in": 2.50,  "out": 10.00},
-    "gpt-4o-mini": {"in": 0.15,  "out": 0.60},
-}
+# 비용 단가 — common/pricing.py 단일 소스 사용 (과거 이 파일에만 2벌 복사돼 있었음)
+from meeting_minutes_app.common.pricing import (
+    STT_PRICE_PER_MIN as _STT_PRICE_TABLE,
+    LLM_TOKEN_PRICE as _LLM_TOKEN_PRICE,
+    DEFAULT_STT_PRICE_PER_MIN as _DEFAULT_STT_PRICE,
+    MINUTES_COST_PER_SESSION as _MINUTES_COST_PER_SESSION,
+    TRANSLATE_COST_PER_MIN as _TRANSLATE_COST_PER_MIN,
+)
+_PRICING = {**_STT_PRICE_TABLE, **_LLM_TOKEN_PRICE}
 
 C_CYAN   = "\033[36m"
 C_YELLOW = "\033[33m"
@@ -324,7 +238,7 @@ atexit.register(_atexit_handler)
 #  비용 추정
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 def estimate_cost(stt_model: str, translate: bool, translate_model: str) -> Dict[str, float]:
-    stt_cost = _PRICING.get(stt_model, 0.006) * 60
+    stt_cost = _PRICING.get(stt_model, _DEFAULT_STT_PRICE) * 60
     translate_cost = 0.0
     if translate and translate_model in _PRICING:
         tpm = _PRICING[translate_model]
@@ -701,88 +615,36 @@ def cmd_recover(log_path: str, output_dir: str, llm_preferred: str,
     except Exception:
         session_dt = ""
 
-    # [공용] 계획 매칭 + 사전 자료 주입 (batch/web 와 동일 로직)
-    _plan_match = None
-    _gen_memo = memo
-    try:
-        _plan_match, _gen_memo = _publish.plan_context_memo(topic or stem, session_dt, memo)
-        if _plan_match:
-            print(f"  계획 회의 매칭: {_plan_match.get('path')} (사유: {_plan_match.get('reason','')})")
-    except Exception as _pe:
-        print(f"  계획 매칭/사전자료 주입 건너뜀: {_pe}")
+    # [공용] 종료 후 파이프라인 — finalize.run_post_session
+    # (컨텍스트 주입 → 교정 → 회의록 → 액션 → 사실검증 → 요약 → 발행 → wiki 산출물/registry)
+    from meeting_minutes_app.meeting_pipeline import finalize as fz
 
-    _related_note_titles = []
-    _context_flags: Dict[str, Any] = {}
-    try:
-        from meeting_minutes_app.meeting_pipeline import meeting_workflow as mw
-        _gen_memo, _related_note_titles, _context_flags = mw.build_generation_context_memo(
-            llm=llm,
-            title=(topic or stem),
-            topic=topic,
-            segments_or_text=segments,
-            base_memo=_gen_memo,
-        )
-        if _context_flags.get("wiki"):
-            print(f"  Obsidian Wiki 컨텍스트 주입: {len(_related_note_titles)}개 노트")
-    except Exception as _we:
-        print(f"  Obsidian Wiki 컨텍스트 주입 건너뜀: {_we}")
-
-    minutes = generate_minutes(segments, llm, doc_type, memo=_gen_memo,
-                               topic=topic, session_dt=session_dt)
-    actions_json = ""
-    try:
-        actions_json = _mg.extract_action_items(minutes, llm, doc_type) if doc_type == "meeting" else ""
-        if actions_json:
-            save(actions_json, os.path.join(output_dir, f"{stem}_actions.json"), "액션 아이템(JSON)")
-            save(_mg.format_actions_md(actions_json),
-                 os.path.join(output_dir, f"{stem}_actions.md"), "액션 아이템(마크다운)")
-    except Exception:
-        actions_json = ""
-    minutes, _ = _apply_wiki_quality_loop(
-        minutes=minutes,
-        llm=llm,
-        doc_type=doc_type,
-        title=(topic or f"복구 {session_dt}" or stem),
-        topic=topic,
-        session_dt=session_dt,
-        segments=segments,
-        output_dir=output_dir,
-        stem=stem,
-        related_note_titles=_related_note_titles,
-        context_flags=_context_flags,
-        actions_json=actions_json,
-    )
-    header  = (f"<!-- Recovered: {datetime.now().isoformat()} -->\n"
-               f"<!-- Source: {log_path} | Type: {doc_type} -->\n\n")
-    minutes_path = os.path.join(output_dir, f"{stem}_minutes.md")
-    save(header + minutes, minutes_path, labels["title"])
-
-    summary = generate_summary(minutes, llm, doc_type, topic=topic, session_dt=session_dt)
-    summary_path     = os.path.join(output_dir, f"{stem}_summary.md")
-    summary_txt_path = os.path.join(output_dir, f"{stem}_summary.txt")
-    save(summary, summary_path, "요약본(md)")
-    save(summary, summary_txt_path, "요약본(txt)")
-
-    # [공용] Obsidian 발행 + 계획 매칭/병합 확인 (batch/web 와 동일)
-    try:
-        _ra_md = _mg.format_actions_md(actions_json) if actions_json else ""
-        _evidence_links = []
-        try:
-            from meeting_minutes_app.meeting_pipeline import meeting_workflow as _mw_pub
-            _evidence_links = _mw_pub.evidence_to_wikilinks((_context_flags or {}).get("evidence", []))
-        except Exception:
-            _evidence_links = []
-        _publish.enrich_and_publish(
+    header = (f"<!-- Recovered: {datetime.now().isoformat()} -->\n"
+              f"<!-- Source: {log_path} | Type: {doc_type} -->\n\n")
+    events = _make_cli_finalize_events(output_dir, stem, labels, header)
+    res = fz.run_post_session(
+        fz.SessionInputs(
+            segments=segments,
             title=(topic or f"복구 {session_dt}"),
-            doc_type=doc_type, minutes_md=minutes, llm=llm,
-            summary_md=summary, actions_md=_ra_md,
-            topic=topic, session_dt=session_dt, attendees=[],
-            related_notes_extra=_related_note_titles,
-            planned_match=_plan_match,
-            evidence=_evidence_links,
-        )
-    except Exception as _pubE:
-        print(f"  Obsidian 발행 실패(로컬 파일은 정상 저장됨): {_pubE}")
+            topic=topic,
+            doc_type=doc_type,
+            session_dt=session_dt,
+            base_memo=memo,
+            source="recover",
+        ),
+        fz.FinalizeOptions(
+            llm=llm,
+            do_refine=False,   # recover는 기존에도 교정 없이 원본 세그먼트로 생성
+            artifacts_dir=Path(output_dir),
+        ),
+        events,
+    )
+    summary = res.summary
+    if res.actions_md:
+        save(res.actions_md, os.path.join(output_dir, f"{stem}_actions.md"),
+             "액션 아이템(마크다운)")
+    minutes_path     = os.path.join(output_dir, f"{stem}_minutes.md")
+    summary_txt_path = os.path.join(output_dir, f"{stem}_summary.txt")
 
     # 화자 구분 포함 스크립트 (script.md)
     script_md = build_script_md(segments)
@@ -913,20 +775,33 @@ class VADAudioRecorder:
     설치: pip install webrtcvad-wheels   (Windows 사전 빌드)
           pip install webrtcvad          (Mac/Linux)
     """
+    # 기본값 — config realtime.vad_* 키로 오버라이드 가능
     FRAME_MS      = 30       # webrtcvad 지원: 10 / 20 / 30 ms
     MAX_CHUNK_SEC = 6.0      # 안전 상한 (긴 발화 강제 분할)
     SILENCE_SEC   = 0.5      # 침묵 판단 기준 (초)
 
-    def __init__(self, vad_aggressiveness: int = 2,
+    def __init__(self, vad_aggressiveness: Optional[int] = None,
                  backup: Optional["AudioBackup"] = None,
                  level_cb=None):
         import webrtcvad as _wv   # ImportError → 호출자가 처리
+        # config 오버라이드 (없으면 클래스 기본값)
+        frame_ms = int(_c("realtime.vad_frame_ms", self.FRAME_MS) or self.FRAME_MS)
+        if frame_ms not in (10, 20, 30):
+            frame_ms = self.FRAME_MS  # webrtcvad 제약
+        max_chunk = float(_c("realtime.vad_max_chunk_sec", self.MAX_CHUNK_SEC)
+                          or self.MAX_CHUNK_SEC)
+        silence = float(_c("realtime.vad_silence_sec", self.SILENCE_SEC)
+                        or self.SILENCE_SEC)
+        if vad_aggressiveness is None:
+            vad_aggressiveness = int(_c("realtime.vad_aggressiveness", 2) or 2)
+        vad_aggressiveness = min(max(vad_aggressiveness, 0), 3)
+
         self.audio_queue: queue.Queue = queue.Queue()
         self._backup     = backup
         self._vad        = _wv.Vad(vad_aggressiveness)  # 0~3, 2 권장
-        self._frame_samp = int(SAMPLE_RATE * self.FRAME_MS / 1000)  # 480 samples
-        self._max_samp   = int(SAMPLE_RATE * self.MAX_CHUNK_SEC)
-        self._sil_limit  = int(self.SILENCE_SEC * 1000 / self.FRAME_MS)  # 프레임 수
+        self._frame_samp = int(SAMPLE_RATE * frame_ms / 1000)  # 480 samples @30ms
+        self._max_samp   = int(SAMPLE_RATE * max_chunk)
+        self._sil_limit  = int(silence * 1000 / frame_ms)  # 프레임 수
 
         self._buf: List[np.ndarray] = []   # 누적 float32 프레임
         self._residual  = np.array([], dtype=np.float32)  # 미처리 잔여 샘플
@@ -1058,6 +933,7 @@ class RealtimeTranscriber:
         logger: Optional[SessionLogger] = None,
         indicator: Optional["RecordingIndicator"] = None,
         topic: str           = "",
+        vault_searcher       = None,
     ):
         self.client          = openai_client
         self.stt_model       = stt_model
@@ -1067,6 +943,7 @@ class RealtimeTranscriber:
         self.logger          = logger
         self._indicator      = indicator
         self.topic           = topic
+        self.vault_searcher  = vault_searcher  # 실시간 vault 검색 (논블로킹, 선택)
         self.segments: List[Dict] = []
         self._session_start = time.time()
         self._use_diarize   = "diarize" in stt_model
@@ -1164,6 +1041,8 @@ class RealtimeTranscriber:
                     "speaker":       spk,
                 }
                 self.segments.append(seg)
+                if self.vault_searcher:
+                    self.vault_searcher.offer_segment(txt)
                 if self._indicator:
                     self._indicator.increment_seg()
 
@@ -1206,6 +1085,8 @@ class RealtimeTranscriber:
             "speaker":       "",
         }
         self.segments.append(seg)
+        if self.vault_searcher:
+            self.vault_searcher.offer_segment(text)
 
         if self.translate:
             # ② 번역을 백그라운드 스레드에 제출하고 즉시 리턴
@@ -1458,16 +1339,10 @@ class RecordingIndicator:
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 class RealtimeSession:
 
-    # ── 비용 단가 ──────────────────────────────
-    _STT_PRICE = {   # $/min
-        "gpt-4o-mini-transcribe":            0.003,
-        "gpt-4o-mini-transcribe-2025-12-15": 0.003,
-        "gpt-4o-transcribe":                 0.006,
-        "gpt-4o-transcribe-diarize":         0.006,
-        "whisper-1":                         0.006,
-    }
-    _TRANS_PRICE_PER_MIN   = 0.0002  # gpt-4o-mini 번역
-    _MINUTES_COST_FIXED    = 0.08    # gpt-4o 회의록 생성 1회
+    # ── 비용 단가 (common/pricing.py 단일 소스) ──
+    _STT_PRICE             = _STT_PRICE_TABLE
+    _TRANS_PRICE_PER_MIN   = _TRANSLATE_COST_PER_MIN
+    _MINUTES_COST_FIXED    = _MINUTES_COST_PER_SESSION
 
     def __init__(self, args):
         self.args          = args
@@ -1501,7 +1376,7 @@ class RealtimeSession:
         self.mode = getattr(args, "mode", "http")
         if self.mode == "auto":
             try:
-                import websockets  # noqa: F401
+                import websockets  # noqa: F401 — 설치 여부 프로브
                 self.mode = "ws"
             except ImportError:
                 self.mode = "http"
@@ -1537,6 +1412,19 @@ class RealtimeSession:
         self._stop_ev  = threading.Event()
         self._worker: Optional[threading.Thread] = None
 
+        # 실시간 vault 검색 (wiki.realtime_vault_search 게이트, 논블로킹) —
+        # 회의 중 관련 노트를 📎 줄로 표시하고 종료 후 회의록 컨텍스트에 병합
+        self.vault_searcher = None
+        try:
+            from meeting_minutes_app.wiki_core.realtime_search import RealtimeVaultSearcher
+            _searcher = RealtimeVaultSearcher(topic=self.topic,
+                                              on_notes=self._display_related_notes)
+            if _searcher.enabled:
+                self.vault_searcher = _searcher
+                print(f"  {C_GREEN}[Wiki]{C_RESET} 실시간 vault 검색 활성")
+        except Exception:
+            self.vault_searcher = None
+
         if self.mode == "ws":
             self._init_ws_mode()
         else:
@@ -1568,12 +1456,13 @@ class RealtimeSession:
             logger=self.logger,
             indicator=self.indicator,
             topic=self.topic,
+            vault_searcher=self.vault_searcher,
         )
 
     def _init_ws_mode(self):
         """WebSocket 스트리밍 모드 초기화."""
         try:
-            import websockets  # noqa: F401
+            import websockets  # noqa: F401 — 설치 여부 프로브
         except ImportError:
             print(f"  {C_YELLOW}[WS] websockets 미설치 → HTTP 모드로 전환{C_RESET}")
             print(f"  {C_GRAY}  설치: pip install websockets{C_RESET}")
@@ -1581,12 +1470,12 @@ class RealtimeSession:
             self._init_http_mode()
             return
 
-        # Realtime API 지원 모델 목록 (mini-transcribe 및 diarize는 미지원)
-        _WS_SUPPORTED = {"gpt-4o-transcribe", "gpt-4o-realtime-preview"}
-        _base_model = self.stt_model.split("-2025")[0]  # 날짜 접미사 제거
-        if "diarize" in self.stt_model or _base_model not in _WS_SUPPORTED:
-            reason = "diarize 모델" if "diarize" in self.stt_model else f"{self.stt_model}"
-            print(f"  {C_YELLOW}[WS] {reason}은(는) WebSocket 미지원 → HTTP 모드로 전환{C_RESET}")
+        # WS 지원 모델 판정 — common.realtime_ws_session 공용 규칙
+        # (과거 split("-2025") 방식은 2026년 이후 날짜 모델에서 오동작)
+        from meeting_minutes_app.common.realtime_ws_session import normalize_ws_model
+        _, _ws_reason = normalize_ws_model(self.stt_model)
+        if _ws_reason:
+            print(f"  {C_YELLOW}[WS] {_ws_reason} → HTTP 모드로 전환{C_RESET}")
             self.mode = "http"
             self._init_http_mode()
             return
@@ -1595,6 +1484,28 @@ class RealtimeSession:
         # 실제 연결은 run()에서 컨텍스트 매니저로 열림
         self.recorder = None      # WS 모드에서는 WebSocketAudioStreamer 사용
         self.transcriber = None   # WS 모드에서는 WebSocketTranscriber 사용
+
+    def _display_related_notes(self, notes):
+        """실시간 vault 검색 결과를 터미널에 한 줄로 표시.
+
+        RealtimeVaultSearcher의 검색 풀 스레드에서 호출된다 —
+        전사 출력과 같은 claim/release/buffer_line 규율로 직렬화."""
+        try:
+            titles = " · ".join(f"[[{n.get('title', '')}]]" for n in notes[:3]
+                                if n.get("title"))
+            if not titles:
+                return
+            line = f"\n  {C_GRAY}📎 관련: {titles}{C_RESET}"
+            if self.indicator and self.indicator._scroll_locked:
+                self.indicator.buffer_line(line)
+            else:
+                if self.indicator:
+                    self.indicator.claim()
+                print(line, flush=True)
+                if self.indicator:
+                    self.indicator.release()
+        except Exception:
+            pass
 
     def _worker_loop(self):
         """청크를 순서대로 꺼내 STT → 번역 파이프라인 실행.
@@ -1707,6 +1618,13 @@ class RealtimeSession:
             pass
 
     def run(self):
+        # 시작 시 vault 인덱스 재빌드 (indexing.auto_reindex_on_start) —
+        # 실시간 vault 검색·종료 후 컨텍스트가 최신 노트를 보도록
+        try:
+            from meeting_minutes_app.wiki_core.wiki_knowledge import reindex_on_start_if_configured
+            reindex_on_start_if_configured()
+        except Exception:
+            pass
         if self.mode == "ws":
             self._run_ws()
         else:
@@ -1760,10 +1678,9 @@ class RealtimeSession:
             ctx.verify_mode = _ssl.CERT_NONE
             ws_opts["ssl"] = ctx
 
-        # WS 모델: diarize 미지원이므로 기본 모델 사용
-        ws_model = self.stt_model
-        if ws_model.endswith("-2025-12-15"):
-            ws_model = ws_model.replace("-2025-12-15", "")
+        # WS 모델: 날짜 접미사 제거 (공용 규칙)
+        from meeting_minutes_app.common.realtime_ws_session import strip_model_date_suffix
+        ws_model = strip_model_date_suffix(self.stt_model)
 
         try:
             conn_mgr = self.openai.beta.realtime.connect(
@@ -1800,14 +1717,32 @@ class RealtimeSession:
                     logger=self.logger,
                     indicator=self.indicator,
                     topic=self.topic,
+                    vault_searcher=self.vault_searcher,
                 )
                 # _finalize()에서 접근하기 위해 저장
                 self.transcriber = ws_transcriber
 
+                # 연결 끊김 시 재연결 콜백 — 새 연결 생성 + 세션 설정 + 스트리머 재부착.
+                # 교체된 연결/매니저는 홀더에 보관해 종료 시 정리한다.
+                _conn_holder: Dict[str, Any] = {"mgr": None, "conn": conn}
+
+                def _ws_reconnect():
+                    try:
+                        _conn_holder["conn"].close()
+                    except Exception:
+                        pass
+                    mgr2 = self.openai.beta.realtime.connect(
+                        model=ws_model, websocket_connection_options=ws_opts)
+                    conn2 = mgr2.__enter__()
+                    conn2.transcription_session.update(session=session_cfg)
+                    _conn_holder["mgr"], _conn_holder["conn"] = mgr2, conn2
+                    ws_streamer.reattach(conn2)
+                    return conn2
+
                 ws_streamer.start()
                 event_thread = threading.Thread(
                     target=ws_transcriber.run_event_loop,
-                    args=(self._stop_ev,),
+                    args=(self._stop_ev, _ws_reconnect),
                     daemon=True,
                     name="ws-event-loop",
                 )
@@ -1829,12 +1764,23 @@ class RealtimeSession:
                 ws_streamer.stop()
                 event_thread.join(timeout=30)
                 ws_transcriber.shutdown()
+                # 재연결로 교체된 연결 정리 (원 연결은 with 블록이 닫음)
+                if _conn_holder["mgr"] is not None:
+                    try:
+                        _conn_holder["mgr"].__exit__(None, None, None)
+                    except Exception:
+                        pass
 
         except Exception as e:
             print(f"\n  {C_RED}[WS 오류]{C_RESET} {e}")
             print(f"  {C_YELLOW}HTTP 모드로 전환합니다.{C_RESET}")
+            # WS 세션에서 이미 확보한 세그먼트 보존 (과거엔 transcriber 교체로 유실됨)
+            _prev_segments = list(self.transcriber.segments) if self.transcriber else []
             self.mode = "http"
             self._init_http_mode()
+            if _prev_segments:
+                self.transcriber.segments = _prev_segments
+                print(f"  {C_GREEN}WS 세그먼트 {len(_prev_segments)}개 보존됨{C_RESET}")
             self._run_http()
             return
 
@@ -1867,6 +1813,10 @@ class RealtimeSession:
 
     def _finalize_common(self):
         """HTTP/WS 공통 종료 처리 (오디오 백업, 로거, 출력 생성)."""
+        # vault 검색 drain — _generate_output()의 collected_titles() 완결성 보장
+        if self.vault_searcher is not None:
+            self.vault_searcher.shutdown(wait=True)
+
         # 오디오 백업 WAV 변환 (정상 종료 시)
         if self._backup:
             audio_path = self._backup.close(convert_to_wav=True)
@@ -1981,122 +1931,56 @@ class RealtimeSession:
         print(f"  {self.labels['title']} 생성 중...")
 
         minutes_path        = os.path.join(self.output_dir, f"{stem}_minutes.md")
-        summary_path        = os.path.join(self.output_dir, f"{stem}_summary.md")
         summary_txt_path    = os.path.join(self.output_dir, f"{stem}_summary.txt")
         transcript_path     = os.path.join(self.output_dir, f"{stem}_transcript.txt")
         script_path         = os.path.join(self.output_dir, f"{stem}_script.md")
-        refined_script_path = os.path.join(self.output_dir, f"{stem}_refined_script.txt")
         summary_text        = ""
 
 
-        # [공용] 사전 자료 주입 (계획 매칭은 화자추론 단계에서 1회 탐색해 재사용)
-        _gen_memo = self.memo
-        try:
-            _, _gen_memo = _publish.plan_context_memo(self.topic or stem, session_dt, self.memo, match=_plan_match)
-            if _plan_match:
-                print(f"  계획 회의 매칭: {_plan_match.get('path')} (사유: {_plan_match.get('reason','')})")
-        except Exception as _pe:
-            print(f"  계획 매칭/사전자료 주입 건너뜀: {_pe}")
+        # [공용] 종료 후 파이프라인 — finalize.run_post_session
+        # (컨텍스트 주입 → 교정 → 회의록 → 액션 → 사실검증 → 요약 → 발행 → wiki 산출물/registry)
+        # 과거 이 자리에 복사돼 있던 개별 스테이지들은 meeting_pipeline/finalize.py로 통합됐다.
+        from meeting_minutes_app.meeting_pipeline import finalize as fz
 
-        _related_note_titles = []
-        _context_flags: Dict[str, Any] = {}
-        try:
-            from meeting_minutes_app.meeting_pipeline import meeting_workflow as mw
-            _gen_memo, _related_note_titles, _context_flags = mw.build_generation_context_memo(
-                llm=self.llm,
-                title=(self.topic or stem),
-                topic=self.topic,
-                segments_or_text=segments,
-                base_memo=_gen_memo,
-            )
-            if _context_flags.get("wiki"):
-                print(f"  Obsidian Wiki 컨텍스트 주입: {len(_related_note_titles)}개 노트")
-        except Exception as _we:
-            print(f"  Obsidian Wiki 컨텍스트 주입 건너뜀: {_we}")
+        header = (f"<!-- Generated: {datetime.now().isoformat()} -->\n"
+                  f"<!-- Mode: realtime | Type: {self.doc_type} | "
+                  f"STT: {self.stt_model} | Lang: {self.language}"
+                  + (f" | Topic: {self.topic}" if self.topic else "")
+                  + " -->\n\n")
+        events = _make_cli_finalize_events(self.output_dir, stem, self.labels, header)
 
-        try:
-            # STT 교정 — 회의록 생성 전에 실행하여 교정본을 입력으로 사용
-            refined_text = None
-            try:
-                refined_text = refine_script(
-                    segments, self.llm, self.doc_type, topic=self.topic
-                )
-                save(refined_text, refined_script_path, "교정 스크립트")
-            except Exception as re_err:
-                print(f"  STT 교정 실패 ({re_err}) → 원본 스크립트로 회의록 생성")
+        # 실시간 vault 검색 수집분 — 회의록 컨텍스트에 병합
+        _rt_titles = (self.vault_searcher.collected_titles()[:10]
+                      if self.vault_searcher else [])
+        if _rt_titles:
+            print(f"  실시간 관련 노트 병합: {len(_rt_titles)}개")
 
-            # 회의록 생성 — 교정본 우선, 실패 시 원본 segments 사용
-            minutes = generate_minutes(
-                refined_text if refined_text else segments,
-                self.llm, self.doc_type,
-                memo=_gen_memo, topic=self.topic, session_dt=session_dt,
-                title=self.topic,
-            )
-            actions_json = ""
-            actions_md = ""
-            try:
-                actions_json = _mg.extract_action_items(minutes, self.llm, self.doc_type) if self.doc_type == "meeting" else ""
-                if actions_json:
-                    actions_md = _mg.format_actions_md(actions_json)
-                    save(actions_json, os.path.join(self.output_dir, f"{stem}_actions.json"), "액션 아이템(JSON)")
-                    save(actions_md, os.path.join(self.output_dir, f"{stem}_actions.md"), "액션 아이템(마크다운)")
-            except Exception:
-                actions_json = ""
-                actions_md = ""
-
-            minutes, _ = _apply_wiki_quality_loop(
-                minutes=minutes,
-                llm=self.llm,
-                doc_type=self.doc_type,
-                title=(self.topic or f"실시간 {session_dt}" or stem),
-                topic=self.topic,
-                session_dt=session_dt,
+        res = fz.run_post_session(
+            fz.SessionInputs(
                 segments=segments,
-                output_dir=self.output_dir,
-                stem=stem,
-                related_note_titles=_related_note_titles,
-                context_flags=_context_flags,
-                actions_json=actions_json,
-            )
-            header  = (f"<!-- Generated: {datetime.now().isoformat()} -->\n"
-                       f"<!-- Mode: realtime | Type: {self.doc_type} | "
-                       f"STT: {self.stt_model} | Lang: {self.language}"
-                       + (f" | Topic: {self.topic}" if self.topic else "")
-                       + " -->\n\n")
-            save(header + minutes, minutes_path, self.labels["title"])
-
-            summary_text = generate_summary(
-                minutes, self.llm, self.doc_type,
-                topic=self.topic, session_dt=session_dt,
-            )
-            save(summary_text, summary_path, "요약본(md)")
-            save(summary_text, summary_txt_path, "요약본(txt)")
-
-            # [공용] Obsidian 발행 + 계획 매칭/병합 확인 (batch/web 와 동일)
-            _pub = None
-            try:
-                _evidence_links = []
-                try:
-                    from meeting_minutes_app.meeting_pipeline import meeting_workflow as _mw_pub
-                    _evidence_links = _mw_pub.evidence_to_wikilinks((_context_flags or {}).get("evidence", []))
-                except Exception:
-                    _evidence_links = []
-                _pub = _publish.enrich_and_publish(
-                    title=(self.topic or f"실시간 {session_dt}"),
-                    doc_type=self.doc_type, minutes_md=minutes, llm=self.llm,
-                    summary_md=summary_text, actions_md=actions_md,
-                    topic=self.topic, session_dt=session_dt, attendees=[],
-                    related_notes_extra=_related_note_titles,
-                    planned_match=_plan_match,
-                    evidence=_evidence_links,
-                )
-            except Exception as _pubE:
-                print(f"  Obsidian 발행 실패(로컬 파일은 정상 저장됨): {_pubE}")
-
-        except Exception as e:
-            print(f"  회의록 생성 실패: {e}")
-            import traceback
-            traceback.print_exc()
+                title=(self.topic or f"실시간 {session_dt}"),
+                topic=self.topic,
+                doc_type=self.doc_type,
+                session_dt=session_dt,
+                base_memo=self.memo,
+                source="realtime",
+            ),
+            fz.FinalizeOptions(
+                llm=self.llm,
+                plan_match=_plan_match,   # 화자추론 단계에서 1회 탐색한 결과 재사용
+                artifacts_dir=Path(self.output_dir),
+                extra_related_titles=_rt_titles,
+            ),
+            events,
+        )
+        minutes = res.minutes
+        summary_text = res.summary
+        _pub = res.publish_result
+        if res.actions_md:
+            save(res.actions_md, os.path.join(self.output_dir, f"{stem}_actions.md"),
+                 "액션 아이템(마크다운)")
+        if not minutes:
+            print(f"  회의록 생성 실패")
             print(f"\n  나중에 복구 가능:")
             print(f"    python run_meeting.py realtime-raw --recover {self.logger.log_path}")
 

@@ -88,6 +88,9 @@ Usage:
   meeting-minutes prep-brief --title "제목" [--topic "주제"]  # 회의 준비 브리프 생성
 
 Advanced:
+  # 주의: 아래 'prep'은 위의 'prep-brief'와 다른 별개 기능이다 —
+  # prep-brief(wiki_knowledge.py)는 Vault 검색+Registry 기반 브리프 생성,
+  # prep(meeting_assistant.py)은 planned 노트의 안건으로 사전 리서치를 갱신한다.
   meeting-minutes status|prep|process|schedule|merge [args]
   meeting-minutes obsidian|profiles|speaker-cache [args]
   meeting-minutes plan-watcher|auto-process [args]
@@ -181,63 +184,73 @@ def _version() -> str:
         return "meeting-minutes (버전 정보 없음 — 개발 모드/미설치 실행)"
 
 
+def _run_and_wait(argv: list[str]) -> None:
+    """메뉴에서 한 작업을 실행하고, 결과를 화면에 남긴 채 Enter 입력을 기다린다.
+
+    (성공/실패 여부와 무관하게 대기 — 실패했을 때만 멈추면 성공 시 결과가
+    출력되자마자 창이 닫혀 사용자가 읽을 수 없다.)
+    """
+    dispatch(argv)
+    input("\n계속하려면 Enter (메인 메뉴로 돌아갑니다)...")
+
+
 def menu() -> int:
     while True:
         os.system("cls" if os.name == "nt" else "clear")
         print("Meeting Minutes - Unified Launcher")
         print("=" * 40)
-        print("1. Realtime recording")
-        print("2. File/batch processing")
-        print("3. Ingest one audio file")
-        print("4. Obsidian embedded audio")
-        print("5. Watch audio folders")
-        print("6. Reindex Vault")
-        print("7. Ask Vault Wiki")
-        print("8. Web UI")
+        print("1. Realtime recording (실시간 회의 녹음 + 자동 회의록)")
+        print("2. File/batch processing (녹음 파일 일괄 처리)")
+        print("3. Ingest one audio file (오디오 파일 1개 수동 처리)")
+        print("4. Obsidian embedded audio (옵시디언 노트에 첨부된 녹음 처리)")
+        print("5. Watch audio folders (지정 폴더 자동 감시 처리)")
+        print("6. Reindex Vault (옵시디언 볼트 검색 인덱스 재생성)")
+        print("7. Ask Vault Wiki (볼트 지식 기반 질의응답)")
+        print("8. Web UI (브라우저 대시보드 실행)")
         print("9. Prep brief (회의 준비 브리프)")
-        print("10. Assistant status")
-        print("11. Schedule dashboard")
-        print("12. Merge pending recording")
-        print("13. Obsidian connection/path")
+        print("10. Assistant status (일정/회의 현황 요약)")
+        print("11. Schedule dashboard (일정 대시보드 갱신)")
+        print("12. Merge pending recording (녹음-계획 매칭 병합 대기 처리)")
+        print("13. Obsidian connection/path (옵시디언 연결/경로 진단)")
         print("0. Exit")
         print("   (고급 커맨드: meeting-minutes --help)")
         choice = input("\nSelect >> ").strip()
 
         if choice == "1":
-            return dispatch(["realtime"])
+            _run_and_wait(["realtime"]); continue
         if choice == "2":
-            return dispatch(["batch"])
+            _run_and_wait(["batch"]); continue
         if choice == "3":
             path = input("Audio path >> ").strip().strip('"')
             if path:
-                return dispatch(["ingest", path])
+                _run_and_wait(["ingest", path])
             continue
         if choice == "4":
-            return dispatch(["vault-audio"])
+            _run_and_wait(["vault-audio"]); continue
         if choice == "5":
-            return dispatch(["watch"])
+            _run_and_wait(["watch"]); continue
         if choice == "6":
-            return dispatch(["reindex"])
+            _run_and_wait(["reindex"]); continue
         if choice == "7":
             q = input("Question >> ").strip()
             if q:
-                return dispatch(["ask", q, "--show-sources"])
+                _run_and_wait(["ask", q, "--show-sources"])
             continue
         if choice == "8":
-            return dispatch(["web"])
+            _run_and_wait(["web"]); continue
         if choice == "9":
             t = input("회의 제목 >> ").strip()
             if t:
-                return dispatch(["prep-brief", "--title", t])
+                _run_and_wait(["prep-brief", "--title", t])
             continue
         if choice == "10":
-            return dispatch(["status"])
+            _run_and_wait(["status"]); continue
         if choice == "11":
-            return dispatch(["schedule", "--write-dashboard"])
+            _run_and_wait(["schedule", "--write-dashboard"]); continue
         if choice == "12":
-            return dispatch(["merge"])
+            _run_and_wait(["merge"]); continue
         if choice == "13":
-            return dispatch(["obsidian", "--where"])
+            _run_and_wait(["obsidian", "--where"]); continue
         if choice in ("0", ""):
             return 0
 

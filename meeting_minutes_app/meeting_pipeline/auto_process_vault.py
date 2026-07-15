@@ -13,6 +13,7 @@ Windows 작업 스케줄러에 scripts/windows/run_auto_process.bat 를 등록�
 환경이 다르면 아래 설정값만 수정하세요.
 """
 import os
+import re
 import sys
 import glob
 import subprocess
@@ -49,12 +50,19 @@ def log(msg):
 
 
 def already_processed(stem):
-    """output/ 에 stem 을 포함하고 segments.json 이 있는 폴더가 있으면 처리 완료."""
+    """output/ 에 stem 이 온전한 토큰으로 들어가고 segments.json 이 있는 폴더가 있으면 처리 완료.
+
+    단순 substring(`stem in d`)은 짧은 stem("회의" 등)이 무관한 폴더에
+    부분일치해 신규 녹음을 잘못 건너뛸 수 있어 토큰 경계를 요구한다.
+    """
     if not os.path.isdir(OUT):
         return False
+    token_pat = re.compile(
+        r"(?:^|[\s_\-.])" + re.escape(stem) + r"(?:$|[\s_\-.])"
+    )
     for d in os.listdir(OUT):
         full = os.path.join(OUT, d)
-        if os.path.isdir(full) and stem in d:
+        if os.path.isdir(full) and (d == stem or token_pat.search(d)):
             if glob.glob(os.path.join(full, "*segments.json")):
                 return True
     return False

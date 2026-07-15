@@ -3,7 +3,6 @@ api/batch.py — 파일 업로드 + 배치 처리 API
 """
 
 import os
-import sys
 import argparse
 import tempfile
 import traceback
@@ -45,7 +44,11 @@ def _build_args(
         type=doc_type or preset["type"],
         language=language or preset["language"],
         translate=translate if translate else preset["translate"],
-        translate_script=preset.get("translate", False),
+        # CLI의 --translate-script는 --translate와 독립적인 별도 opt-in 플래그로,
+        # 지정하지 않으면 항상 False다. 여기서 preset["translate"]를 그대로 복제하면
+        # translate=True인 프리셋(2/4/5번)마다 CLI에는 없는 script_ko.md가 추가로
+        # 생성돼 동일 옵션으로 처리해도 산출물이 달라지므로, CLI 기본값과 맞춘다.
+        translate_script=False,
         model=None,
         llm=_llm,
         speakers=speakers,
@@ -144,8 +147,14 @@ async def upload_file(
         doc_type=type, language=language, translate=do_translate,
     )
 
+    # 제목을 안 넣으면 원본 파일명(stem)을 사용 — CLI의 `title = args.title or
+    # Path(fp).stem` 관례와 맞춰야 auto_process_vault.py의 already_processed(stem)
+    # 토큰 매칭(파일명 기준 중복 처리 방지)이 web 업로드 폴더도 인식할 수 있다.
+    # (기존엔 "upload" 고정값 또는 확장자가 안 떨어진 파일명을 써서 매칭이 깨졌음)
+    effective_title = title or (Path(safe_name).stem or "upload")
+
     session_id = db.create_session(
-        title=title or safe_name,
+        title=effective_title,
         topic=topic,
         doc_type=args.type,
         language=args.language,
@@ -157,6 +166,6 @@ async def upload_file(
         mode=str(mode),
     )
 
-    background_tasks.add_task(_run_batch_processing, session_id, save_path, args, title or safe_name)
+    background_tasks.add_task(_run_batch_processing, session_id, save_path, args, effective_title)
 
     return {"sessionId": session_id, "status": "processing"}

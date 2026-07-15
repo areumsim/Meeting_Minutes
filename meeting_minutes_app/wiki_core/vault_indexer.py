@@ -22,7 +22,7 @@ import glob
 import time
 import hashlib
 from pathlib import Path
-from typing import Optional, List, Dict, Any, Tuple
+from typing import Optional, List, Dict, Any, Tuple, Sequence
 
 try:
     from meeting_minutes_app.common import config_loader as _cfg
@@ -325,6 +325,19 @@ class VaultIndexer:
                         )
                 except Exception:
                     pass
+            # TF-IDF/임베딩 인덱스가 서로 다른 시점에 빌드되면(standalone --embed 등)
+            # 하이브리드 검색 결과가 어긋날 수 있음 — 하루 이상 차이 시 경고
+            if self._emb_enabled() and os.path.exists(self.emb_path):
+                try:
+                    drift = abs(os.path.getmtime(self.index_path)
+                                - os.path.getmtime(self.emb_path))
+                    if drift > 86400:
+                        print(
+                            "[indexer] ⚠️  TF-IDF/임베딩 인덱스 빌드 시점이 하루 이상 어긋남 "
+                            "— `run_meeting.py reindex` 로 함께 재빌드하세요."
+                        )
+                except Exception:
+                    pass
             self._notes = data.get("notes", {})
             self._idf = data.get("idf", {})
             self._built = bool(self._notes)
@@ -507,7 +520,8 @@ class VaultIndexer:
             print(f"[indexer] 임베딩 완료: +{done}개 (합계 {len(existing)}개)")
         return done
 
-    def _semantic_ranking(self, query: str, limit: int) -> List[Tuple[str, float]]:
+    def _semantic_ranking(self, query: str, limit: int,
+                          path_prefixes: Optional[Tuple[str, ...]] = None) -> List[Tuple[str, float]]:
         """쿼리와 노트 임베딩의 코사인 유사도 랭킹. 비활성/실패 시 빈 리스트."""
         if not self._emb_enabled() or not self._load_embeddings():
             return []
@@ -527,18 +541,24 @@ class VaultIndexer:
             (rel, _dot(qvec, e["v"]))
             for rel, e in self._emb.get("notes", {}).items()
             if rel in self._notes and e.get("v")
+            and (not path_prefixes or rel.startswith(path_prefixes))
         ]
         sims.sort(key=lambda x: -x[1])
         return [(rel, s) for rel, s in sims[:limit] if s >= min_cos]
 
     # ── 검색 ─────────────────────────────────────────────────
-    def search(self, query: str, limit: int = 10) -> List[Dict[str, Any]]:
+    def search(self, query: str, limit: int = 10,
+              path_prefixes: Optional[Sequence[str]] = None) -> List[Dict[str, Any]]:
         """쿼리와 관련된 노트를 반환한다.
 
         기본은 TF-IDF 랭킹. wiki_knowledge.embedding_enabled=true이고 임베딩
         인덱스가 있으면 TF-IDF + 임베딩 코사인 랭킹을 RRF로 융합한다.
         결과의 "score"는 하위호환을 위해 항상 TF-IDF 점수이며, 융합 시
         "cosine"(임베딩 유사도)과 "rrf"(융합 점수) 필드가 추가된다.
+
+        path_prefixes: 주어지면 이 접두사로 시작하는 노트만 검색 대상으로 삼는다
+        (예: 특정 도메인 아카이브 + 01_References로 검색 범위 좁히기).
+        vault_retrieval.detect_query_domain()/domain_search_prefixes() 참고.
         """
         if not self._built:
             if not self.load():
@@ -546,19 +566,22 @@ class VaultIndexer:
         query_tokens = _tokenize(query)
         if not query_tokens:
             return []
+        allowed = tuple(p.rstrip("/") + "/" for p in path_prefixes) if path_prefixes else None
         scores: Dict[str, float] = {}
         for token in set(query_tokens):
             idf_val = self._idf.get(token, 0.0)
             if idf_val == 0:
                 continue
             for rel, note in self._notes.items():
+                if allowed and not rel.startswith(allowed):
+                    continue
                 tf_val = note["tf"].get(token, 0.0)
                 if tf_val > 0:
                     scores[rel] = scores.get(rel, 0.0) + tf_val * idf_val
 
         candidates = max(limit * 3, limit)
         tfidf_ranked = sorted(scores.items(), key=lambda x: -x[1])[:candidates]
-        sem_ranked = self._semantic_ranking(query, candidates)
+        sem_ranked = self._semantic_ranking(query, candidates, path_prefixes=allowed)
 
         fused: Dict[str, float] = {}
         cos_map: Dict[str, float] = {}
@@ -595,32 +618,39 @@ class VaultIndexer:
         return results
 
     def find_related(self, text: str, limit: int = 5,
-                     min_score: float = 0.05) -> List[str]:
+                     min_score: float = 0.05,
+                     path_prefixes: Optional[Sequence[str]] = None) -> List[str]:
         """텍스트와 관련된 노트의 [[wiki link]] 타이틀 리스트를 반환한다.
 
         TF-IDF min_score 미달이어도 임베딩 유사도(embedding_min_cosine 이상)로
         검색된 노트는 유지한다 — 키워드가 겹치지 않는 의미적 관련 노트 회수용.
+        path_prefixes: search() 참고.
         """
-        results = self.search(text, limit=limit)
+        results = self.search(text, limit=limit, path_prefixes=path_prefixes)
         return [
             r["wikilink_title"] for r in results
             if r["score"] >= min_score or r.get("cosine", 0.0) > 0.0
         ]
 
-    def search_sections(self, query: str, limit: int = 10) -> List[Dict[str, Any]]:
-        """섹션 단위 TF-IDF 검색. section_index_enabled=true로 빌드된 인덱스 필요."""
+    def search_sections(self, query: str, limit: int = 10,
+                        path_prefixes: Optional[Sequence[str]] = None) -> List[Dict[str, Any]]:
+        """섹션 단위 TF-IDF 검색. section_index_enabled=true로 빌드된 인덱스 필요.
+        path_prefixes: search() 참고."""
         if not self._built:
             if not self.load():
                 return []
         query_tokens = _tokenize(query)
         if not query_tokens:
             return []
+        allowed = tuple(p.rstrip("/") + "/" for p in path_prefixes) if path_prefixes else None
         scores: Dict[str, float] = {}
         for token in set(query_tokens):
             idf_val = self._idf.get(token, 0.0)
             if not idf_val:
                 continue
             for rel, note in self._notes.items():
+                if allowed and not rel.startswith(allowed):
+                    continue
                 for idx, sec in enumerate(note.get("sections", [])):
                     tf_val = sec["tf"].get(token, 0.0)
                     if tf_val > 0:
@@ -641,9 +671,10 @@ class VaultIndexer:
             })
         return results
 
-    def find_related_sections(self, text: str, limit: int = 10) -> List[Dict[str, Any]]:
+    def find_related_sections(self, text: str, limit: int = 10,
+                              path_prefixes: Optional[Sequence[str]] = None) -> List[Dict[str, Any]]:
         """텍스트와 관련된 섹션 목록 반환. search_sections()의 편의 래퍼."""
-        return self.search_sections(text[:500], limit=limit)
+        return self.search_sections(text[:500], limit=limit, path_prefixes=path_prefixes)
 
     def get_note_content(self, rel_path: str) -> Optional[str]:
         """볼트에서 노트 내용을 직접 읽는다 (Q&A 컨텍스트용)."""

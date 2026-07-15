@@ -181,15 +181,12 @@ MODES = {
 # ══════════════════════════════════════════════════════════════════
 #  API 비용 추정
 # ══════════════════════════════════════════════════════════════════
-_STT_PRICE_PER_MIN = {   # $/min
-    "gpt-4o-mini-transcribe":            0.003,
-    "gpt-4o-mini-transcribe-2025-12-15": 0.003,
-    "gpt-4o-transcribe":                 0.006,
-    "gpt-4o-transcribe-diarize":         0.006,
-    "whisper-1":                         0.006,
-}
-_MINUTES_COST_PER_SESSION = 0.08   # gpt-4o 회의록 생성 1회 (~20K in + 3K out)
-_TRANSLATE_COST_PER_MIN   = 0.0002  # gpt-4o-mini 번역 (~173 tokens/min × 2 방향)
+# 비용 단가 — common/pricing.py 단일 소스 사용
+from meeting_minutes_app.common.pricing import (
+    STT_PRICE_PER_MIN as _STT_PRICE_PER_MIN,
+    MINUTES_COST_PER_SESSION as _MINUTES_COST_PER_SESSION,
+    TRANSLATE_COST_PER_MIN as _TRANSLATE_COST_PER_MIN,
+)
 
 def _compute_cost(mode_key: str, elapsed_sec: float) -> dict:
     mode = MODES[mode_key]

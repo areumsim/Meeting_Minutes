@@ -15,10 +15,17 @@ LLM이 그 컨텍스트만으로 답변하도록 강제한다.
 
 from __future__ import annotations
 
-import os
 import re
+import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
+
+for _s in (sys.stdout, sys.stderr):
+    if getattr(_s, "encoding", None) and _s.encoding.lower() in ("cp949", "euc-kr", "ansi"):
+        try:
+            _s.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
 
 try:
     from meeting_minutes_app.common import config_loader as _cfg
@@ -159,12 +166,36 @@ class WikiQA:
         seen_titles: set = set()
         seen_sections: set = set()
         results: List[Dict] = []
-        terms = _keyword_terms(question)
+
+        # 검색에만 config.analysis.entity_aliases(줄임말/구어체→정식 명칭)를 적용한다.
+        # 예: "연대"(2글자) vs "양자컴퓨팅"(3글자)는 bigram 토큰이 하나도 안 겹쳐서
+        # TF-IDF가 완전히 놓치는데, 노트 본문은 정식 명칭만 쓰는 경우가 많다 —
+        # meeting_workflow의 STT 오인식 보정과 같은 별칭 테이블을 재사용한다.
+        # LLM 프롬프트(_build_prompt)에는 원문 question을 그대로 넘겨 사용자가
+        # 실제로 쓴 표현이 보존되게 한다.
+        try:
+            from meeting_minutes_app.wiki_core.vault_retrieval import normalize_domain_text
+            search_question = normalize_domain_text(question)
+        except Exception:
+            search_question = question
+        terms = _keyword_terms(search_question)
+
+        # 질문에서 도메인(양자/PhysicalAI 등)이 감지되면 검색 범위를 그 아카이브 +
+        # 공유 참조노트로 좁힌다 — 감지 안 되면 빈 리스트(=볼트 전체 검색, 기존 동작).
+        path_prefixes: List[str] = []
+        try:
+            from meeting_minutes_app.wiki_core.vault_retrieval import (
+                detect_query_domain, domain_search_prefixes,
+            )
+            path_prefixes = domain_search_prefixes(detect_query_domain(search_question))
+        except Exception:
+            path_prefixes = []
 
         # Layer 0: 섹션 단위 검색 (section_index_enabled=true 일 때 우선 — 근거 정확도 향상)
         if self._indexer and _c("wiki_knowledge.section_index_enabled", True):
             try:
-                sec_hits = self._indexer.find_related_sections(question, limit=max_notes * 2)
+                sec_hits = self._indexer.find_related_sections(
+                    search_question, limit=max_notes * 2, path_prefixes=path_prefixes)
             except Exception:
                 sec_hits = []
             for i, hit in enumerate(sec_hits):
@@ -203,7 +234,8 @@ class WikiQA:
 
         # Layer 1: 로컬 TF-IDF 인덱스
         if self._indexer:
-            idx_results = self._indexer.search(question, limit=max_notes * 2)
+            idx_results = self._indexer.search(
+                search_question, limit=max_notes * 2, path_prefixes=path_prefixes)
             for r in idx_results:
                 title = r.get("title", "")
                 norm = _norm_title(title)
@@ -235,7 +267,7 @@ class WikiQA:
         if self._obs:
             try:
                 obs_results: List[Dict[str, Any]] = []
-                queries = [question]
+                queries = [search_question]
                 if terms:
                     queries.append(" ".join(terms[:8]))
                     for i in range(0, min(len(terms), 8), 3):
@@ -304,6 +336,13 @@ class WikiQA:
             conflict=self._conflict,
             context=context_str,
         )
+        # wiki.citation_required=false 시 출처 인용 강제를 완화 (기본 true)
+        if not _c("wiki.citation_required", True):
+            system = system.replace(
+                "2. 모든 주장에는 반드시 [출처: [[노트 제목]]] 또는 "
+                "[출처: [[노트 제목#헤딩]]] 형식으로 인용하세요.",
+                "2. 가능하면 [출처: [[노트 제목]]] 형식으로 인용하세요 (필수 아님).",
+            )
         if self._online:
             system += "\n" + _ONLINE_SUPPLEMENT_PROMPT
 

@@ -95,7 +95,9 @@ _MINUTES_MEETING = """\
 ### 결정 사항(합의/정리된 방향)
 
 1. **결정 요약**: 구체적 내용
+   - 배경: 왜 이렇게 결정했는지(근거·전제·논의된 대안)
 2. **결정 요약**: 구체적 내용
+   - 배경: 왜 이렇게 결정했는지(근거·전제·논의된 대안)
 
 ---
 
@@ -129,6 +131,7 @@ _MINUTES_MEETING = """\
 ### 결정 사항
 - 명시적으로 합의·확정된 사항만 기재
 - 번호 목록, 각 항목은 `**핵심 키워드**`: 상세 내용
+- 각 결정 항목 아래 들여쓰기로 `- 배경:` 서브불릿을 반드시 추가 — 왜 이렇게 결정했는지(근거·전제·논의된 대안·기각된 대안 등)를 기록. 스크립트에 근거가 드러나지 않으면 `- 배경: 스크립트에 명시되지 않음`으로 표기 (배경을 지어내지 말 것)
 
 ### Action Item
 - 담당 조직/팀/개인별로 그룹핑 (표 형식 사용 금지)
@@ -486,6 +489,84 @@ _SUMMARY_LECTURE = """\
 - 수치·공식·코드·고유명사는 원문 그대로 유지
 - 압축은 허용하되 개념의 이유와 예시를 제거하는 압축은 금지"""
 
+_MINUTES_MEMO = """\
+{prefix}개인 음성 메모/아이디어 정리 전문가입니다.
+스크립트에 담긴 생각의 흐름을 놓치지 않고 주제별로 간결하게 정리하는 것이 핵심 임무입니다.
+
+## 핵심 원칙
+1. 형식적인 회의록 틀(참석자·안건 번호 등)을 강요하지 말고, 실제 언급된 주제만 정리
+2. 개별 발언을 시간순으로 나열하지 말고, **주제별로 종합·정리** (타임스탬프 표기 금지)
+3. 수치·고유명사·용어는 원문 그대로 유지 (의역 금지)
+4. 핵심 아이디어·결론은 **굵게** 강조
+5. 화자를 추측하거나 지어내지 말 것. 특정할 수 없으면 귀속하지 않음
+6. 메모(추가 메모)가 있으면 내용과 적극 연결하여 반영
+7. 간결한 문체, 한국어
+8. **스크립트·메모에 없는 사실/수치/기한은 절대 생성하지 말 것.** 불명확하면 "미정"으로 표기
+
+## 출력 형식 (이 구조를 정확히 따를 것)
+
+## YYMMDD [메모 주제] 메모 정리
+
+- **일시**: YYYY.MM.DD(요일) HH:MM ~ (알 수 없으면 생략)
+
+---
+
+### 핵심 요약
+
+- 이 메모의 핵심 내용을 2~4문장으로 요약
+
+---
+
+### 세부 내용
+
+### A. [첫 번째 주제]
+
+- **소주제/논점**
+    - 세부 내용 (핵심 수치·사실은 **굵게**)
+
+### B. [두 번째 주제]
+
+- **소주제/논점**
+    - 세부 내용
+
+(주제 수만큼 반복)
+
+---
+
+### 후속 액션/확인 필요 사항 (있는 경우만)
+
+- 구체적 내용 — 기한이 언급되었으면 명시, 없으면 생략
+
+## 세부 작성 규칙
+
+### 제목
+- `## YYMMDD` 형식 (예: 260305), 뒤에 메모 주제와 "메모 정리"
+- 주제는 스크립트 도입부·메모·topic 메타정보에서 추론
+
+### 세부 내용
+- 주제별로 `### A.`, `### B.`, `### C.` … 알파벳 순서로 소제목 부여
+- 동일 주제에 대한 여러 발언은 하나의 소주제 아래 종합
+
+## 길이 기준
+- 짧은 메모는 짧게, 긴 메모는 놓치는 내용 없이 충실하게 반영 (형식적 분량 채우기 금지)"""
+
+_SUMMARY_MEMO = """\
+{prefix}메모 요약 전문가입니다.
+메모 정리본을 읽기 전에 핵심만 빠르게 파악할 수 있도록 짧게 요약합니다.
+
+【출력 형식】
+
+### 한눈에 보는 핵심
+• 메모의 핵심 내용을 1~3문장으로 요약
+
+### 확인/후속 필요 사항 (있는 경우만)
+• 담당·기한이 명시된 것만 적고, 없으면 생략
+
+【작성 원칙】
+- 전체 200~400자 내외로 압축
+- 수치·고유명사는 원문 그대로 유지
+- 확인되지 않은 사실을 지어내지 말 것"""
+
 
 # ──────────────────────────────────────────────
 #  LLM 프롬프트 조립 (topic / session_dt / no_cut 삽입)
@@ -494,11 +575,13 @@ _MINUTES_TEMPLATES = {
     "meeting": _MINUTES_MEETING,
     "seminar": _MINUTES_SEMINAR,
     "lecture": _MINUTES_LECTURE,
+    "memo":    _MINUTES_MEMO,
 }
 _SUMMARY_TEMPLATES = {
     "meeting": _SUMMARY_MEETING,
     "seminar": _SUMMARY_SEMINAR,
     "lecture": _SUMMARY_LECTURE,
+    "memo":    _SUMMARY_MEMO,
 }
 
 _NO_CUT = ("⚠ 모든 주제·개념·수치·일정·고유명사를 빠짐없이 반영하세요. "
@@ -510,8 +593,47 @@ _NO_CUT_MEETING = ("⚠ 논의된 모든 주제·결정·수치·일정·고유�
                    "각 소주제마다 충분한 세부 내용을 포함하여 짧은 기록이 되지 않도록 하세요.\n\n")
 
 
+def _load_external_template(doc_type: str) -> str:
+    """analysis.templates_dir의 {doc_type}_analysis.md 오버라이드 템플릿 로드.
+
+    config에 templates_dir가 있고 해당 파일이 존재하면 내장 템플릿 대신
+    사용한다 (플레이스홀더: {topic}/{session_dt}/{related_notes}).
+    없으면 "" — 내장 템플릿 사용. (과거엔 config 키만 있고 읽는 코드가 없었음)
+    """
+    try:
+        from meeting_minutes_app.common import config_loader as _cfg
+        tdir = str(_cfg.get("analysis.templates_dir", "") or "")
+        if not tdir:
+            return ""
+        from pathlib import Path as _P
+        path = _P(tdir) / f"{doc_type}_analysis.md"
+        if not path.is_absolute():
+            path = _P(__file__).resolve().parents[2] / path
+        if path.is_file():
+            return path.read_text(encoding="utf-8").strip()
+    except Exception as e:
+        logger.warning(f"[prompt] 외부 템플릿 로드 실패 (내장 사용): {e}")
+    return ""
+
+
+class _SafeFormatDict(dict):
+    """외부 템플릿에 없는 플레이스홀더는 빈 문자열로 채움."""
+
+    def __missing__(self, key):
+        return ""
+
+
 def _get_minutes_prompt(doc_type: str, topic: str = "", session_dt: str = "",
                         title: str = "") -> str:
+    no_cut = _NO_CUT_MEETING if doc_type == "meeting" else _NO_CUT
+
+    ext = _load_external_template(doc_type)
+    if ext:
+        head = (f"제목/발표자 힌트: {title}\n\n" if title else "") + no_cut
+        # related_notes는 memo(배경 자료)로 별도 주입되므로 빈 값으로 채운다
+        return head + ext.format_map(_SafeFormatDict(
+            topic=topic or "", session_dt=session_dt or "", related_notes=""))
+
     tmpl = _MINUTES_TEMPLATES.get(doc_type, "")
     if not tmpl:
         return ""
@@ -520,7 +642,6 @@ def _get_minutes_prompt(doc_type: str, topic: str = "", session_dt: str = "",
     if topic:      prefix += f"주제: {topic}\n"
     if session_dt: prefix += f"일시: {session_dt}\n"
     if prefix:     prefix += "\n"
-    no_cut = _NO_CUT_MEETING if doc_type == "meeting" else _NO_CUT
     prefix += no_cut
     return tmpl.format(prefix=prefix)
 
@@ -609,6 +730,39 @@ def _merge_partial_minutes(
 # ──────────────────────────────────────────────
 #  회의록 / 요약 생성
 # ──────────────────────────────────────────────
+_MINUTES_REQUIRED_HEADERS = {
+    "meeting": ("결정 사항", "Action Item"),
+    "seminar": ("핵심 인사이트",),
+    "lecture": ("핵심 정리",),
+    "memo":    ("핵심 요약",),
+}
+
+
+def _minutes_is_usable(text: Optional[str], script_len: int, doc_type: str) -> Tuple[bool, str]:
+    """생성된 회의록이 너무 부실한지(필수 섹션 누락/극단적으로 짧음) 방어적으로 검증한다.
+    `_refined_script_is_usable`(교정 단계)과 대칭되는 회의록 생성 단계의 품질 게이트.
+    스크립트 자체가 짧으면(500자 미만) 짧은 결과가 정상이므로 게이트를 건너뛴다.
+    """
+    text = (text or "").strip()
+    if not text:
+        return False, "회의록 생성 결과가 비어 있음"
+    if script_len < 500:
+        return True, ""
+
+    section_count = len(re.findall(r"(?m)^###\s", text))
+    if section_count < 2:
+        return False, f"필수 소제목(### ) 섹션이 부족함 ({section_count}개)"
+
+    missing = [h for h in _MINUTES_REQUIRED_HEADERS.get(doc_type, ()) if h not in text]
+    if missing:
+        return False, f"필수 섹션 누락: {', '.join(missing)}"
+
+    if len(text) < max(300, int(script_len * 0.03)):
+        return False, f"결과가 스크립트 대비 과도하게 짧음 ({len(text)}/{script_len}자)"
+
+    return True, ""
+
+
 def generate_minutes(
     segments_or_script,   # List[Dict] 또는 교정된 str 텍스트 모두 허용
     llm: LLMClient,
@@ -683,6 +837,14 @@ def generate_minutes(
     else:
         user = f"{meta_lines}{memo_block}\n### 스크립트:\n{script}"
         result = llm.chat(system, user, temp=0.3, model=MINUTES_MODEL, max_tokens=16000)
+        usable, reason = _minutes_is_usable(result, len(script), doc_type)
+        if not usable:
+            warn(f"회의록 품질 미달({reason}) → 1회 재시도")
+            retry_system = system + (
+                "\n\n⚠️ 이전 시도가 너무 짧거나 필수 섹션이 빠졌습니다. "
+                "위 출력 형식·길이 기준을 반드시 지켜 다시 작성하세요."
+            )
+            result = llm.chat(retry_system, user, temp=0.3, model=MINUTES_MODEL, max_tokens=16000)
 
     if debug_dir:
         debug_save(result, os.path.join(debug_dir, "minutes_raw.md"), "Minutes raw")
@@ -768,6 +930,58 @@ def _refined_script_is_usable(refined: Optional[str], segments: List[Dict]) -> T
     return True, ""
 
 
+_ACTIONS_SYSTEM_PROMPT = (
+    "당신은 회의록 분석 전문가입니다.\n"
+    "회의록에서 Action Item(다음 할 일, 후속 조치, 결정된 사항)을 "
+    "추출해 JSON 배열로만 반환하세요.\n\n"
+    "담당자(assignee) 규칙:\n"
+    "- 실명 언급 시 → 해당 이름 그대로 사용\n"
+    "- 실명 없어도 조직/역할이 명확하면 → 예: '고객사측', '주관사', '발표자', 언급된 회사명\n"
+    "- 발화자 정보 없을 때도 문맥에서 추론: '우리가 다음 회의 전에 하기로 했어요' → 발화 측 조직\n"
+    "- 어떤 조직/역할도 특정 불가능할 때만 → null (단, 실제로 결정된 사항이면 포함)\n\n"
+    "기타 규칙:\n"
+    "- 불확실한 제안이나 논의 중 사항은 제외, 합의/결정된 것만\n"
+    "- deadline이 언급되지 않으면 null\n"
+    "- 설명 없이 순수 JSON 배열만 출력 (코드블록 금지)\n\n"
+    '출력 형식: [{"assignee":"담당자 또는 null","task":"업무 내용","deadline":"YYYY-MM-DD 또는 null","context":"맥락"}]'
+)
+
+
+def _extract_action_items_chunk(
+    text: str, llm: LLMClient, debug_dir: Optional[str] = None, chunk_label: str = "",
+) -> List[Dict]:
+    """액션 아이템 추출 — 단일 청크(또는 전체 회의록)에 대해 LLM 1회 호출."""
+    user = f"다음 회의록에서 Action Item을 추출하세요:\n\n{text}"
+    if debug_dir:
+        debug_save(user, os.path.join(debug_dir, f"actions_prompt{chunk_label}.txt"), "Actions prompt")
+    raw = llm.chat(_ACTIONS_SYSTEM_PROMPT, user, temp=0.1)
+    if debug_dir:
+        debug_save(raw, os.path.join(debug_dir, f"actions_raw{chunk_label}.json"), "Actions raw")
+    from meeting_minutes_app.meeting_pipeline.json_utils import parse_json_loose
+    return parse_json_loose(raw, expect="list", default=[])
+
+
+def _dedup_action_items(items: List[Dict]) -> List[Dict]:
+    """(assignee, task) 정규화 키 기준 중복 제거 — 청크 오버랩 구간에서 같은
+    액션이 여러 번 추출되는 것을 방지한다."""
+    from meeting_minutes_app.wiki_core.wiki_knowledge import _norm_key
+
+    seen = set()
+    out: List[Dict] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        task_key = _norm_key(str(item.get("task") or ""))
+        if not task_key:
+            continue
+        key = (_norm_key(str(item.get("assignee") or "")), task_key)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(item)
+    return out
+
+
 def extract_action_items(
     minutes: str, llm: LLMClient,
     doc_type: str = "meeting",
@@ -775,38 +989,30 @@ def extract_action_items(
 ) -> Optional[str]:
     """회의록에서 액션 아이템을 추출하여 JSON 문자열로 반환.
     meeting 타입만 지원. 항목이 없거나 추출 실패 시 None 반환.
+
+    회의록이 발췌 한도(analysis.actions_source_max_chars)보다 길면 청크로 나눠
+    각각 추출한 뒤 병합한다 — 긴 회의록 뒷부분의 액션이 통째로 누락되는 것을 방지.
     """
     if doc_type != "meeting":
         return None
     step("액션 아이템 추출 중...")
 
-    system = (
-        "당신은 회의록 분석 전문가입니다.\n"
-        "회의록에서 Action Item(다음 할 일, 후속 조치, 결정된 사항)을 "
-        "추출해 JSON 배열로만 반환하세요.\n\n"
-        "담당자(assignee) 규칙:\n"
-        "- 실명 언급 시 → 해당 이름 그대로 사용\n"
-        "- 실명 없어도 조직/역할이 명확하면 → 예: '코롱측', '메가존', '주관사', '발표자'\n"
-        "- 발화자 정보 없을 때도 문맥에서 추론: '우리가 다음 회의 전에 하기로 했어요' → 발화 측 조직\n"
-        "- 어떤 조직/역할도 특정 불가능할 때만 → null (단, 실제로 결정된 사항이면 포함)\n\n"
-        "기타 규칙:\n"
-        "- 불확실한 제안이나 논의 중 사항은 제외, 합의/결정된 것만\n"
-        "- deadline이 언급되지 않으면 null\n"
-        "- 설명 없이 순수 JSON 배열만 출력 (코드블록 금지)\n\n"
-        '출력 형식: [{"assignee":"담당자 또는 null","task":"업무 내용","deadline":"YYYY-MM-DD 또는 null","context":"맥락"}]'
-    )
-    user = f"다음 회의록에서 Action Item을 추출하세요:\n\n{minutes[:6000]}"
+    try:
+        from meeting_minutes_app.common import config_loader as _cfg
+        _src_max = int(_cfg.get("analysis.actions_source_max_chars", 6000) or 6000)
+    except Exception:
+        _src_max = 6000
 
-    if debug_dir:
-        debug_save(user, os.path.join(debug_dir, "actions_prompt.txt"), "Actions prompt")
-
-    raw = llm.chat(system, user, temp=0.1)
-
-    if debug_dir:
-        debug_save(raw, os.path.join(debug_dir, "actions_raw.json"), "Actions raw")
-
-    from meeting_minutes_app.meeting_pipeline.json_utils import parse_json_loose
-    items = parse_json_loose(raw, expect="list", default=[])
+    if len(minutes) <= _src_max:
+        items = _extract_action_items_chunk(minutes, llm, debug_dir)
+    else:
+        chunks = _split_script_chunks(minutes, _src_max)
+        warn(f"회의록 {len(minutes):,}자 > {_src_max:,}자 → {len(chunks)}개 구간으로 나눠 액션 아이템 추출")
+        items = []
+        for idx, chunk in enumerate(chunks):
+            items.extend(_extract_action_items_chunk(
+                chunk, llm, debug_dir, chunk_label=f"_part{idx + 1}"))
+        items = _dedup_action_items(items)
 
     if not items:
         ok("액션 아이템 없음")

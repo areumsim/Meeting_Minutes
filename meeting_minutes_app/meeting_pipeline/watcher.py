@@ -129,13 +129,19 @@ class MeetingFileHandler(FileSystemEventHandler):
         cmd += self.extra_args
 
         try:
+            from meeting_minutes_app.common import config_loader as _cfg
+            timeout_sec = int(_cfg.get("vault_watcher.process_timeout_sec", 3600) or 3600)
+        except Exception:
+            timeout_sec = 3600
+
+        try:
             result = subprocess.run(
                 cmd,
                 capture_output=True,
                 text=True,
                 encoding="utf-8",
                 errors="replace",
-                timeout=3600,
+                timeout=timeout_sec,
             )
             elapsed = time.time() - start
 
@@ -151,7 +157,9 @@ class MeetingFileHandler(FileSystemEventHandler):
 
         except subprocess.TimeoutExpired:
             self.logger.error(f"  타임아웃: {fname}")
-            self._on_failure(fpath, "처리 시간 1시간 초과")
+            self._on_failure(
+                fpath,
+                "처리 시간 초과 — config vault_watcher.process_timeout_sec 로 조정 가능")
         except Exception as e:
             self.logger.error(f"  예외: {fname} – {e}")
             self._on_failure(fpath, str(e))
@@ -228,7 +236,12 @@ def run_watcher(
         logger.info(f"\n  기존 미처리 파일 {len(existing)}개 발견:")
         for f in existing:
             logger.info(f"     - {f}")
-        answer = input("\n  기존 파일도 처리할까요? (Y/n): ").strip().lower()
+        if sys.stdin is not None and sys.stdin.isatty():
+            answer = input("\n  기존 파일도 처리할까요? (Y/n): ").strip().lower()
+        else:
+            # 서비스/스케줄러 등 비인터랙티브 실행 — input()이 영원히 블록되므로 건너뜀
+            logger.info("  비인터랙티브 실행 → 기존 파일은 건너뜀 (새 파일만 감시)")
+            answer = "n"
         if answer in ("", "y", "yes"):
             handler_init = MeetingFileHandler(
                 script_path=script_path, profile=profile,

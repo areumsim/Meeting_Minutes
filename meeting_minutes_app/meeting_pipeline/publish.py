@@ -302,11 +302,28 @@ def enrich_and_publish(
     meeting_scope = _detect_meeting_scope(title, topic)
     result["meeting_scope"] = meeting_scope
 
+    # 자동 분류 라우팅 (obsidian.auto_route_enabled=true) — --project 없이도
+    # 제목/주제/스크립트로 도메인(양자/PhysicalAI) 또는 00_Meetings 하위 폴더 결정.
+    route: Optional[Dict[str, str]] = None
+    if _c("obsidian.auto_route_enabled", False):
+        try:
+            from meeting_minutes_app.meeting_pipeline import meeting_workflow as mw
+            route = mw.classify_meeting_route(
+                title, topic, script_excerpt=(transcript_md or "")[:1000], llm=llm)
+        except Exception as e:
+            logger.warning(f"[publish] 자동 분류 라우팅 실패 → 00_Meetings/기타로 폴백: {e}")
+            # None으로 두면 project_override=""가 static obsidian.project(예: "양자")로
+            # 조용히 떨어져 무관한 회의가 도메인 아카이브에 섞인다 — 실패도 명시적으로 기타 라우팅.
+            route = {"mode": "folder", "output_folder": "00_Meetings/기타"}
+        result["auto_route"] = route
+    project_override = route.get("project", "") if route and route.get("mode") == "domain" else ""
+    output_folder = route.get("output_folder", "") if route and route.get("mode") == "folder" else ""
+
     # Obsidian 클라이언트 (설정 없거나 연결 실패 시 None → 볼트 기록만 생략)
     obs = None
     try:
         from meeting_minutes_app.wiki_core.obsidian import ObsidianClient
-        obs = ObsidianClient.from_config()
+        obs = ObsidianClient.from_config(project_override=project_override)
         if obs is not None and not obs.ping():
             warn("Obsidian 연결 실패 → 볼트 기록 건너뜀")
             obs.close(); obs = None
@@ -319,7 +336,9 @@ def enrich_and_publish(
     try:
         from meeting_minutes_app.meeting_pipeline import enrichment
         enr = enrichment.enrich(minutes_md, llm, obs=obs, topic=topic or title,
-                                presenter_name=title)
+                                presenter_name=title, meeting_title=title)
+        if enr.get("entity_links"):
+            minutes_md = enrichment.autolink_entities(minutes_md, enr["entity_links"])
         if related_notes_extra:
             merged_related: List[str] = []
             for rn in list(enr.get("related_notes", []) or []) + list(related_notes_extra or []):
@@ -387,6 +406,7 @@ def enrich_and_publish(
                     stt_meta=stt_meta,
                     transcript_md=transcript_md,
                     evidence=evidence,
+                    output_folder=output_folder,
                     # 매칭됐지만 병합 보류 → 계획 경로 기록(대시보드 '병합 대기' 표시용)
                     extra_meta=({"matched_plan": match["path"]} if match else None),
                 )
@@ -484,11 +504,15 @@ def _plan_context_text(match) -> str:
 
 
 def _clean_attendee_names(attendees):
-    """['최민석(팀장)','정하윤 수석','심아름 책임(나)'] → ['최민석','정하윤','심아름'] (화자 힌트용 이름만)."""
+    """['최민석(팀장)','정하윤 수석','심아름 책임(나)'] → ['최민석','정하윤','심아름'] (화자 힌트용 이름만).
+
+    직책 토큰 판정은 people.ROLE_TOKENS 단일 소스를 사용한다
+    (과거엔 부분 복사된 직책 목록이 여기 하드코딩돼 있어 '교수/박사' 등이 누락됐음).
+    """
+    from meeting_minutes_app.meeting_pipeline.people import parse_attendee
     out = []
     for a in (attendees or []):
-        nm = re.sub(r"\(.*?\)", "", str(a)).strip()                 # 괄호 직책/메모 제거
-        nm = re.sub(r"\s+(팀장|수석|책임|주임|선임|대표|이사|부장|과장|차장|사원|연구원|매니저)$", "", nm).strip()
+        nm, _role = parse_attendee(a)
         if nm and nm not in out:
             out.append(nm)
     return out

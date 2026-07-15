@@ -92,10 +92,56 @@ MINUTES_SAMPLE = """# 회의록
 class TestDecisionExtraction:
     def test_extracts_bullets_under_decision_header(self):
         decisions = wk.extract_decisions_from_minutes(MINUTES_SAMPLE)
-        assert decisions == ["PoC 범위를 3개 과제로 확정", "차기 회의는 격주로 진행"]
+        assert decisions == [
+            {"summary": "PoC 범위를 3개 과제로 확정", "rationale": ""},
+            {"summary": "차기 회의는 격주로 진행", "rationale": ""},
+        ]
 
     def test_no_decision_section(self):
         assert wk.extract_decisions_from_minutes("# 회의록\n- 내용") == []
+
+    def test_numbered_list_with_rationale_subline(self):
+        minutes = (
+            "## 결정 사항\n"
+            "1. **결정 요약**: PoC 범위를 3개 과제로 확정\n"
+            "   - 배경: 리소스 제약으로 우선순위가 높은 과제만 선정\n"
+            "2. **결정 요약**: 차기 회의는 격주로 진행\n"
+        )
+        decisions = wk.extract_decisions_from_minutes(minutes)
+        assert decisions == [
+            {"summary": "**결정 요약**: PoC 범위를 3개 과제로 확정",
+             "rationale": "리소스 제약으로 우선순위가 높은 과제만 선정"},
+            {"summary": "**결정 요약**: 차기 회의는 격주로 진행", "rationale": ""},
+        ]
+
+    def test_duplicate_rationale_lines_prefers_real_content_over_placeholder(self):
+        """[실전 검증 중 발견] LLM이 한 결정에 '배경:' 서브라인을 두 번 쓰는 경우가 있다
+        (실제 내용 + '스크립트에 명시되지 않음' 플레이스홀더). 마지막 줄로 덮어써서
+        실제 내용이 사라지면 안 된다 — 순서와 무관하게 실제 내용이 이겨야 한다."""
+        minutes_real_then_placeholder = (
+            "## 결정 사항\n"
+            "1. **문제 정의 고도화**\n"
+            "   - 배경: 화학 물성 최적화 문제를 양자 컴퓨팅에 적합하게 재구성하기로 결정\n"
+            "   - 배경: 스크립트에 명시되지 않음\n"
+        )
+        decisions = wk.extract_decisions_from_minutes(minutes_real_then_placeholder)
+        assert decisions[0]["rationale"] == "화학 물성 최적화 문제를 양자 컴퓨팅에 적합하게 재구성하기로 결정"
+
+        minutes_placeholder_then_real = (
+            "## 결정 사항\n"
+            "1. **기념품 예산**\n"
+            "   - 배경: 스크립트에 명시되지 않음\n"
+            "   - 배경: 300만원 이하로 설정하여 품목 및 예산 조정\n"
+        )
+        decisions2 = wk.extract_decisions_from_minutes(minutes_placeholder_then_real)
+        assert decisions2[0]["rationale"] == "300만원 이하로 설정하여 품목 및 예산 조정"
+
+    def test_rationale_subline_not_treated_as_new_decision(self):
+        """'- 배경: ...'도 '-'로 시작하지만 최상위 결정 항목으로 오인되면 안 된다."""
+        minutes = "## 결정 사항\n- 예산은 300만원으로 확정\n  - 배경: 작년 대비 동결\n"
+        decisions = wk.extract_decisions_from_minutes(minutes)
+        assert len(decisions) == 1
+        assert decisions[0]["rationale"] == "작년 대비 동결"
 
 
 class TestActionRegistry:
@@ -118,6 +164,72 @@ class TestActionRegistry:
         assert wk.update_action_registry_from_actions("not-json", "회의", registry_path=reg) == 0
 
 
+class TestFilterActionsByTopic:
+    """[실전 검증 중 발견] owner가 빈 문자열인 액션이 모든 참석자와 매칭된 것처럼
+    처리되던 버그(""가 임의 문자열의 부분문자열이라 `owner_norm in an`이 항상 True)."""
+
+    def _actions(self):
+        return [
+            {"title": "기념품 예산 최종 승인", "owner": "", "status": "open", "topics": []},
+            {"title": "아크라이트 협업 방안 검토", "owner": "최민석", "status": "open", "topics": ["아크라이트"]},
+        ]
+
+    def test_empty_owner_does_not_match_every_attendee(self):
+        result = wk._filter_actions_by_topic(
+            self._actions(), topic="양자컴퓨팅 연구 계획", attendees=["최민석", "심아름"], limit=10,
+        )
+        titles = {a["title"] for a in result}
+        assert "기념품 예산 최종 승인" not in titles
+        assert "아크라이트 협업 방안 검토" in titles
+
+    def test_no_match_returns_empty_not_everything(self):
+        """토픽/참석자 등 필터 기준은 있는데 매칭이 하나도 없으면 전체를 반환하지 않고
+        빈 목록을 반환해야 한다 — 무관한 다른 프로젝트 항목을 잡음으로 보여주지 않기 위함."""
+        actions = [{"title": "기념품 예산 최종 승인", "owner": "", "status": "open", "topics": []}]
+        result = wk._filter_actions_by_topic(
+            actions, topic="양자컴퓨팅 아크라이트", attendees=["강민호"], limit=10,
+        )
+        assert result == []
+
+    def test_no_filter_criteria_returns_all(self):
+        actions = self._actions()
+        result = wk._filter_actions_by_topic(actions, topic="", attendees=[], limit=10)
+        assert len(result) == 2
+
+    def test_extra_keywords_from_memo_match(self):
+        result = wk._filter_actions_by_topic(
+            self._actions(), topic="", attendees=[], limit=10,
+            extra_keywords=["아크라이트"],
+        )
+        assert [a["title"] for a in result] == ["아크라이트 협업 방안 검토"]
+
+
+class TestFilterDecisionsByTopic:
+    def _decisions(self):
+        return [
+            {"summary": "기념품 예산 최종 승인", "created_at": "2026-07-01", "topics": []},
+            {"summary": "아크라이트과 협업 범위 확정", "created_at": "2026-07-02", "topics": ["아크라이트"]},
+        ]
+
+    def test_no_topic_returns_all_sorted_by_recency(self):
+        result = wk._filter_decisions_by_topic(self._decisions(), topic="", limit=10)
+        assert [d["summary"] for d in result] == ["아크라이트과 협업 범위 확정", "기념품 예산 최종 승인"]
+
+    def test_matching_topic_filters_out_unrelated(self):
+        result = wk._filter_decisions_by_topic(self._decisions(), topic="아크라이트", limit=10)
+        assert [d["summary"] for d in result] == ["아크라이트과 협업 범위 확정"]
+
+    def test_no_match_returns_empty(self):
+        result = wk._filter_decisions_by_topic(self._decisions(), topic="양자컴퓨팅 연구 계획", limit=10)
+        assert result == []
+
+    def test_extra_keywords_from_memo_match(self):
+        result = wk._filter_decisions_by_topic(
+            self._decisions(), topic="", limit=10, extra_keywords=["아크라이트"],
+        )
+        assert [d["summary"] for d in result] == ["아크라이트과 협업 범위 확정"]
+
+
 class TestDecisionRegistry:
     def test_accumulate_and_dedup(self, tmp_path):
         reg = tmp_path / "decision_registry.json"
@@ -126,6 +238,63 @@ class TestDecisionRegistry:
         assert wk.update_decision_registry_from_minutes(decisions, "주간회의", registry_path=reg) == 0
         data = json.loads(reg.read_text(encoding="utf-8"))
         assert data["decisions"][0]["decision_id"].startswith("DEC-")
+
+    def test_dict_input_stores_rationale(self, tmp_path):
+        """extract_decisions_from_minutes()가 반환하는 {"summary","rationale"} dict 입력."""
+        reg = tmp_path / "decision_registry.json"
+        decisions = [{"summary": "PoC 범위를 3개 과제로 확정", "rationale": "리소스 제약"}]
+        assert wk.update_decision_registry_from_minutes(decisions, "주간회의", registry_path=reg) == 1
+        data = json.loads(reg.read_text(encoding="utf-8"))
+        assert data["decisions"][0]["summary"] == "PoC 범위를 3개 과제로 확정"
+        assert data["decisions"][0]["rationale"] == "리소스 제약"
+
+    def test_string_input_still_supported_with_empty_rationale(self, tmp_path):
+        """ingestion_pipeline._extract_sections()["decisions"] 등 평문 문자열 입력 하위호환."""
+        reg = tmp_path / "decision_registry.json"
+        decisions = ["문자열 결정사항"]
+        assert wk.update_decision_registry_from_minutes(decisions, "주간회의", registry_path=reg) == 1
+        data = json.loads(reg.read_text(encoding="utf-8"))
+        assert data["decisions"][0]["rationale"] == ""
+
+
+class TestNormKey:
+    def test_underscore_equals_space(self):
+        # "260627_5" vs "260627 5" 가 같은 회의로 판정돼야 함 (과거 중복 버그)
+        assert wk._norm_key("260627_5") == wk._norm_key("260627 5")
+
+    def test_case_and_punctuation_ignored(self):
+        assert wk._norm_key("Q-Day 대응") == wk._norm_key("q day 대응")
+
+
+class TestRegistryJunkFilter:
+    def test_junk_decisions_not_written(self, tmp_path):
+        reg = tmp_path / "decision_registry.json"
+        added = wk.update_decision_registry_from_minutes(
+            ["--", "", "-", "PoC 범위 확정"], "주간회의", registry_path=reg)
+        assert added == 1
+        data = json.loads(reg.read_text(encoding="utf-8"))
+        assert [d["summary"] for d in data["decisions"]] == ["PoC 범위 확정"]
+
+    def test_junk_actions_not_written(self, tmp_path):
+        reg = tmp_path / "action_registry.json"
+        actions = json.dumps([
+            {"task": "--", "assignee": "", "deadline": "", "context": ""},
+            {"task": "벤치마크 자료 준비", "assignee": "", "deadline": "", "context": ""},
+        ], ensure_ascii=False)
+        assert wk.update_action_registry_from_actions(actions, "회의", registry_path=reg) == 1
+
+    def test_extract_skips_separator_bullets(self):
+        minutes = "## 결정사항\n- --\n- PoC 범위 확정\n"
+        assert wk.extract_decisions_from_minutes(minutes) == [
+            {"summary": "PoC 범위 확정", "rationale": ""}
+        ]
+
+    def test_underscore_meeting_dedups_against_space_meeting(self, tmp_path):
+        reg = tmp_path / "decision_registry.json"
+        assert wk.update_decision_registry_from_minutes(
+            ["PoC 범위 확정"], "260627_5", registry_path=reg) == 1
+        assert wk.update_decision_registry_from_minutes(
+            ["PoC 범위 확정"], "260627 5", registry_path=reg) == 0
 
 
 class TestFeatureGates:
@@ -188,6 +357,18 @@ class TestWikiContextFormat:
     def test_empty_package(self):
         assert wk.format_wiki_context_for_prompt({}) == ""
 
+    def test_previous_decisions_include_rationale_from_registry(self, tmp_path):
+        """decision_registry.json에 rationale이 있으면 컨텍스트 문자열에도 포함돼야 한다."""
+        reg_path = tmp_path / "decision_registry.json"
+        wk.update_decision_registry_from_minutes(
+            [{"summary": "PoC 범위를 3개 과제로 확정", "rationale": "리소스 제약"}],
+            "주간회의", registry_path=reg_path)
+        # build_wiki_context_package는 data_dir 하위 decision_registry.json을 읽음
+        (tmp_path / "action_registry.json").write_text(
+            json.dumps({"version": "1.0", "actions": []}), encoding="utf-8")
+        pkg = wk.build_wiki_context_package([], data_dir=tmp_path)
+        assert any("배경: 리소스 제약" in d for d in pkg["previous_decisions"])
+
 
 class TestProposalStructure:
     def test_proposal_v2_sections(self):
@@ -203,6 +384,17 @@ class TestProposalStructure:
         assert proposal["proposals"], "관련 노트 참조 후보가 있어야 함"
         assert all(p["status"] == "suggested" for p in proposal["proposals"])
         assert proposal["conflicts"], "conflict verdict → conflicts 섹션 생성"
+
+    def test_decision_proposal_includes_rationale_when_present(self):
+        minutes = (
+            "## 결정사항\n"
+            "1. **결정 요약**: PoC 범위를 3개 과제로 확정\n"
+            "   - 배경: 리소스 제약\n"
+        )
+        proposal = wk.build_wiki_update_proposal("주간회의", minutes, ["노트A"])
+        decision_proposals = [p for p in proposal["proposals"] if p["section"] == "결정사항"]
+        assert decision_proposals, "결정사항 후보가 있어야 함"
+        assert "배경: 리소스 제약" in decision_proposals[0]["draft_content"]
 
 
 # ━━━━━━━━━━━━━━━━━━ vault_indexer ━━━━━━━━━━━━━━━━━━
@@ -274,6 +466,51 @@ class TestHybridSearch:
         assert "cosine" not in results[0]
 
 
+def _make_multi_domain_indexer():
+    """서로 다른 도메인 폴더에 걸친 노트로 path_prefixes 검색 필터를 검증."""
+    ix = vi.VaultIndexer(vault_path="unused", index_path="unused.json")
+    ix._built = True
+    ix._notes = {
+        "Archive/도메인_아카이브/01_회의_세미나/회의별/2026/양자회의.md": {
+            "title": "양자회의", "wikilink_title": "양자회의",
+            "snippet": "", "date": "", "type": "", "tf": {"논의": 1.0}},
+        "Archive/PhysicalAI_통합아카이브/01_회의_세미나/회의별/2026/피지컬회의.md": {
+            "title": "피지컬회의", "wikilink_title": "피지컬회의",
+            "snippet": "", "date": "", "type": "", "tf": {"논의": 1.0}},
+        "01_References/공통/공용용어.md": {
+            "title": "공용용어", "wikilink_title": "공용용어",
+            "snippet": "", "date": "", "type": "", "tf": {"논의": 1.0}},
+    }
+    ix._idf = {"논의": 1.0}
+    return ix
+
+
+class TestPathPrefixFiltering:
+    """detect_query_domain()으로 찾은 도메인 스코프(domain_search_prefixes())를
+    VaultIndexer.search()/find_related()에 넘기면 다른 도메인 노트가 제외돼야 한다."""
+
+    def test_no_prefixes_returns_all_domains(self):
+        ix = _make_multi_domain_indexer()
+        titles = {r["title"] for r in ix.search("논의", limit=10)}
+        assert titles == {"양자회의", "피지컬회의", "공용용어"}
+
+    def test_quantum_prefix_excludes_other_domain(self):
+        ix = _make_multi_domain_indexer()
+        titles = {r["title"] for r in ix.search(
+            "논의", limit=10,
+            path_prefixes=["Archive/도메인_아카이브", "01_References"])}
+        assert titles == {"양자회의", "공용용어"}
+        assert "피지컬회의" not in titles
+
+    def test_find_related_respects_path_prefixes(self):
+        ix = _make_multi_domain_indexer()
+        related = ix.find_related(
+            "논의", limit=10, min_score=0.0,
+            path_prefixes=["Archive/PhysicalAI_통합아카이브", "01_References"])
+        assert "피지컬회의" in related
+        assert "양자회의" not in related
+
+
 # ━━━━━━━━━━━━━━━━━━━ date_utils ━━━━━━━━━━━━━━━━━━━
 
 class TestDateUtils:
@@ -292,3 +529,45 @@ class TestDateUtils:
 
     def test_iso_to_yymmdd(self):
         assert du.iso_to_yymmdd("2026-07-02") == "260702"
+
+
+class _FakeIndexer:
+    is_built = True
+
+    def __init__(self, results):
+        self._results = results
+        self._notes = {r["path"]: {"type": r.get("type", "")} for r in results}
+
+    def search(self, query, limit=10, path_prefixes=None):
+        return self._results
+
+    def get_note_content(self, path):
+        return "내용"
+
+    def find_related(self, term, limit=2, path_prefixes=None):
+        return []
+
+
+class TestGetBriefRelatedNotesSelfReference:
+    """[실전 검증 중 발견] 같은 제목으로 prep-brief를 재실행하면 직전 실행에서
+    저장된 브리프 자신이 vault 검색에 걸려 "관련 노트"로 다시 포함되고, 그 안에
+    자기 자신의 이전 요약이 통째로 중첩 인용되는 문제가 있었다."""
+
+    def test_excludes_previous_self_brief(self):
+        title = "퀀텀인텔리전트 정기미팅"
+        results = [
+            {"path": "a.md", "wikilink_title": f"{title} 준비브리프", "score": 0.5, "type": "prep-brief"},
+            {"path": "b.md", "wikilink_title": "조직도_및_회사관계", "score": 0.5, "type": ""},
+        ]
+        indexer = _FakeIndexer(results)
+        regular, _ = wk._get_brief_related_notes(title, "", indexer, None, limit=5)
+        titles = [t for t, _ in regular]
+        assert f"{title} 준비브리프" not in titles
+        assert "조직도_및_회사관계" in titles
+
+    def test_excludes_note_matching_title_itself(self):
+        title = "퀀텀인텔리전트 정기미팅"
+        results = [{"path": "a.md", "wikilink_title": title, "score": 0.5, "type": ""}]
+        indexer = _FakeIndexer(results)
+        regular, _ = wk._get_brief_related_notes(title, "", indexer, None, limit=5)
+        assert regular == []

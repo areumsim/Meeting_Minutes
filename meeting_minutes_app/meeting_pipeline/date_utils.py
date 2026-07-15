@@ -5,7 +5,6 @@ from __future__ import annotations
 import re
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
 
 
 def _valid_date(year: int, month: int, day: int) -> bool:

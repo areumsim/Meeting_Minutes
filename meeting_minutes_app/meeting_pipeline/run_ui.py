@@ -11,19 +11,32 @@ FastAPI + React 기반 웹 UI를 시작합니다.
     python run_meeting.py web --port 8080  # 포트 변경
 """
 
-import os
 import sys
 import subprocess
 import argparse
+import shutil
 import webbrowser
 import time
 from pathlib import Path
+
+for _s in (sys.stdout, sys.stderr):
+    if getattr(_s, "encoding", None) and _s.encoding.lower() in ("cp949", "euc-kr", "ansi"):
+        try:
+            _s.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
 
 APP_DIR = Path(__file__).resolve().parent.parent  # meeting_minutes_app/
 PROJECT_ROOT = APP_DIR.parent                       # repo root
 WEB_DIR = PROJECT_ROOT / "web"
 FRONTEND_DIR = WEB_DIR / "frontend"
 DIST_DIR = FRONTEND_DIR / "dist"
+
+# Windows에서 실제 실행 파일은 npm.exe가 아니라 npm.cmd라서, shell=True 없이
+# subprocess.check_call(["npm", ...])을 그대로 쓰면 CreateProcess가 확장자를
+# 못 찾아 FileNotFoundError([WinError 2])가 난다. shutil.which로 미리 실제
+# 경로(...\npm.cmd)를 resolve해두면 크로스플랫폼으로 안전하게 호출된다.
+NPM_CMD = shutil.which("npm") or "npm"
 
 
 def check_python_deps():
@@ -51,7 +64,7 @@ def check_node_deps():
     node_modules = FRONTEND_DIR / "node_modules"
     if not node_modules.exists():
         print("\n  프론트엔드 의존성 설치 중...")
-        subprocess.check_call(["npm", "install"], cwd=str(FRONTEND_DIR))
+        subprocess.check_call([NPM_CMD, "install"], cwd=str(FRONTEND_DIR))
         print("  설치 완료.\n")
 
 
@@ -69,7 +82,7 @@ def build_frontend():
 
     if needs_build:
         print("\n  프론트엔드 빌드 중...")
-        subprocess.check_call(["npm", "run", "build"], cwd=str(FRONTEND_DIR))
+        subprocess.check_call([NPM_CMD, "run", "build"], cwd=str(FRONTEND_DIR))
         print("  빌드 완료.\n")
     else:
         print("  프론트엔드 최신 상태 (빌드 스킵)\n")
@@ -103,7 +116,7 @@ def main():
 
         # Vite dev server 백그라운드 실행
         vite_proc = subprocess.Popen(
-            ["npm", "run", "dev"],
+            [NPM_CMD, "run", "dev"],
             cwd=str(FRONTEND_DIR),
         )
 

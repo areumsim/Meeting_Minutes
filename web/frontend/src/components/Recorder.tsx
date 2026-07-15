@@ -1,11 +1,20 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import {
   Mic, Square, Play, Pause, Loader2, Volume2,
-  Activity, Settings2, User, ChevronDown, Info,
+  Activity, Settings2, User, ChevronDown, Info, BookOpen,
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
-import { createRealtimeWS } from "../lib/api";
+import {
+  createRealtimeWS, backendAvailable, createBackendRealtimeWS, mirrorServerSession,
+} from "../lib/api";
 import { MODE_PRESETS, type RealtimeSegment } from "../lib/types";
+
+interface RelatedNote {
+  filename: string;
+  title: string;
+  score: number;
+  snippet?: string;
+}
 import ModeSelector from "./ModeSelector";
 import { KeepAwake } from '@capacitor-community/keep-awake';
 import { Haptics, ImpactStyle, NotificationType } from '@capacitor/haptics';
@@ -24,6 +33,12 @@ export default function Recorder({ onComplete }: { onComplete: (id: string) => v
   const [volume, setVolume] = useState(0);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [wsStatus, setWsStatus] = useState<string>("");
+  // 백엔드 모드 — 서버가 STT/실시간 vault 검색/회의록 생성 수행 (API 키 미노출)
+  const [relatedNotes, setRelatedNotes] = useState<RelatedNote[]>([]);
+  const backendModeRef = useRef(false);
+  const provisionalIdxRef = useRef<Record<string, number>>({});
+  const completionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const serverSessionIdRef = useRef<string | null>(null);
 
   const transcriptEndRef = useRef<HTMLDivElement>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -55,6 +70,7 @@ export default function Recorder({ onComplete }: { onComplete: (id: string) => v
       }
       (window as any).isRecordingActive = false;
       delete (window as any).stopActiveRecording;
+      if (completionTimerRef.current) clearTimeout(completionTimerRef.current);
       stopAll();
     };
   }, []);
@@ -112,9 +128,11 @@ export default function Recorder({ onComplete }: { onComplete: (id: string) => v
     return () => document.removeEventListener("visibilitychange", handleVisibility);
   }, []);
 
-  // Seamless WS Rotation every 14 minutes (840 seconds)
+  // Seamless WS Rotation every 14 minutes (840 seconds) — 직접 OpenAI 연결 전용.
+  // 백엔드 모드에서는 서버가 OpenAI 연결을 소유하므로 로테이션 불필요.
   const isRotatingRef = useRef(false);
   useEffect(() => {
+    if (backendModeRef.current) return;
     if (duration > 0 && duration % 840 === 0 && isRecording && !isPaused) {
       setWsStatus("Rotating connection...");
       const oldWs = wsRef.current;
@@ -156,15 +174,169 @@ export default function Recorder({ onComplete }: { onComplete: (id: string) => v
     }
   }, [duration, isRecording, isPaused, modeNum, topic]);
 
+  // ── 백엔드 모드: 서버 /ws/realtime 경유 (STT + 실시간 vault 검색 + 회의록 생성) ──
+  const startBackendRecording = async () => {
+    const preset = MODE_PRESETS[modeNum] || MODE_PRESETS[2];
+    const ws = createBackendRealtimeWS();
+    wsRef.current = ws;
+    provisionalIdxRef.current = {};
+    serverSessionIdRef.current = null;
+
+    ws.onopen = () => {
+      ws.send(JSON.stringify({
+        config: {
+          mode: modeNum,
+          title, topic, speakers,
+          language: preset.language,
+          translate: preset.translate,
+          type: preset.type,
+        },
+      }));
+      setWsStatus("Connected (Local Backend)");
+    };
+
+    ws.onmessage = (evt) => {
+      let msg: any;
+      try { msg = JSON.parse(evt.data); } catch { return; }
+
+      switch (msg.type) {
+        case "session_created":
+          serverSessionIdRef.current = msg.sessionId;
+          setSessionId(msg.sessionId);
+          break;
+
+        case "ready":
+          setWsStatus(`Streaming (server STT: ${msg.model})`);
+          startAudioCapture();
+          break;
+
+        case "fallback_http":
+          setWsStatus(`Streaming (server HTTP STT: ${msg.model})`);
+          startAudioCapture();
+          break;
+
+        case "delta": {
+          const id = msg.itemId || "item";
+          setLiveTranscript(prev => {
+            const copy = [...prev];
+            const idx = provisionalIdxRef.current[id];
+            if (idx === undefined || !copy[idx]) {
+              copy.push({ text: msg.delta || "", translatedText: "", speaker: speakers || "", start: -1, end: 0 });
+              provisionalIdxRef.current[id] = copy.length - 1;
+            } else {
+              copy[idx] = { ...copy[idx], text: copy[idx].text + (msg.delta || "") };
+            }
+            return copy;
+          });
+          break;
+        }
+
+        case "segment": {
+          const segItemId: string | undefined = msg.itemId;
+          setLiveTranscript(prev => {
+            const copy = [...prev];
+            const seg: RealtimeSegment = {
+              text: msg.text || "",
+              translatedText: msg.translatedText || "",
+              speaker: msg.speaker || speakers || "",
+              start: msg.start ?? 0,
+              end: msg.end ?? 0,
+            };
+            // itemId로 스트리밍(provisional) 항목을 확정본으로 교체 — itemId가 없으면(HTTP 폴백 청크 모드)
+            // provisional 항목 자체가 없으므로 그대로 append
+            const idx = segItemId !== undefined ? provisionalIdxRef.current[segItemId] : undefined;
+            if (idx !== undefined && copy[idx]) copy[idx] = seg; else copy.push(seg);
+            return copy;
+          });
+          if (segItemId !== undefined) delete provisionalIdxRef.current[segItemId];
+          break;
+        }
+
+        case "related_notes":
+          // 실시간 vault 검색 결과 — 발화 중 관련 위키 노트 힌트
+          setRelatedNotes(prev => {
+            const merged = [...(msg.notes || []).map((n: any) => ({
+              filename: n.filename || "",
+              title: n.title || (n.filename || "").split(/[\\/]/).pop()?.replace(/\.md$/, "") || "",
+              score: n.score || 0,
+              snippet: n.snippet || "",
+            })), ...prev];
+            const seen = new Set<string>();
+            return merged.filter(n => {
+              const key = n.filename || n.title;
+              if (!key || seen.has(key)) return false;
+              seen.add(key);
+              return true;
+            }).slice(0, 20);
+          });
+          break;
+
+        case "status":
+        case "generating":
+          setWsStatus(msg.message || "");
+          break;
+
+        case "fact_check":
+          setWsStatus("사실 검증 결과 수신 — 회의록에 반영됨");
+          break;
+
+        case "completed": {
+          if (completionTimerRef.current) clearTimeout(completionTimerRef.current);
+          const sid = msg.sessionId || serverSessionIdRef.current;
+          setStatus("completed");
+          setWsStatus(`Documents ready (${msg.segmentCount ?? "?"} segments)`);
+          try { ws.close(); } catch {}
+          if (sid) {
+            mirrorServerSession(sid).finally(() => setTimeout(() => onComplete(sid), 800));
+          }
+          break;
+        }
+
+        case "error":
+          setWsStatus(`Error: ${msg.message || "Unknown error"}`);
+          break;
+      }
+    };
+
+    ws.onerror = () => setWsStatus("Backend connection error");
+
+    ws.onclose = () => {
+      setStatus(prev => {
+        if (prev === "recording") {
+          // 서버가 수신분까지는 저장·처리하므로 데이터 유실은 없음
+          setWsStatus("Backend connection lost — server will finalize received audio. Check Sessions later.");
+          try { KeepAwake.allowSleep(); } catch {}
+          stopAll();
+          setIsRecording(false);
+          return "error";
+        }
+        if (prev === "generating") {
+          setWsStatus("Connection closed while generating — check Sessions later.");
+          return "completed";
+        }
+        return prev;
+      });
+    };
+  };
+
   const startRecording = async () => {
     try {
       setStatus("connecting");
       setLiveTranscript([]);
+      setRelatedNotes([]);
       setDuration(0);
-      try { 
-        await KeepAwake.keepAwake(); 
-        await Haptics.impact({ style: ImpactStyle.Heavy }); 
+      try {
+        await KeepAwake.keepAwake();
+        await Haptics.impact({ style: ImpactStyle.Heavy });
       } catch(e) {} // Request Wakelock & Haptic on mobile
+
+      // 로컬 백엔드가 있으면 서버 경유 (실시간 wiki 검색 + 서버 회의록 생성),
+      // 없으면 기존 직접 OpenAI 연결로 폴백 (모바일 단독 배포)
+      backendModeRef.current = await backendAvailable();
+      if (backendModeRef.current) {
+        await startBackendRecording();
+        return;
+      }
 
       // WebSocket 직접 연결 (OpenAI Realtime API)
       const ws = createRealtimeWS();
@@ -351,10 +523,15 @@ export default function Recorder({ onComplete }: { onComplete: (id: string) => v
           int16[i] = s < 0 ? s * 0x8000 : s * 0x7fff;
         }
         if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-          wsRef.current.send(JSON.stringify({
-             type: "input_audio_buffer.append",
-             audio: arrayBufferToBase64(int16.buffer)
-          }));
+          if (backendModeRef.current) {
+            // 백엔드 모드: 바이너리 PCM16 프레임 (base64/JSON 오버헤드 없음)
+            wsRef.current.send(int16.buffer);
+          } else {
+            wsRef.current.send(JSON.stringify({
+               type: "input_audio_buffer.append",
+               audio: arrayBufferToBase64(int16.buffer)
+            }));
+          }
         }
       };
 
@@ -401,12 +578,35 @@ export default function Recorder({ onComplete }: { onComplete: (id: string) => v
   };
 
   const stopRecording = () => {
+    if (backendModeRef.current) {
+      // 백엔드 모드: stop을 보내고 소켓을 유지 — 서버가 회의록 생성 후
+      // completed 이벤트를 보낸다 (수 분 소요 가능, 10분 타임아웃)
+      try {
+        KeepAwake.allowSleep();
+        Haptics.notification({ type: NotificationType.Success });
+      } catch(e) {}
+      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+        wsRef.current.send(JSON.stringify({ type: "stop" }));
+      }
+      stopAll();
+      setIsRecording(false);
+      setIsPaused(false);
+      setStatus("generating");
+      setWsStatus("Server is generating documents...");
+      completionTimerRef.current = setTimeout(() => {
+        setStatus("completed");
+        setWsStatus("Still processing on server — check Sessions later.");
+        try { wsRef.current?.close(); } catch {}
+      }, 600000);
+      return;
+    }
+
     const finalTranscript = transcriptRef.current;
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
       wsRef.current.close();
     }
-    try { 
-      KeepAwake.allowSleep(); 
+    try {
+      KeepAwake.allowSleep();
       Haptics.notification({ type: NotificationType.Success });
     } catch(e) {}
     stopAll();
@@ -499,6 +699,38 @@ export default function Recorder({ onComplete }: { onComplete: (id: string) => v
             </div>
           </div>
         </div>
+
+        {/* Live Wiki — 실시간 vault 검색 관련 노트 (백엔드 모드, wiki.realtime_vault_search) */}
+        <AnimatePresence>
+          {relatedNotes.length > 0 && (
+            <motion.div
+              initial={{ height: 0, opacity: 0 }}
+              animate={{ height: "auto", opacity: 1 }}
+              exit={{ height: 0, opacity: 0 }}
+              className="bg-emerald-50 border-b border-emerald-100 shrink-0 overflow-hidden"
+            >
+              <div className="px-4 md:px-8 py-2.5 flex items-center gap-2 overflow-x-auto">
+                <span className="flex items-center gap-1.5 text-[10px] font-black uppercase tracking-widest text-emerald-600 shrink-0">
+                  <BookOpen className="w-3.5 h-3.5" /> Live Wiki
+                </span>
+                {relatedNotes.slice(0, 8).map((n) => (
+                  <span
+                    key={n.filename || n.title}
+                    title={n.snippet || n.filename}
+                    className="shrink-0 text-xs font-medium bg-white border border-emerald-200 text-emerald-800 px-2.5 py-1 rounded-full whitespace-nowrap"
+                  >
+                    [[{n.title}]]
+                  </span>
+                ))}
+                {relatedNotes.length > 8 && (
+                  <span className="shrink-0 text-[10px] text-emerald-500 font-bold">
+                    +{relatedNotes.length - 8}
+                  </span>
+                )}
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
 
         <div className="flex-1 flex flex-col p-4 md:p-10">
           {/* Settings Toggle */}

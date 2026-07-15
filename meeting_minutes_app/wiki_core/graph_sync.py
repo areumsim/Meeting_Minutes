@@ -19,11 +19,13 @@ import json
 import os
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from meeting_minutes_app.wiki_core import graph_db
 from meeting_minutes_app.wiki_core import wiki_knowledge as wk
-from meeting_minutes_app.wiki_core.wiki_knowledge import _norm_key, _feature_enabled
+from meeting_minutes_app.wiki_core.wiki_knowledge import (
+    _norm_key, _feature_enabled, _decision_summary_rationale,
+)
 
 # 주의: DATA_DIR을 별도 이름으로 import하지 않고 항상 wk.DATA_DIR로 참조한다.
 # (테스트가 monkeypatch.setattr(wk, "DATA_DIR", tmp_path)로 경로를 바꿔치기 할 수 있도록 —
@@ -85,6 +87,80 @@ def _upsert_entity(
     return graph_db.upsert_node(type_, label, attributes, canonical_key=key, conn=conn, db_path=db_path)
 
 
+_ENTITY_TYPES_FOR_NOTE_RESOLUTION = ("person", "organization", "topic")
+
+
+def _resolve_or_create_note_node(
+    title: str, attributes: Optional[dict] = None, *, conn=None, db_path: Optional[Path] = None,
+) -> str:
+    """title로 이미 존재하는 person/organization/topic 노드가 있으면 그 id를 재사용
+    (attrs 병합)하고, 없으면 "note" 타입으로 새로 upsert한다.
+
+    호출부(예: sync_session_graph의 related_note_titles)가 참조 노트 제목을
+    그냥 "note" 타입으로 새로 만들면 backfill_from_vault가 만든 엔티티 노드와
+    별개로 분리된다 — 이 헬퍼로 그 이중 정체성을 방지한다.
+    """
+    for entity_type in _ENTITY_TYPES_FOR_NOTE_RESOLUTION:
+        key = resolve_canonical_key(entity_type, title)
+        if graph_db.get_node_by_key(entity_type, key, conn=conn, db_path=db_path):
+            return _upsert_entity(entity_type, title, attributes, conn=conn, db_path=db_path)
+    return _upsert_entity("note", title, attributes, conn=conn, db_path=db_path)
+
+
+def merge_note_duplicates_into_entities(
+    dry_run: bool = False, *, db_path: Optional[Path] = None,
+) -> Dict[str, int]:
+    """일회성 마이그레이션: `backfill_from_vault()`의 note/entity 이중 정체성 수정 이전에
+    만들어진 그래프에 남아있는, 참조 노트가 여전히 "note" 타입 행으로 존재하는 중복을
+    같은 canonical_key의 person/organization/topic 노드로 병합한다.
+
+    이 함수를 실행하지 않으면(단순 재백필만으로는) 예전 "note" 행이 그대로 남아있는 채로
+    새 backfill이 올바른 타입의 노드를 "추가로" 만들어 중복이 오히려 늘어난 것처럼 보인다 —
+    재백필은 새로 upsert되는 노드에만 적용되고 기존 잘못된 타입의 행을 지우지 않기 때문이다.
+
+    병합 시 엣지를 살아남는 엔티티 노드로 재연결한 뒤 note 행을 삭제한다(attrs는
+    엔티티 쪽 값을 우선하되 note에만 있던 키는 보존). dry_run=True면 병합 대상 개수만
+    센 뒤 rollback한다.
+    """
+    graph_db.init_graph_db(db_path)
+    merged = 0
+    with graph_db._conn(db_path) as conn:
+        note_rows = conn.execute("SELECT id, canonical_key, attributes FROM nodes WHERE type='note'").fetchall()
+        for note_row in note_rows:
+            entity_row = None
+            for entity_type in _ENTITY_TYPES_FOR_NOTE_RESOLUTION:
+                entity_row = conn.execute(
+                    "SELECT id, attributes FROM nodes WHERE type=? AND canonical_key=?",
+                    (entity_type, note_row["canonical_key"]),
+                ).fetchone()
+                if entity_row:
+                    break
+            if not entity_row:
+                continue
+            merged += 1
+            if dry_run:
+                continue
+            note_attrs = json.loads(note_row["attributes"] or "{}")
+            entity_attrs = json.loads(entity_row["attributes"] or "{}")
+            merged_attrs = {**note_attrs, **entity_attrs}
+            conn.execute("UPDATE nodes SET attributes = ? WHERE id = ?",
+                        (json.dumps(merged_attrs, ensure_ascii=False), entity_row["id"]))
+            conn.execute("UPDATE OR IGNORE edges SET from_node_id = ? WHERE from_node_id = ?",
+                        (entity_row["id"], note_row["id"]))
+            conn.execute("UPDATE OR IGNORE edges SET to_node_id = ? WHERE to_node_id = ?",
+                        (entity_row["id"], note_row["id"]))
+            # 유니크 제약 충돌로 재연결되지 못하고 남은(entity 쪽에 이미 동일 엣지가 있던) 잔여 엣지 정리
+            conn.execute("DELETE FROM edges WHERE from_node_id = ? OR to_node_id = ?",
+                        (note_row["id"], note_row["id"]))
+            conn.execute("DELETE FROM nodes WHERE id = ?", (note_row["id"],))
+
+        if dry_run:
+            conn.rollback()
+        else:
+            conn.commit()
+    return {"merged": merged}
+
+
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 #  Registry 백필
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -138,6 +214,7 @@ def backfill_from_registries(dry_run: bool = False) -> Dict[str, int]:
             decision_id = _node("decision", summary, {
                 "status": d.get("status", ""),
                 "created_at": d.get("created_at", ""),
+                "rationale": d.get("rationale", ""),
             })
             _edge(meeting_id, decision_id, "DECIDED", source_note=d.get("source_note", ""))
             for topic in d.get("topics", []) or []:
@@ -204,13 +281,65 @@ def _iter_vault_notes():
         yield fpath, vault_path, content
 
 
+# 01_References 노트의 category 프론트매터 → 그래프 노드 타입.
+# enrichment.py의 _CATEGORIES와 동일한 한국어 라벨을 쓴다(둘 다 이 값을 생성/소비).
+_REFERENCE_CATEGORY_TO_TYPE = {
+    "인물": "person",
+    "기업·기관": "organization",
+    "용어·기술": "topic",
+}
+
+_WIKILINK_RE = re.compile(r"\[\[([^\]]+)\]\]")
+
+# attendees/authors 프론트매터에 흔히 들어가는 자리표시자 — 실제 인명이 아니므로 노드화하지 않는다.
+_GENERIC_SPEAKER_RE = re.compile(r"^speaker\b", re.IGNORECASE)
+
+
+def _extract_wikilink_titles(body: str) -> List[str]:
+    """본문의 [[제목]] / [[제목|별칭]] / [[제목#헤딩]]에서 기본 제목만 추출(중복 제거, 순서 유지)."""
+    out: List[str] = []
+    seen = set()
+    for raw in _WIKILINK_RE.findall(body or ""):
+        title = raw.split("|")[0].split("#")[0].strip()
+        if title and title not in seen:
+            seen.add(title)
+            out.append(title)
+    return out
+
+
 def backfill_from_vault(dry_run: bool = False) -> Dict[str, int]:
-    """Obsidian vault frontmatter → 그래프 (note + person/organization/topic + MENTIONED 엣지)."""
+    """Obsidian vault → 그래프 (note + person/organization/topic + MENTIONED 엣지).
+
+    엔티티 추출 소스 (전부 최선 조합, 실패해도 서로 영향 없음):
+    1. 본문의 [[위키링크]] — 링크 대상이 01_References의 person/organization/topic
+       참조 노트(category 프론트매터로 판정)와 일치하면 note→entity MENTIONED 엣지.
+       이 vault의 실제 지식은 frontmatter 배열이 아니라 본문 위키링크로 표현되므로
+       (구현 시 635개 노트 전수 조사 결과 people/organizations/topics 배열 사용 0건),
+       이 경로가 그래프 엣지의 주 소스다.
+    2. people/organizations/topics 프론트매터 배열 — 향후/외부 도구가 이 스키마를
+       쓸 경우를 위해 계속 지원(현재 이 vault에는 해당 데이터 없음).
+    3. attendees/authors 프론트매터 — 회의 참석자·논문 저자를 person으로 (제네릭
+       "Speaker"/"Speaker A" 자리표시자는 제외).
+    """
     from meeting_minutes_app.wiki_core.obsidian import parse_frontmatter
 
     graph_db.init_graph_db()
     counts = {"nodes_would_add": 0, "edges_would_add": 0, "nodes_upserted": 0, "edges_upserted": 0}
-    notes_found = 0
+
+    # ── 1차 패스: 파일을 한 번만 읽어 메모리에 올리고, 참조 노트 title→type 색인 구축 ──
+    all_notes: List[Tuple[str, str, str, dict, str]] = []  # (fpath, vault_path, rel_path, meta, body)
+    title_to_type: Dict[str, str] = {}
+    for fpath, vault_path, content in _iter_vault_notes():
+        meta, body = parse_frontmatter(content)
+        rel_path = os.path.relpath(fpath, vault_path).replace("\\", "/")
+        title = str(meta.get("title") or Path(fpath).stem)
+        all_notes.append((fpath, vault_path, rel_path, meta, body))
+
+        if meta.get("type") == "reference":
+            node_type = _REFERENCE_CATEGORY_TO_TYPE.get(str(meta.get("category", "")))
+            if node_type:
+                title_to_type[resolve_canonical_key(None, title)] = node_type
+    notes_found = len(all_notes)
 
     with graph_db._conn() as conn:
         seen_node_keys: set = set()
@@ -234,26 +363,47 @@ def backfill_from_vault(dry_run: bool = False) -> Dict[str, int]:
             counts["edges_upserted"] += 1
             return edge_id
 
-        for fpath, vault_path, content in _iter_vault_notes():
-            notes_found += 1
-            meta, _body = parse_frontmatter(content)
-            rel_path = os.path.relpath(fpath, vault_path).replace("\\", "/")
-            title = meta.get("title") or Path(fpath).stem
-
-            note_id = _node("note", title, {
+        # ── 2차 패스: note 노드 생성 + 엣지 연결 ──
+        for fpath, vault_path, rel_path, meta, body in all_notes:
+            title = str(meta.get("title") or Path(fpath).stem)
+            node_attrs = {
                 "path": rel_path,
                 "note_type": meta.get("type", ""),
                 "review_status": meta.get("review_status", ""),
                 "confidence": meta.get("confidence", ""),
                 "source_type": meta.get("source_type", ""),
-            })
+            }
+            # 이 노트 자신이 참조 노트(인물/기업·기관/용어·기술을 설명)면 별도 "note"
+            # 노드를 만들지 않고 그 엔티티 타입으로 직접 upsert한다 — 다른 노트가
+            # 이 제목을 위키링크할 때 만들어지는 엔티티 노드와 canonical_key가 일치해
+            # 하나로 합쳐진다(과거엔 note/entity 두 노드로 분리돼 서로 연결이 안 됐음).
+            self_entity_type = title_to_type.get(resolve_canonical_key(None, title))
+            note_id = _node(self_entity_type or "note", title, node_attrs)
 
+            # 소스 1: 본문 위키링크 → 참조 노트 색인과 대조
+            for link_title in _extract_wikilink_titles(body):
+                node_type = title_to_type.get(resolve_canonical_key(None, link_title))
+                if not node_type:
+                    continue  # 참조 노트가 아닌 일반 노트 링크는 건너뜀 (person/org/topic만 추적)
+                entity_id = _node(node_type, link_title)
+                _edge(note_id, entity_id, "MENTIONED", source_note=rel_path)
+
+            # 소스 2: people/organizations/topics 프론트매터 배열 (있으면)
             for field, node_type in (("people", "person"), ("organizations", "organization"), ("topics", "topic")):
                 for raw in meta.get(field, []) or []:
                     clean = strip_wikilink(raw)
                     if not clean:
                         continue
                     entity_id = _node(node_type, clean)
+                    _edge(note_id, entity_id, "MENTIONED", source_note=rel_path)
+
+            # 소스 3: attendees/authors 프론트매터 → person (제네릭 Speaker 자리표시자 제외)
+            for field in ("attendees", "authors"):
+                for raw in meta.get(field, []) or []:
+                    clean = strip_wikilink(raw)
+                    if not clean or _GENERIC_SPEAKER_RE.match(clean):
+                        continue
+                    entity_id = _node("person", clean)
                     _edge(note_id, entity_id, "MENTIONED", source_note=rel_path)
 
         if dry_run:
@@ -333,11 +483,15 @@ def sync_session_graph(
                             )
 
             if decisions:
-                for summary in decisions:
-                    summary = str(summary or "").strip()
+                for decision_item in decisions:
+                    summary, rationale = _decision_summary_rationale(decision_item)
                     if not summary:
                         continue
-                    decision_id = _upsert_entity("decision", summary, conn=conn)
+                    decision_id = _upsert_entity(
+                        "decision", summary,
+                        {"rationale": rationale} if rationale else None,
+                        conn=conn,
+                    )
                     graph_db.upsert_edge(
                         meeting_id, decision_id, "DECIDED",
                         source_session_id=session_id, source_note=source_note or None,
@@ -349,7 +503,7 @@ def sync_session_graph(
                     note_title = str(note_title or "").strip()
                     if not note_title:
                         continue
-                    note_id = _upsert_entity("note", note_title, conn=conn)
+                    note_id = _resolve_or_create_note_node(note_title, conn=conn)
                     graph_db.upsert_edge(
                         meeting_id, note_id, "USED_CONTEXT",
                         source_session_id=session_id, source_note=source_note or None,

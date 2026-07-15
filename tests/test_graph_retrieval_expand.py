@@ -62,3 +62,28 @@ class TestGraphExpandTitles:
         monkeypatch.setattr(graph_db, "DB_PATH", db_path)
         monkeypatch.setattr(mw, "_c", lambda key, default=None: True if key == "wiki_knowledge.graph_retrieval_expand_enabled" else default)
         assert mw.graph_expand_titles(["아무 노트"]) == []
+
+    def test_expands_when_title_itself_is_a_reference_note_entity(self, tmp_path, monkeypatch):
+        """[known-limitation 해소] 이전엔 참조 노트 자신의 제목(예: '양자컴퓨팅')으로
+        확장을 시도하면 항상 빈 결과였다(하드코딩된 'note' 타입으로만 조회) —
+        backfill_from_vault가 참조 노트를 그 엔티티 타입으로 직접 upsert하게 바뀌면서
+        graph_expand_titles도 person/organization/topic까지 순서대로 조회하도록 고쳐
+        이 한계가 해소됐다.
+
+        실제 그래프 위상은 엔티티끼리 직접 연결되지 않고 항상 note를 거친다
+        (note -[:MENTIONED]-> entity) — 실전 검증(실제 vault 649개 노트 백필) 중
+        엔티티 노드에서 1-hop만 확장하면 이웃이 note뿐이라 결과가 0건으로 나오는
+        더 깊은 문제를 발견해 hop을 자동으로 2로 올리도록 수정했다. 이 테스트는
+        그 실제 위상을 반영한다(entity → note → other entity)."""
+        db_path = tmp_path / "wiki_graph.db"
+        graph_db.init_graph_db(db_path=db_path)
+        topic_id = graph_sync._upsert_entity("topic", "양자컴퓨팅", db_path=db_path)
+        note_id = graph_sync._upsert_entity("note", "세미나 노트", db_path=db_path)
+        person_id = graph_sync._upsert_entity("person", "서지훈", db_path=db_path)
+        graph_db.upsert_edge(note_id, topic_id, "MENTIONED", db_path=db_path)
+        graph_db.upsert_edge(note_id, person_id, "MENTIONED", db_path=db_path)
+        monkeypatch.setattr(graph_db, "DB_PATH", db_path)
+        monkeypatch.setattr(mw, "_c", lambda key, default=None: True if key == "wiki_knowledge.graph_retrieval_expand_enabled" else default)
+
+        extra = mw.graph_expand_titles(["양자컴퓨팅"])
+        assert "서지훈" in extra

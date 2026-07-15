@@ -1,15 +1,16 @@
 import React, { useState, useEffect } from "react";
-import { Mic, FileAudio, List, Settings, FileText } from "lucide-react";
+import { Mic, FileAudio, List, Settings, FileText, MessageCircleQuestion } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import Dashboard from "./components/Dashboard";
 import Recorder from "./components/Recorder";
 import SessionDetail from "./components/SessionDetail";
 import FileUpload from "./components/FileUpload";
 import TextInput from "./components/TextInput";
+import WikiAsk from "./components/WikiAsk";
 import SettingsView from "./components/Settings";
 import { getApiKey } from "./lib/api";
 
-type View = "dashboard" | "recorder" | "upload" | "text" | "detail" | "settings";
+type View = "dashboard" | "recorder" | "upload" | "text" | "wiki" | "detail" | "settings";
 
 export default function App() {
   const [viewState, setViewState] = useState<View>("dashboard");
@@ -56,6 +57,7 @@ export default function App() {
             <NavItem icon={<Mic size={18} />} label="Record" active={view === "recorder"} onClick={() => setView("recorder")} />
             <NavItem icon={<FileAudio size={18} />} label="Upload" active={view === "upload"} onClick={() => setView("upload")} />
             <NavItem icon={<FileText size={18} />} label="Text Analysis" active={view === "text"} onClick={() => setView("text")} />
+            <NavItem icon={<MessageCircleQuestion size={18} />} label="Ask Wiki" active={view === "wiki"} onClick={() => setView("wiki")} />
           </div>
         </div>
 
@@ -70,6 +72,7 @@ export default function App() {
         <TabItem icon={<Mic size={20} />} label="Record" active={view === "recorder"} onClick={() => setView("recorder")} />
         <TabItem icon={<FileAudio size={20} />} label="Upload" active={view === "upload"} onClick={() => setView("upload")} />
         <TabItem icon={<FileText size={20} />} label="Text" active={view === "text"} onClick={() => setView("text")} />
+        <TabItem icon={<MessageCircleQuestion size={20} />} label="Wiki" active={view === "wiki"} onClick={() => setView("wiki")} />
         <TabItem icon={<Settings size={20} />} label="Settings" active={view === "settings"} onClick={() => setView("settings")} />
       </nav>
 
@@ -88,6 +91,7 @@ export default function App() {
             {view === "recorder" && <Recorder onComplete={navigateToDetail} />}
             {view === "upload" && <FileUpload onComplete={navigateToDetail} />}
             {view === "text" && <TextInput onComplete={navigateToDetail} />}
+            {view === "wiki" && <WikiAsk />}
             {view === "settings" && <SettingsView />}
             {view === "detail" && selectedSessionId && (
               <SessionDetail id={selectedSessionId} onBack={() => setView("dashboard")} />

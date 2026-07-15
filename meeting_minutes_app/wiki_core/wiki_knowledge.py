@@ -76,8 +76,17 @@ _PAPER_TITLE_KEYWORDS = re.compile(
 #  Registry 관리
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-_EMPTY_ACTION_REG: Dict[str, Any] = {"version": "1.0", "actions": []}
-_EMPTY_DECISION_REG: Dict[str, Any] = {"version": "1.0", "decisions": []}
+def _empty_action_reg() -> Dict[str, Any]:
+    """빈 registry 구조를 매번 새로 만든다.
+
+    과거엔 모듈 전역 dict를 dict()로 얕은 복사해 반환했는데, 내부 리스트가
+    전역과 공유돼 update_*()의 append가 전역을 오염시켰다 — 장기 실행
+    프로세스(웹 백엔드)에서 세션 간 항목이 누수되는 버그."""
+    return {"version": "1.0", "actions": []}
+
+
+def _empty_decision_reg() -> Dict[str, Any]:
+    return {"version": "1.0", "decisions": []}
 
 
 def _atomic_write_json(path: Path, data: dict) -> None:
@@ -100,40 +109,40 @@ def load_action_registry(path: Path) -> dict:
     """액션 Registry 로드. 없으면 빈 구조 자동 생성."""
     if not path.exists():
         try:
-            _atomic_write_json(path, _EMPTY_ACTION_REG)
+            _atomic_write_json(path, _empty_action_reg())
             print(f"[wiki] action_registry 초기화: {path}")
         except Exception as e:
             print(f"[wiki] action_registry 생성 실패 (무시): {e}")
-        return dict(_EMPTY_ACTION_REG)
+        return _empty_action_reg()
     try:
         with open(path, encoding="utf-8") as f:
             data = json.load(f)
         if not isinstance(data, dict) or "actions" not in data:
-            return dict(_EMPTY_ACTION_REG)
+            return _empty_action_reg()
         return data
     except Exception as e:
         print(f"[wiki] action_registry 로드 실패 (무시): {e}")
-        return dict(_EMPTY_ACTION_REG)
+        return _empty_action_reg()
 
 
 def load_decision_registry(path: Path) -> dict:
     """결정 Registry 로드. 없으면 빈 구조 자동 생성."""
     if not path.exists():
         try:
-            _atomic_write_json(path, _EMPTY_DECISION_REG)
+            _atomic_write_json(path, _empty_decision_reg())
             print(f"[wiki] decision_registry 초기화: {path}")
         except Exception as e:
             print(f"[wiki] decision_registry 생성 실패 (무시): {e}")
-        return dict(_EMPTY_DECISION_REG)
+        return _empty_decision_reg()
     try:
         with open(path, encoding="utf-8") as f:
             data = json.load(f)
         if not isinstance(data, dict) or "decisions" not in data:
-            return dict(_EMPTY_DECISION_REG)
+            return _empty_decision_reg()
         return data
     except Exception as e:
         print(f"[wiki] decision_registry 로드 실패 (무시): {e}")
-        return dict(_EMPTY_DECISION_REG)
+        return _empty_decision_reg()
 
 
 def _filter_actions_by_topic(
@@ -141,18 +150,26 @@ def _filter_actions_by_topic(
     topic: str,
     attendees: Optional[List[str]] = None,
     limit: int = 10,
+    extra_keywords: Optional[List[str]] = None,
 ) -> list:
-    """open 상태 액션을 topic 키워드 + 참석자 owner로 필터링·정렬.
+    """open 상태 액션을 topic 키워드 + 참석자 owner + (선택) 추가 키워드로 필터링·정렬.
 
-    - topic 키워드 매칭: score +1~2
+    extra_keywords: 회의 전 메모(memo)에서 추출한 키워드 등, topic 문자열 밖의 추가 단서.
+
+    - topic/추가 키워드 매칭: score +1~2
     - owner가 attendees 중 하나와 일치: score +3 (참석자 액션 우선 노출)
-    - 매칭 없으면 open 전체 반환 (빈 Registry 경우 자연스러운 fallback)
+    - 필터 기준(topic/attendees/extra_keywords)이 아예 없으면 open 전체 반환
+      (빈 Registry 경우 자연스러운 fallback).
+    - 필터 기준은 있는데 매칭되는 액션이 하나도 없으면 **빈 목록**을 반환한다 —
+      registry가 여러 프로젝트를 섞어 담고 있을 때, 무관한 다른 회의 액션을
+      "매칭 없음"이라는 이유로 전부 보여주면 오히려 잡음이 된다.
     """
     open_actions = [a for a in actions if isinstance(a, dict) and a.get("status") == "open"]
     if not open_actions:
         return open_actions[:limit]
 
     topic_keywords = [w.lower() for w in re.split(r'\s+', (topic or "").strip()) if len(w) >= 2]
+    topic_keywords += [str(k).lower() for k in (extra_keywords or []) if len(str(k)) >= 2]
     attendee_norms = [re.sub(r'\s+', '', a.strip().lower()) for a in (attendees or []) if a.strip()]
 
     if not topic_keywords and not attendee_norms:
@@ -172,64 +189,48 @@ def _filter_actions_by_topic(
         # attendees 매칭 — owner 필드
         if attendee_norms:
             owner_norm = re.sub(r'\s+', '', str(action.get("owner", "")).lower())
-            if any(an in owner_norm or owner_norm in an for an in attendee_norms if an):
+            # owner_norm이 빈 문자열이면 "" in an이 항상 True가 되어 담당자 미상 액션이
+            # 모든 참석자와 매칭된 것처럼 처리되는 버그 방지 — owner가 실제로 있을 때만 비교.
+            if owner_norm and any(an in owner_norm or owner_norm in an for an in attendee_norms if an):
                 score += 3
         if score > 0:
             scored.append((score, action))
 
-    if scored:
-        return [a for _, a in sorted(scored, key=lambda x: -x[0])[:limit]]
-    return open_actions[:limit]
+    return [a for _, a in sorted(scored, key=lambda x: -x[0])[:limit]]
 
 
-def collect_open_actions(
-    topic: str,
-    attendees: Optional[List[str]] = None,
-    limit: int = 10,
-    data_dir: Optional[Path] = None,
-) -> list:
-    """미완료 액션아이템을 topic/attendees 기준으로 필터링해서 반환 (prep-brief·외부 모듈용)."""
-    _dir = data_dir or DATA_DIR
-    registry = load_action_registry(_dir / "action_registry.json")
-    return _filter_actions_by_topic(registry.get("actions", []), topic, attendees, limit)
-
-
-def collect_previous_decisions(
+def _filter_decisions_by_topic(
+    decisions: list,
     topic: str,
     limit: int = 10,
-    data_dir: Optional[Path] = None,
+    extra_keywords: Optional[List[str]] = None,
 ) -> list:
-    """topic과 관련된 이전 결정사항을 registry에서 반환 (prep-brief·외부 모듈용).
+    """결정사항을 topic 키워드 + (선택) 추가 키워드로 필터링, 최신순 정렬.
 
-    topic 키워드가 summary/topics에 포함되면 점수 우선 정렬.
-    매칭 없으면 최근 N건 반환.
+    필터 기준이 아예 없으면 최신순 전체(기존 동작)를 반환한다. 기준은 있는데
+    매칭이 하나도 없으면 빈 목록을 반환한다 — `_filter_actions_by_topic`과 동일한
+    이유(무관한 다른 프로젝트 결정사항을 브리프에 잡음으로 채우지 않기 위함).
     """
-    _dir = data_dir or DATA_DIR
-    registry = load_decision_registry(_dir / "decision_registry.json")
-    decisions = registry.get("decisions", [])
-    if not decisions:
-        return []
-
+    sorted_all = sorted(decisions, key=lambda d: str(d.get("created_at", "")), reverse=True)
     topic_keywords = [w.lower() for w in re.split(r'\s+', (topic or "").strip()) if len(w) >= 2]
+    topic_keywords += [str(k).lower() for k in (extra_keywords or []) if len(str(k)) >= 2]
     if not topic_keywords:
-        return sorted(decisions, key=lambda d: str(d.get("created_at", "")), reverse=True)[:limit]
+        return sorted_all[:limit]
 
-    scored = []
-    for d in decisions:
+    scored: List[Tuple[int, dict]] = []
+    for d in sorted_all:
         score = 0
-        summary = str(d.get("summary", "") or d.get("decision", "")).lower()
-        for kw in topic_keywords:
-            if kw in summary:
-                score += 1
         for t in d.get("topics", []):
             if any(kw in str(t).lower() for kw in topic_keywords):
                 score += 2
-        scored.append((score, d))
+        summary_text = str(d.get("summary", "")).lower()
+        for kw in topic_keywords:
+            if kw in summary_text:
+                score += 1
+        if score > 0:
+            scored.append((score, d))
 
-    matched = [(s, d) for s, d in scored if s > 0]
-    if matched:
-        return [d for _, d in sorted(matched, key=lambda x: -x[0])[:limit]]
-    return sorted(decisions, key=lambda d: str(d.get("created_at", "")), reverse=True)[:limit]
+    return [d for _, d in sorted(scored, key=lambda x: -x[0])[:limit]]
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -237,8 +238,19 @@ def collect_previous_decisions(
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 def _norm_key(text: str) -> str:
-    """중복 판정용 정규화: 소문자 + 공백·특수문자 제거."""
-    return re.sub(r'[\s\W]+', '', text.lower())
+    """중복 판정용 정규화: 소문자 + 공백·특수문자·언더스코어 제거.
+
+    주의: `_`는 \\w에 속해 [\\s\\W]로는 제거되지 않는다 — 과거 이 차이로
+    "260627_5"와 "260627 5"가 서로 다른 회의로 중복 등록됐다
+    (graph_sync.resolve_canonical_key와 같은 기준).
+    """
+    return re.sub(r'[\s\W_]+', '', text.lower())
+
+
+def _is_junk_registry_text(text: str) -> bool:
+    """registry에 저장할 가치가 없는 항목 판정: 빈 값, `--` 같은 구분선,
+    정규화 후 2자 미만인 불릿."""
+    return len(_norm_key(text)) < 2
 
 
 def _extract_topic_keywords_from_title(title: str) -> List[str]:
@@ -308,7 +320,7 @@ def update_action_registry_from_actions(
         if not isinstance(item, dict):
             continue
         task = str(item.get("task", "")).strip()
-        if not task:
+        if not task or _is_junk_registry_text(task):
             continue
 
         norm_task = _norm_key(task)
@@ -346,38 +358,85 @@ def update_action_registry_from_actions(
     return added
 
 
-def extract_decisions_from_minutes(minutes_text: str) -> List[str]:
+_NO_RATIONALE_PLACEHOLDER = "스크립트에 명시되지 않음"
+
+
+def extract_decisions_from_minutes(minutes_text: str) -> List[Dict[str, str]]:
     """회의록 텍스트에서 결정사항 목록을 파싱한다 (규칙 기반, LLM 없음).
 
-    파싱 대상 섹션 헤더: 결정사항, 결정 사항, decisions, 확정
-    반환: 각 불릿 항목 문자열 목록 (빈 목록 가능)
+    파싱 대상 섹션 헤더: 결정사항, 결정 사항, decisions, 확정.
+    최상위 항목은 "-"/"*" 불릿 또는 "1."/"1)" 번호목록 모두 인식한다. 각 항목보다
+    더 들여쓰기된 "배경: ..." 서브라인이 있으면 rationale로 함께 캡처한다(회의록
+    프롬프트가 결정마다 배경 서브불릿을 요구하도록 바뀜 — 왜 그렇게 결정했는지).
+    반환: [{"summary": str, "rationale": str}, ...] (빈 목록 가능)
     """
     decision_pat = re.compile(
         r'^\s*#{1,4}\s*(?:결정\s*사항?|decisions?|확정)\b', re.IGNORECASE
     )
     next_section_pat = re.compile(r'^\s*#{1,4}\s+\S')
+    top_item_pat = re.compile(r'^(?:[-*]|\d+[.)])\s+(.*\S)?\s*$')
+    rationale_pat = re.compile(r'^(?:[-*]\s*)?배경\s*[:：]\s*(.*\S)?\s*$')
 
-    decisions: List[str] = []
+    decisions: List[Dict[str, str]] = []
     in_section = False
+    current: Optional[Dict[str, str]] = None
+    current_indent = 0
 
     for line in minutes_text.splitlines():
         stripped = line.strip()
         if decision_pat.match(stripped):
             in_section = True
+            current = None
             continue
-        if in_section:
-            if next_section_pat.match(stripped):
-                break
-            if stripped.startswith("-") or stripped.startswith("*"):
-                item = re.sub(r'^[-*]\s*', '', stripped).strip()
-                if item:
-                    decisions.append(item)
+        if not in_section:
+            continue
+        if next_section_pat.match(stripped):
+            break
+        if not stripped:
+            continue
+
+        indent = len(line) - len(line.lstrip())
+
+        if current is not None and indent > current_indent:
+            r_m = rationale_pat.match(stripped)
+            if r_m:
+                text_val = (r_m.group(1) or "").strip()
+                # LLM이 같은 결정에 "배경:" 서브라인을 두 번 쓰는 경우가 있다(실제 내용 +
+                # "스크립트에 명시되지 않음" 플레이스홀더). 먼저 채워진 값은 유지하되,
+                # 플레이스홀더가 먼저 잡혔다면 나중에 나온 실제 내용으로 교체한다.
+                if not current["rationale"] or (
+                    current["rationale"] == _NO_RATIONALE_PLACEHOLDER and text_val != _NO_RATIONALE_PLACEHOLDER
+                ):
+                    current["rationale"] = text_val
+            continue  # 배경이 아닌 하위 내용도 현재 항목을 깨지 않고 무시
+
+        top_m = top_item_pat.match(stripped)
+        if top_m:
+            item = (top_m.group(1) or "").strip()
+            if item and not _is_junk_registry_text(item):
+                current = {"summary": item, "rationale": ""}
+                current_indent = indent
+                decisions.append(current)
+            else:
+                current = None
+            continue
+
+        current = None  # 불릿/번호가 아닌 동급 이하 줄 → 현재 항목 종료
 
     return decisions
 
 
+def _decision_summary_rationale(item: Any) -> Tuple[str, str]:
+    """decisions 리스트 항목에서 (summary, rationale)을 뽑는다.
+    extract_decisions_from_minutes()의 {"summary","rationale"} dict와, 다른 호출부
+    (ingestion_pipeline._extract_sections()["decisions"] 등)의 평문 문자열을 모두 허용."""
+    if isinstance(item, dict):
+        return str(item.get("summary", "") or "").strip(), str(item.get("rationale", "") or "").strip()
+    return str(item or "").strip(), ""
+
+
 def update_decision_registry_from_minutes(
-    decisions: List[str],
+    decisions: List[Any],
     source_meeting: str,
     source_note: str = "",
     registry_path: Optional[Path] = None,
@@ -385,9 +444,9 @@ def update_decision_registry_from_minutes(
     """회의 후 결정사항 목록을 decision_registry.json에 누적한다.
 
     Args:
-        decisions:      결정사항 문자열 목록.
-                        ingestion_pipeline._extract_sections()["decisions"] 또는
-                        extract_decisions_from_minutes() 결과.
+        decisions:      결정사항 목록 — extract_decisions_from_minutes()가 반환하는
+                        {"summary","rationale"} dict 또는(하위호환) 평문 문자열
+                        (ingestion_pipeline._extract_sections()["decisions"] 등).
         source_meeting: 회의 제목
         source_note:    저장된 Obsidian 노트 경로
         registry_path:  기본값 DATA_DIR / "decision_registry.json"
@@ -421,9 +480,9 @@ def update_decision_registry_from_minutes(
 
     initial_count = len(existing)
     added = 0
-    for decision_text in decisions:
-        summary = decision_text.strip()
-        if not summary:
+    for decision_item in decisions:
+        summary, rationale = _decision_summary_rationale(decision_item)
+        if not summary or _is_junk_registry_text(summary):
             continue
 
         norm_summary = _norm_key(summary)
@@ -436,6 +495,7 @@ def update_decision_registry_from_minutes(
         new_decision: Dict[str, Any] = {
             "decision_id": decision_id,
             "summary": summary,
+            "rationale": rationale,
             "source_meeting": source_meeting,
             "source_note": source_note,
             "status": "active",
@@ -477,6 +537,7 @@ def _get_brief_related_notes(
     indexer,
     obs,
     limit: int = 5,
+    memo: str = "",
 ) -> Tuple[List[Tuple[str, str]], List[Tuple[str, str]]]:
     """Vault에서 관련 노트를 검색하고 일반/논문으로 분류한다.
 
@@ -485,9 +546,12 @@ def _get_brief_related_notes(
         각 요소: (wiki_title, body_snippet_2000chars)
 
     전략:
-        1. TF-IDF 인덱스 검색 → frontmatter type 으로 분류
+        1. TF-IDF 인덱스 검색(title+topic+memo) → frontmatter type 으로 분류
         2. Obsidian REST 검색 → type 불명이므로 title 키워드로 분류
-        3. norm_title 기반 중복 제거
+        3. memo에서 추출한 키워드(인명·기관명 등)로 보강 검색(LLM 없음)
+        4. 지금까지 찾은 노트 제목을 Wiki Knowledge Graph로 1-hop(이상) 확장해
+           연결된 인물/조직/주제 노트를 추가로 포함 (graph_expand_titles, 옵트인)
+        5. norm_title 기반 중복 제거
     """
     try:
         from meeting_minutes_app.wiki_core.vault_retrieval import (
@@ -495,6 +559,8 @@ def _get_brief_related_notes(
             get_related_note_content,
             strip_frontmatter,
             norm_title,
+            keyword_terms,
+            is_domain_mismatched,
         )
     except ImportError as e:
         print(f"[wiki] meeting_workflow import 실패: {e}")
@@ -502,7 +568,12 @@ def _get_brief_related_notes(
 
     regular: List[Tuple[str, str]] = []
     papers: List[Tuple[str, str]] = []
-    seen_norms: set = set()
+    # 자기참조 방지: 같은 제목으로 prep-brief를 재실행하면 직전에 저장된 브리프 자신이
+    # vault 검색에 걸려 "관련 노트"로 다시 포함되고, 그 안에 자기 자신의 이전 관련 노트
+    # 요약까지 통째로 중첩 인용되는 문제가 있었다(실전 재실행 중 확인).
+    seen_norms: set = {norm_title(title)} if title else set()
+    if title:
+        seen_norms.add(norm_title(f"{title} 준비브리프"))
 
     def _add_note(wiki_title: str, note_type: str, content: str) -> None:
         nn = norm_title(wiki_title)
@@ -515,17 +586,30 @@ def _get_brief_related_notes(
         else:
             regular.append((wiki_title, body))
 
-    query = " ".join(filter(None, [title, topic]))
+    query = " ".join(filter(None, [title, topic, memo]))
+
+    # 제목/주제/메모에서 도메인(양자/PhysicalAI 등)이 감지되면 검색 범위를 그
+    # 아카이브 + 공유 참조노트로 좁힌다 — 감지 안 되면 볼트 전체 검색(기존 동작).
+    path_prefixes: List[str] = []
+    try:
+        from meeting_minutes_app.wiki_core.vault_retrieval import (
+            detect_query_domain, domain_search_prefixes,
+        )
+        path_prefixes = domain_search_prefixes(detect_query_domain(query))
+    except Exception:
+        path_prefixes = []
 
     # 1) TF-IDF 인덱스 검색
     if indexer and indexer.is_built:
         try:
-            results = indexer.search(query, limit=limit * 2)
+            results = indexer.search(query, limit=limit * 2, path_prefixes=path_prefixes)
             for r in results:
                 if r.get("score", 0) < 0.02:
                     continue
                 wiki_title = r.get("wikilink_title") or r.get("title", "")
                 if not wiki_title:
+                    continue
+                if is_domain_mismatched(r["path"], query):
                     continue
                 note_meta = indexer._notes.get(r["path"], {})
                 note_type = str(note_meta.get("type", ""))
@@ -539,19 +623,73 @@ def _get_brief_related_notes(
     # 2) Obsidian REST 검색
     if obs:
         try:
-            rest_titles = search_related_notes_rest(
-                obs, title=title, topic=topic, limit=limit
+            rest_hits = search_related_notes_rest(
+                obs, title=title, topic=topic, limit=limit, return_paths=True,
             )
-            for wiki_title in rest_titles:
+            for wiki_title, note_path in rest_hits:
                 nn = norm_title(wiki_title)
-                if nn in seen_norms:
+                if nn in seen_norms or is_domain_mismatched(note_path, query):
                     continue
                 content = get_related_note_content(indexer, obs, wiki_title) or ""
                 _add_note(wiki_title, "", content)
         except Exception as e:
             print(f"[wiki] REST 검색 실패 (무시): {e}")
 
-    return regular[:limit], papers[:limit]
+    # 3) memo 키워드 보강 검색 (LLM 없음) — 회의 전 메모에 담긴 인명·기관명·주제어를
+    # 추가로 vault에서 탐색한다. title/topic만으로는 못 찾는 세부 맥락을 보완.
+    if memo.strip() and (indexer or obs):
+        try:
+            for term in keyword_terms(memo)[:15]:
+                if len(regular) + len(papers) >= limit * 3:
+                    break
+                candidates: List[Tuple[str, str]] = []
+                if indexer and indexer.is_built:
+                    try:
+                        for hit in indexer.search(term, limit=2, path_prefixes=path_prefixes):
+                            if not (hit.get("score", 0.0) >= 0.05 or hit.get("cosine", 0.0) > 0.0):
+                                continue
+                            t = hit.get("wikilink_title") or hit.get("title", "")
+                            if t:
+                                candidates.append((t, hit.get("path", "")))
+                    except Exception:
+                        pass
+                if obs:
+                    try:
+                        candidates.extend(search_related_notes_rest(
+                            obs, title=term, topic="", limit=2, return_paths=True))
+                    except Exception:
+                        pass
+                for wiki_title, note_path in candidates:
+                    if norm_title(wiki_title) in seen_norms:
+                        continue
+                    # 단일 키워드 쿼리라 신호가 약함 — memo 전체를 기준으로 도메인 오염만 검사
+                    if is_domain_mismatched(note_path, memo):
+                        continue
+                    content = get_related_note_content(indexer, obs, wiki_title) or ""
+                    if content:
+                        _add_note(wiki_title, "", content)
+        except Exception as e:
+            print(f"[wiki] memo 키워드 검색 실패 (무시): {e}")
+
+    # 4) 그래프 확장 (옵트인, wiki_knowledge.graph_retrieval_expand_enabled) — 지금까지
+    # 찾은 노트 제목을 Wiki Knowledge Graph로 확장해 연결된 인물/조직/주제를 추가한다.
+    try:
+        from meeting_minutes_app.meeting_pipeline.meeting_workflow import graph_expand_titles
+        found_titles = [t for t, _ in regular] + [t for t, _ in papers]
+        for wiki_title in graph_expand_titles(found_titles, max_extra=limit):
+            if norm_title(wiki_title) in seen_norms:
+                continue
+            content = get_related_note_content(indexer, obs, wiki_title) or ""
+            if content:
+                _add_note(wiki_title, "", content)
+    except Exception as e:
+        print(f"[wiki] 그래프 확장 실패 (무시): {e}")
+
+    # memo 기반 보강 검색이 있으면 direct 검색(title/topic)만으로는 못 찾을 맥락을
+    # 위해 소폭 여유를 둔다 — 그래프/메모 검색 결과가 direct 결과에 밀려 전부
+    # 잘려나가지 않도록.
+    effective_limit = limit + 3 if memo.strip() else limit
+    return regular[:effective_limit], papers[:limit]
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -730,10 +868,30 @@ def _send_prep_brief_notification(
 #  인덱스 자동 업데이트
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
+def reindex_on_start_if_configured() -> None:
+    """config.indexing.auto_reindex_on_start=true 시 실행 시작 시점에 인덱스 1회 재빌드.
+
+    배치(meeting_minutes.main)·실시간(realtime_transcription) 시작부에서 호출된다.
+    (과거엔 config 키만 있고 어디서도 읽지 않았음)
+    """
+    if not _c("indexing.auto_reindex_on_start", False):
+        return
+    try:
+        from meeting_minutes_app.wiki_core.vault_indexer import VaultIndexer
+        idx = VaultIndexer.from_config()
+        if not idx:
+            return
+        print("[wiki] 시작 시 인덱스 재빌드 중 (indexing.auto_reindex_on_start)...")
+        n = idx.build(verbose=False)
+        print(f"[wiki] 인덱스 갱신 완료: {n}개 노트")
+    except Exception as e:
+        print(f"[wiki] 시작 시 인덱스 재빌드 실패 (무시): {e}")
+
+
 def _reindex_if_configured(indexer, force: bool = False) -> None:
     """config.indexing.auto_reindex_after_write=true 또는 force=True 시 재빌드.
 
-    기존 이슈: obs.put_note() / write_recording_note() 후 vault_index.json 자동 갱신 없음.
+    기존 이슈: obs.put_note() / write_meeting_note() 후 vault_index.json 자동 갱신 없음.
     이 함수가 Obsidian 저장 후 호출되어 선택적으로 해결한다.
     """
     if not indexer:
@@ -812,7 +970,8 @@ def build_wiki_context_package(
         try:
             reg = load_decision_registry(data_dir / "decision_registry.json")
             pkg["previous_decisions"] = _clean_context_items([
-                d.get("summary", "") for d in sorted(
+                d.get("summary", "") + (f" (배경: {d['rationale']})" if d.get("rationale") else "")
+                for d in sorted(
                     reg.get("decisions", []),
                     key=lambda x: str(x.get("created_at", "")),
                     reverse=True,
@@ -995,7 +1154,7 @@ def build_wiki_update_proposal(
         if not draft:
             draft_parts = [f"- [{meeting_title}] ({full_date}) 회의에서 언급됨"]
             if decisions:
-                draft_parts.append(f"  - 주요 결정: {decisions[0]}")
+                draft_parts.append(f"  - 주요 결정: {_decision_summary_rationale(decisions[0])[0]}")
             draft = "\n".join(draft_parts)
         proposals.append({
             "target_note": title,
@@ -1009,12 +1168,14 @@ def build_wiki_update_proposal(
 
     # 결정사항 후보 (대상 노트 미확정)
     for decision in decisions[:3]:
+        summary, rationale = _decision_summary_rationale(decision)
+        draft_content = f"- {summary}" + (f"\n  - 배경: {rationale}" if rationale else "")
         proposals.append({
             "target_note": None,
             "candidates": related_titles[:3],
             "section": "결정사항",
             "operation": "append",
-            "draft_content": f"- {decision}",
+            "draft_content": draft_content,
             "status": "suggested",
             "note": f"결정사항 — '{meeting_title}' 회의에서 추출. 검토 후 적합한 노트에 반영하세요.",
         })
@@ -1137,11 +1298,17 @@ def main() -> None:
   python run_meeting.py prep-brief --title "PoC 검토" --attendees "김철수,이영희"
   python run_meeting.py prep-brief --title "AI 세미나 준비" --no-email
   python run_meeting.py prep-brief --title "주간 회의" --reindex
+  python run_meeting.py prep-brief --title "퀀텀인텔리전트 회의" --memo agenda.txt
 """,
     )
     ap.add_argument("--title", required=True, help="회의 제목")
     ap.add_argument("--topic", default="", help="회의 주제 (선택)")
     ap.add_argument("--attendees", default="", help="참석자 쉼표 구분 (선택) — 예: \"김철수,이영희\"")
+    ap.add_argument("--memo", default="", help="회의 전 메모/아젠다 파일 경로 (선택) — "
+                                              "관련 노트 검색·그래프 확장의 추가 근거로 사용")
+    ap.add_argument("--project", default="", help="obsidian.project 오버라이드 (선택) — "
+                                                 "config.json을 고치지 않고 세션 단위로 다른 "
+                                                 "도메인(obsidian.project_domains 매핑)에 저장")
     ap.add_argument("--no-obsidian", action="store_true", help="Obsidian 저장 건너뜀")
     ap.add_argument("--no-email", action="store_true", help="이메일/알림 발송 건너뜀")
     ap.add_argument("--reindex", action="store_true", help="완료 후 Vault 인덱스 강제 재빌드")
@@ -1155,6 +1322,26 @@ def main() -> None:
     title: str = args.title.strip()
     topic: str = args.topic.strip()
     attendees_list: List[str] = [a.strip() for a in args.attendees.split(",") if a.strip()]
+    memo: str = ""
+    if args.memo:
+        if not os.path.isfile(args.memo):
+            print(f"[wiki] 메모 파일 없음: {args.memo}")
+        else:
+            # 이 블록은 아래(1352행경) main() 전체를 감싸는 try/except보다 앞에 있어서,
+            # UTF-8이 아닌 파일(Windows 메모장으로 저장한 cp949 텍스트 등)을 그냥
+            # open(encoding="utf-8")로 읽으면 UnicodeDecodeError가 여기서 바로
+            # raw traceback으로 죽는다 — "--memo agenda.txt"가 도움말에 나오는
+            # 정식 지원 경로이므로 인코딩을 못 맞춰도 실패하지 않게 방어한다.
+            try:
+                with open(args.memo, encoding="utf-8") as f:
+                    memo = f.read()
+            except UnicodeDecodeError:
+                try:
+                    with open(args.memo, encoding="cp949", errors="replace") as f:
+                        memo = f.read()
+                    print(f"[wiki] 메모 파일 인코딩 UTF-8 아님 → cp949로 읽음: {args.memo}")
+                except Exception as e:
+                    print(f"[wiki] 메모 파일 읽기 실패 (무시): {e}")
     now = datetime.now()
     yymmdd = now.strftime("%y%m%d")
     full_date = now.strftime("%Y-%m-%d")
@@ -1188,7 +1375,7 @@ def main() -> None:
 
         try:
             if not args.no_obsidian:
-                obs = load_obsidian_client()
+                obs = load_obsidian_client(project=args.project)
         except Exception as e:
             print(f"[wiki] Obsidian 연결 실패 (무시): {e}")
             obs = None
@@ -1203,6 +1390,7 @@ def main() -> None:
             indexer=indexer,
             obs=obs,
             limit=args.limit,
+            memo=memo,
         )
         total_notes = len(regular_notes) + len(paper_notes)
         if total_notes:
@@ -1215,14 +1403,22 @@ def main() -> None:
         action_reg = load_action_registry(DATA_DIR / "action_registry.json")
         decision_reg = load_decision_registry(DATA_DIR / "decision_registry.json")
 
+        memo_keywords: List[str] = []
+        if memo.strip():
+            try:
+                from meeting_minutes_app.wiki_core.vault_retrieval import keyword_terms
+                memo_keywords = keyword_terms(memo)
+            except Exception:
+                memo_keywords = []
+
         open_actions = _filter_actions_by_topic(
-            action_reg.get("actions", []), topic, attendees=attendees_list, limit=10
+            action_reg.get("actions", []), topic, attendees=attendees_list, limit=10,
+            extra_keywords=memo_keywords,
         )
-        recent_decisions = sorted(
-            decision_reg.get("decisions", []),
-            key=lambda d: str(d.get("created_at", "")),
-            reverse=True,
-        )[:10]
+        recent_decisions = _filter_decisions_by_topic(
+            decision_reg.get("decisions", []), topic, limit=10,
+            extra_keywords=memo_keywords,
+        )
 
         # Prep Brief 생성
         brief_md = build_prep_brief(

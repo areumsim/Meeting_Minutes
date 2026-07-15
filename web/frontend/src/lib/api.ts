@@ -112,6 +112,30 @@ export const getNodeNeighbors = async (
   return res.json();
 };
 
+// Vault Wiki 질의응답 — web/backend/api/wiki.py (WikiQA 재사용, 서버 전용 기능).
+// Obsidian REST API + 로컬 Vault 인덱스 + 서버 LLM 키가 모두 필요해 브라우저
+// 단독(모바일) 배포에서는 대응 기능이 없다 — 호출 전 backendAvailable()로 확인.
+export interface WikiAskResult {
+  answer: string;
+  sources: { title: string; path?: string; heading?: string; score?: number }[];
+  has_conflict: boolean;
+  unverified: boolean;
+}
+
+export const askWiki = async (question: string, maxNotes = 0): Promise<WikiAskResult> => {
+  const base = getBackendUrl();
+  const res = await fetch(`${base}/api/wiki/ask`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ question, max_notes: maxNotes }),
+  });
+  if (!res.ok) {
+    const detail = await res.json().catch(() => null);
+    throw new Error(detail?.detail || `Wiki ask failed (${res.status})`);
+  }
+  return res.json();
+};
+
 export const getSessionStatus = async (id: string) => {
   const session: any = await sessionsStore.getItem(id);
   return { id, status: session?.status || "error" };
@@ -293,6 +317,64 @@ export const processTextInput = async (text: string, metadata: any) => {
   generateSummaryForSession(sessionId);
   return { sessionId, status: "processing" };
 };
+
+// ── 백엔드 연동 (FastAPI가 함께 떠 있는 배포 모드) ─────────────────────
+// 백엔드가 있으면 녹음 오디오를 서버 /ws/realtime로 보내 STT·실시간 vault 검색
+// (related_notes)·회의록 생성을 서버가 수행한다 — OpenAI API 키가 브라우저에
+// 노출되지 않는다. 모바일 단독 배포(백엔드 없음)는 기존 직접 OpenAI 연결로 폴백.
+
+export const getBackendUrl = () => localStorage.getItem("BACKEND_URL") || "";
+export const setBackendUrl = (url: string) => localStorage.setItem("BACKEND_URL", url);
+
+export async function backendAvailable(): Promise<boolean> {
+  const base = getBackendUrl();
+  try {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 1500);
+    const res = await fetch(`${base}/api/health`, { signal: ctrl.signal });
+    clearTimeout(t);
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+export function createBackendRealtimeWS(): WebSocket {
+  const base = getBackendUrl();
+  let wsUrl: string;
+  if (base) {
+    wsUrl = base.replace(/^http/, "ws") + "/ws/realtime";
+  } else {
+    const proto = location.protocol === "https:" ? "wss:" : "ws:";
+    wsUrl = `${proto}//${location.host}/ws/realtime`;
+  }
+  return new WebSocket(wsUrl);
+}
+
+// 서버 세션(SQLite)을 IndexedDB로 미러링 — 기존 Dashboard/SessionDetail이
+// 무수정으로 서버 생성 세션을 표시할 수 있게 한다.
+export async function mirrorServerSession(sessionId: string): Promise<boolean> {
+  const base = getBackendUrl();
+  try {
+    const res = await fetch(`${base}/api/sessions/${sessionId}`);
+    if (!res.ok) return false;
+    const data = await res.json();
+    if (data.session) await sessionsStore.setItem(sessionId, data.session);
+    if (data.segments) {
+      await segmentsStore.setItem(sessionId, data.segments.map((s: any) => ({
+        ...s,
+        // RealtimeSegment 스타일 별칭 (일부 뷰가 translatedText를 참조)
+        translatedText: s.translated_text || "",
+        start: s.start_time ?? 0,
+        end: s.end_time ?? 0,
+      })));
+    }
+    if (data.documents) await documentsStore.setItem(sessionId, data.documents);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 // WebSocket connector for OpenAI Realtime API
 export function createRealtimeWS(): WebSocket {

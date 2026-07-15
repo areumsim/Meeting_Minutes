@@ -21,28 +21,6 @@
       ]
     ]
   },
-  "recording_note_full": {
-    "path": "00_Meetings/테스트프로젝트/260702 녹음 테스트.md",
-    "calls": [
-      [
-        "00_Meetings/테스트프로젝트/260702 녹음 테스트 - 전사.md",
-        "---\ntitle: \"녹음 테스트 - 전사\"\ndate: \"2026-07-02\"\ntype: \"transcript\"\nparent_note: \"00_Meetings/테스트프로젝트/260702 녹음 테스트.md\"\nsource_audio: \"audio.mp3\"\ncreated: \"2026-07-02T14:30:00\"\ntags:\n  - \"전사\"\n  - \"meeting\"\n---\n\n# 녹음 테스트 - 전사\n\n## 전사 (Transcript)\n\n녹음 전사 내용\n"
-      ],
-      [
-        "00_Meetings/테스트프로젝트/260702 녹음 테스트.md",
-        "---\ntitle: \"녹음 테스트\"\ndate: \"2026-07-02\"\nsession_date: \"2026-07-02\"\nsession_dt: \"2026-07-02 14:00\"\ntype: \"meeting\"\nproject: \"테스트프로젝트\"\ntopic: \"녹음주제\"\nattendees:\n  - \"박민수\"\ntags:\n  - \"녹음처리\"\n  - \"meeting\"\nstatus: \"processed\"\nsource_audio: \"audio.mp3\"\ncreated: \"2026-07-02 14:00\"\nprocessed_at: \"2026-07-02T14:30:00\"\nreview_status: \"pending\"\nconfidence: \"medium\"\nsource_type: \"generated\"\nduration: \"2분 5초\"\n---\n\n# 녹음 테스트\n\n## 요약\n\n녹음 요약\n\n\n---\n\n## 핵심 포인트\n\n- 포인트1\n\n- 포인트2\n\n\n녹음 본문\n\n## 결정 사항\n\n- 결정1\n\n\n## 액션 아이템\n\n- [ ] 녹음 액션\n\n## 미해결 질문\n\n- 질문1\n\n\n## 중요 주장\n\n- 주장1\n\n\n## 용어·배경\n\n- **녹음용어**: 설명\n\n## 관련 노트\n\n- [[관련노트2]]\n\n\n## 원문 전사\n\n- [[00_Meetings/테스트프로젝트/260702 녹음 테스트 - 전사|전체 STT 전사]]\n"
-      ]
-    ]
-  },
-  "recording_note_minimal": {
-    "path": "00_Meetings/테스트프로젝트/260703 녹음 최소.md",
-    "calls": [
-      [
-        "00_Meetings/테스트프로젝트/260703 녹음 최소.md",
-        "---\ntitle: \"녹음 최소\"\ndate: \"2026-07-03\"\nsession_date: \"2026-07-03\"\ntype: \"meeting\"\nproject: \"테스트프로젝트\"\ntags:\n  - \"녹음처리\"\n  - \"meeting\"\nstatus: \"processed\"\ncreated: \"2026-07-03\"\nprocessed_at: \"2026-07-02T15:00:00\"\nreview_status: \"pending\"\nconfidence: \"medium\"\nsource_type: \"generated\"\n---\n\n# 녹음 최소\n\n최소 본문\n"
-      ]
-    ]
-  },
   "update_planned_note": {
     "path": "00_Meetings/공통/260701 계획회의.md",
     "calls": [

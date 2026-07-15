@@ -328,11 +328,14 @@ def run_stt(
     all_segments: List[Dict] = []
     total_time   = 0.0
 
-    # 청크 분할 시 화자 연속성이 끊겨 diarize 결과가 무의미해짐 → fallback 모델 사용
-    effective_model = model
-    if len(chunks) > 1 and "diarize" in model:
-        warn(f"  청크 분할 필요({len(chunks)}개): {model} → {FALLBACK_STT_MODEL} 자동 전환 (화자 연속성 불가)")
-        effective_model = FALLBACK_STT_MODEL
+    # 청크 분할 시 청크 간 화자 연속성은 보장되지 않지만(예: 청크1의 "화자 A"와
+    # 청크2의 "화자 A"가 동일 인물이라는 보장 없음), 청크 내부에서는 diarize가
+    # 유효하므로 완전히 포기하지 않고 청크별로 유지 + 라벨에 청크 번호를 붙여
+    # 청크 간 오인 병합을 방지한다.
+    effective_model   = model
+    per_chunk_diarize = len(chunks) > 1 and "diarize" in model
+    if per_chunk_diarize:
+        warn(f"  청크 분할됨({len(chunks)}개): 청크별 diarize 유지 (청크 간 화자 연속성은 보장되지 않음)")
 
     for i, (cp, chunk_offset) in enumerate(chunks):
         if len(chunks) > 1:
@@ -344,6 +347,10 @@ def run_stt(
                 client, cp, effective_model, language, speaker_names,
                 chunk_offset, debug_dir, i, work_dir,
             )
+            if per_chunk_diarize:
+                for s in segs:
+                    if s.get("speaker"):
+                        s["speaker"] = f"{s['speaker']} (청크{i+1})"
             all_segments.extend(segs)
         except Exception as e:
             logger.error(f"[STT FAIL] chunk {i}: {type(e).__name__}: {e}")

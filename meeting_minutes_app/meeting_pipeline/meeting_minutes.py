@@ -83,7 +83,7 @@ def _c(key: str, default: Any = None) -> Any:
     return _cfg.get(key, default) if _cfg_ok else default
 
 
-from meeting_minutes_app.common.llm_client import (
+from meeting_minutes_app.common.llm_client import (  # noqa: F401 — 하위 모듈 재노출
     LLMClient, OPENAI_API_KEY, SSL_VERIFY, get_api_key,
 )
 
@@ -109,25 +109,20 @@ UPLOAD_FORMATS = {".flac", ".mp3", ".mp4", ".mpeg", ".mpga", ".m4a",
 VIDEO_ONLY_EXT = {".mkv", ".avi", ".mov", ".wmv", ".flv", ".ts"}
 ALL_SUPPORTED = UPLOAD_FORMATS | VIDEO_ONLY_EXT
 
-# API 비용 (USD / 분)
-COST_PER_MIN = {
-    "gpt-4o-transcribe-diarize":         0.006,
-    "gpt-4o-transcribe":                 0.006,
-    "gpt-4o-mini-transcribe":            0.003,
-    "gpt-4o-mini-transcribe-2025-12-15": 0.003,
-    "whisper-1":                         0.006,
-}
-LLM_COST_PER_1K_TOKENS = {"gpt-4o": 0.005, "claude": 0.003}
+# API 비용 — common/pricing.py 단일 소스 사용
+from meeting_minutes_app.common.pricing import (  # noqa: E402
+    STT_PRICE_PER_MIN as COST_PER_MIN,
+    LLM_COST_PER_1K_TOKENS,
+)
 
 TYPE_LABELS = {
     "meeting": {"title": "회의록",    "event": "회의",   "emoji": "🤝"},
     "seminar": {"title": "세미나 기록", "event": "세미나", "emoji": "🎓"},
     "lecture": {"title": "강의 노트",  "event": "강의",   "emoji": "📚"},
+    "memo":    {"title": "메모 정리",  "event": "메모",   "emoji": "📝"},
 }
 
 MAX_LLM_CHARS = 80_000
-MAX_RETRIES   = 3
-RETRY_DELAY   = 5
 
 
 # ──────────────────────────────────────────────
@@ -288,10 +283,6 @@ def _date_key_local(s: str) -> str:
     return f"{int(m.group(1)):04d}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
 
 
-def segments_to_plain_text(segments: List[Dict], max_chars: int = 4000) -> str:
-    return " ".join(str(s.get("text", "")).strip() for s in segments or [] if s.get("text"))[:max_chars]
-
-
 def make_output_dir(base_dir: str, title: str) -> str:
     """출력 디렉토리 생성: {base_dir}/{날짜}_{제목}/"""
     date_str = datetime.now().strftime("%Y-%m-%d")
@@ -341,9 +332,13 @@ def find_existing_output_dir(
             if ratio < 0.78:
                 continue
             score = ratio
-        candidates.append((score, d.stat().st_mtime, str(d)))
-    candidates.sort(key=lambda x: (x[0], x[1]), reverse=True)
-    return candidates[0][2] if candidates else None
+        # segments.json 보유 폴더 우선 — transcript.md만 있는 폴더는 타임스탬프
+        # 없는 형식이면 세그먼트 복원이 실패할 수 있다 (최신 mtime보다 완전한
+        # STT 산출물이 우선)
+        has_segments = any(d.glob("*segments.json")) or (d / "segments.json").is_file()
+        candidates.append((score, 1 if has_segments else 0, d.stat().st_mtime, str(d)))
+    candidates.sort(key=lambda x: (x[0], x[1], x[2]), reverse=True)
+    return candidates[0][3] if candidates else None
 
 
 def _parse_ts_token(token: str) -> float:
@@ -385,23 +380,6 @@ def load_segments_from_transcript(transcript_path: str) -> List[Dict[str, Any]]:
         else:
             seg["end"] = max(seg["start"] + 1.0, last_start + 1.0)
     return segments
-
-
-def retry_call(func, *args, retries: int = MAX_RETRIES, delay: int = RETRY_DELAY, **kwargs):
-    """자동 재시도 래퍼."""
-    last_err = None
-    for attempt in range(1, retries + 1):
-        try:
-            return func(*args, **kwargs)
-        except Exception as e:
-            last_err = e
-            if attempt < retries:
-                warn(f"  재시도 {attempt}/{retries} ({delay}초 후)...")
-                logger.warning(f"재시도 {attempt}/{retries}: {type(e).__name__}: {e}")
-                time.sleep(delay)
-            else:
-                logger.error(f"최종 실패: {type(e).__name__}: {e}")
-    raise last_err
 
 
 def has_timestamps(segments: List[Dict]) -> bool:
@@ -617,6 +595,13 @@ def main():
         err(f"메모 파일 없음: {args.memo}")
         sys.exit(1)
 
+    # ── 시작 시 vault 인덱스 재빌드 (indexing.auto_reindex_on_start) ──
+    try:
+        from meeting_minutes_app.wiki_core.wiki_knowledge import reindex_on_start_if_configured
+        reindex_on_start_if_configured()
+    except Exception as _rie:
+        warn(f"시작 시 인덱스 재빌드 실패 (무시): {_rie}")
+
     labels = TYPE_LABELS[args.type]
     multi  = len(valid_files) > 1
 
@@ -719,13 +704,17 @@ def main():
             ok("화자 수정 및 재생성 완료!")
 
             # 후처리: 용어 보완 + Obsidian 기록
-            _enr_edit = {}
+            # transcript_md을 원본 발행 때와 동일하게 넘겨야 한다 — classify_meeting_route()가
+            # title/topic/script_excerpt로 저장 폴더를 정하는데, 이걸 빠뜨리면 화자 수정
+            # 재발행이 원본과 다른 폴더로 분류돼 노트가 두 곳에 중복 생성될 수 있다.
             try:
-                _enr_edit = enrich_and_publish(
+                from meeting_minutes_app.meeting_pipeline.script_formatting import build_script_md
+                enrich_and_publish(
                     title=title, doc_type=args.type, minutes_md=minutes, llm=llm,
                     summary_md=summary,
                     topic=getattr(args, "topic", "") or "",
                     attendees=_gather_attendees(segments),
+                    transcript_md=build_script_md(segments),
                 )
             except Exception as e:
                 warn(f"후처리(용어/Obsidian) 실패: {e}")
@@ -806,10 +795,6 @@ def main():
             if multi and args.title:
                 pfx = f"{processed.index((fp, out_dir, summary, obs_path))+1:02d}_{stem}_"
             summary_path = os.path.join(out_dir, f"{pfx}summary.md")
-            minutes_path = os.path.join(out_dir, f"{pfx}minutes.md")
-            # 교정 전사본 우선, 없으면 원본 스크립트 폴백
-            script_refined_path = os.path.join(out_dir, f"{pfx}script_refined.txt")
-            script_raw_path     = os.path.join(out_dir, f"{pfx}script.md")
             print(f"\n  알림 발송 중 → {args.notify} ...")
             attach_files = _collect_notification_artifacts(out_dir, pfx, title)
             _send_notification(

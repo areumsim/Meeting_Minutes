@@ -543,7 +543,7 @@ cp   config.example.json config.json   # Mac/Linux
     "proposal_llm_enabled": false,
     "auto_apply_updates": false,
     "graph_enabled": true,
-    "graph_retrieval_expand_enabled": false
+    "graph_retrieval_expand_enabled": true
   },
   "output_dir": "./output"
 }
@@ -566,15 +566,21 @@ cp   config.example.json config.json   # Mac/Linux
 - `obsidian.vault_path`는 실제 Obsidian 볼트 루트입니다. Local REST API가 보고 있는 열린 볼트와 같아야 합니다.
 - `indexing.vault_path`도 같은 루트를 봐야 관련 노트 검색과 실제 저장 위치가 어긋나지 않습니다.
 - `obsidian.meetings_path`가 있으면 새 회의록은 `notes_subdir`이 아니라 그 볼트 상대경로에 저장됩니다.
-- QC 아카이브 기준 예시는 다음입니다.
+- 예시는 다음입니다(`auto_route_enabled: true`면 `--project` 없이도 제목/내용으로 도메인 자동 결정).
 
 ```jsonc
 "obsidian": {
-  "vault_path": "D:\\Claude\\QC",
-  "meetings_path": "도메인_아카이브/01_회의_세미나/회의별"
+  "vault_path": "D:\\Obsidian\\MyVault",
+  "meetings_path": "{project}/01_회의_세미나/회의별/{year}",
+  "project_domains": { "양자": "Archive/도메인_아카이브" },
+  "auto_route_enabled": true,
+  "meeting_categories": {
+    "양자": { "mode": "domain", "keywords": ["양자", "퀀텀"] },
+    "팀회의": { "mode": "folder", "folder": "00_Meetings/팀회의", "keywords": ["팀회의"] }
+  }
 },
 "indexing": {
-  "vault_path": "D:\\Claude\\QC"
+  "vault_path": "D:\\Obsidian\\MyVault"
 }
 ```
 

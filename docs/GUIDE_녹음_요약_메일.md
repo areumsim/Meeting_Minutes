@@ -103,8 +103,8 @@ ingest recording note에는 `source_audio`, `source_file_date`, `processed_at`, 
 본문에 직접 붙이고 싶으면 `config.json`의 `obsidian.transcript_mode`를 `"append"`로 바꾸고, 저장하지 않으려면 `"off"`로 둡니다.
 
 저장 경로 기준:
-- QC 아카이브 회의록 정식 위치: `D:\Claude\QC\도메인_아카이브\01_회의_세미나\회의별\<연도>`
-- QC 아카이브 전사 정식 위치: `D:\Claude\QC\도메인_아카이브\01_회의_세미나\전사\<연도>`
+- 양자 도메인 회의록 정식 위치: `D:\Obsidian\MyVault\Archive\도메인_아카이브\01_회의_세미나\회의별\<연도>`
+- 양자 도메인 전사 정식 위치: `D:\Obsidian\MyVault\Archive\도메인_아카이브\01_회의_세미나\전사\<연도>`
 - 현재 설정 확인: `python run_meeting.py obsidian --where`
 - 자세한 기준: [`출력_구조_저장경로_요약회의록.md`](출력_구조_저장경로_요약회의록.md)
 

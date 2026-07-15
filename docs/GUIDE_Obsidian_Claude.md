@@ -55,8 +55,8 @@ python run_meeting.py realtime --language ko
 ## 2. 결과는 어디로 가나
 
 1. **Obsidian 볼트** (가장 중요)
-   - `obsidian.meetings_path/yymmdd 제목.md` — 회의록. QC 아카이브 예: `도메인_아카이브/01_회의_세미나/회의별/{year}/260627 제목.md`
-   - `obsidian.transcripts_path/yymmdd 제목 - 전사.md` — 전체 STT 전사. QC 아카이브 예: `도메인_아카이브/01_회의_세미나/전사/{year}/260627 제목 - 전사.md`
+   - `obsidian.meetings_path/yymmdd 제목.md` — 회의록. 양자 도메인 예: `Archive/도메인_아카이브/01_회의_세미나/회의별/{year}/260627 제목.md`
+   - `obsidian.transcripts_path/yymmdd 제목 - 전사.md` — 전체 STT 전사. 양자 도메인 예: `Archive/도메인_아카이브/01_회의_세미나/전사/{year}/260627 제목 - 전사.md`
    - `obsidian.meetings_path`가 비어 있으면 `00_Meetings/<도메인>/yymmdd 제목.md` — 회의록 (프로젝트 미설정 시 `기타/`)
    - batch/process 회의록 frontmatter에는 `session_date`, `session_dt`, `source_file_date`, `source_audio`, `processed_at`, `stt_source`, `stt_segment_count`, `refined_ratio`가 기록됩니다.
    - ingest recording note도 `source_audio`, `source_file_date`, `processed_at`, `stt_source`, `stt_segment_count`를 기록합니다. vault-audio는 기존 노트에 병합하므로 기존 frontmatter를 우선 보존합니다.
@@ -120,11 +120,12 @@ meeting-minutes mcp-token --name 홍길동
 "notify":   { "on_finish": "email" },      // null 로 바꾸면 메일 자동발송 끔
 "obsidian": {
   "enabled": true,
-  "vault_path": "D:\\Claude\\QC",
-  "meetings_path": "도메인_아카이브/01_회의_세미나/회의별/{year}",
-  "transcripts_path": "도메인_아카이브/01_회의_세미나/전사/{year}"
-}, // QC 아카이브 구조에 회의록/전사 저장. meetings_path를 비우면 00_Meetings/<도메인>/ 사용
-// 여러 프로젝트를 한 폴더로 묶으려면: "project_domains": { "백서온톨로지": "GraphDB-온톨로지" }
+  "vault_path": "D:\\Obsidian\\MyVault",
+  "meetings_path": "{project}/01_회의_세미나/회의별/{year}",
+  "transcripts_path": "{project}/01_회의_세미나/전사/{year}",
+  "project_domains": { "양자": "Archive/도메인_아카이브" }
+}, // 도메인별 아카이브 구조에 회의록/전사 저장. meetings_path를 비우면 00_Meetings/<도메인>/ 사용
+// auto_route_enabled=true면 --project 없이도 제목/내용으로 도메인이 자동 결정됨
 "realtime": { "email_on_finish": true }    // 실시간 녹음 후 메일 자동발송
 ```
 

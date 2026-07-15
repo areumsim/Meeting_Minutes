@@ -8,7 +8,7 @@ import os
 import uuid
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict
 from datetime import datetime
 
 if getattr(sys, 'frozen', False):
@@ -21,7 +21,9 @@ else:
 @contextmanager
 def _conn():
     """Context manager guaranteeing connection close."""
-    c = sqlite3.connect(str(DB_PATH), check_same_thread=False)
+    # timeout: 동시 접근(실시간 finalize 스레드 + REST 조회) 시 잠금 대기 —
+    # wiki_core.graph_db._conn과 동일한 이유
+    c = sqlite3.connect(str(DB_PATH), check_same_thread=False, timeout=5.0)
     c.row_factory = sqlite3.Row
     c.execute("PRAGMA journal_mode=WAL")
     c.execute("PRAGMA foreign_keys=ON")
@@ -200,18 +202,6 @@ def add_segments_bulk(session_id: str, segments: List[Dict]):
 
 
 # ── Documents ─────────────────────────────────────
-
-def add_document(session_id: str, doc_type: str, content: str,
-                 fmt: str = "markdown") -> str:
-    doc_id = _new_id()
-    with _conn() as c:
-        c.execute(
-            "INSERT INTO documents (id, session_id, type, content, format) VALUES (?, ?, ?, ?, ?)",
-            (doc_id, session_id, doc_type, content, fmt),
-        )
-        c.commit()
-    return doc_id
-
 
 def get_documents(session_id: str) -> List[Dict]:
     with _conn() as c:

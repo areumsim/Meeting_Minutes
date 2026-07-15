@@ -57,16 +57,6 @@ def wikilink(basename: str, alias: Optional[str] = None) -> str:
     return f"[[{base}|{alias}]]" if alias and alias != base else f"[[{base}]]"
 
 
-def _has_section(content: str, *names: str) -> bool:
-    """Markdown 본문에 특정 섹션 제목이 이미 있는지 확인."""
-    if not content:
-        return False
-    for name in names:
-        if re.search(rf"(?mi)^#{{1,6}}\s*{re.escape(name)}\b", content):
-            return True
-    return False
-
-
 def build_references(
     related_notes: Optional[List[str]],
     external_refs: Optional[List[Dict[str, str]]],
@@ -144,109 +134,6 @@ def build_meeting_note_content(
     return "\n".join(parts)
 
 
-def build_recording_note_content(
-    meta: Dict[str, Any],
-    body_md: str,
-    summary_md: str,
-    key_points: Optional[List[str]],
-    decisions: Optional[List[str]],
-    actions_md: str,
-    open_questions: Optional[List[str]],
-    important_claims: Optional[List[str]],
-    glossary_md: str,
-    related_notes: Optional[List[str]],
-    external_refs: Optional[List[Dict[str, str]]],
-    web_sources_md: str,
-    transcript_md: str,
-    transcript_mode: str,
-    transcript_note_path: str,
-) -> str:
-    """write_recording_note 본문 조립."""
-    parts = [build_frontmatter(meta), ""]
-    parts.append(f"# {meta['title']}\n")
-
-    # Summary
-    if summary_md.strip():
-        parts.append("## 요약\n")
-        parts.append(summary_md.strip() + "\n")
-        parts.append("\n---\n")
-
-    # Key Points. Do not duplicate sections already present in body_md.
-    if key_points and not _has_section(body_md, "핵심 포인트", "주요 논의 내용"):
-        parts.append("## 핵심 포인트\n")
-        for kp in key_points:
-            parts.append(f"- {kp.strip()}\n")
-        parts.append("")
-
-    # Main body (minutes)
-    if body_md.strip():
-        parts.append(body_md.strip() + "\n")
-
-    # Decisions
-    if decisions and not _has_section(body_md, "결정 사항", "결정 사항(합의/정리된 방향)"):
-        parts.append("## 결정 사항\n")
-        for d in decisions:
-            parts.append(f"- {d.strip()}\n")
-        parts.append("")
-
-    # Action Items
-    if actions_md.strip() and not _has_section(body_md, "Action Item", "액션 아이템"):
-        parts.append("## 액션 아이템\n")
-        parts.append(actions_md.strip() + "\n")
-
-    # Open Questions
-    if open_questions and not _has_section(body_md, "미해결 질문", "오픈 이슈"):
-        parts.append("## 미해결 질문\n")
-        for q in open_questions:
-            parts.append(f"- {q.strip()}\n")
-        parts.append("")
-
-    # Important Claims
-    if important_claims and not _has_section(body_md, "중요 주장", "중요 주장/검증 필요"):
-        parts.append("## 중요 주장\n")
-        for c in important_claims:
-            parts.append(f"- {c.strip()}\n")
-        parts.append("")
-
-    # Glossary
-    if glossary_md.strip():
-        parts.append("## 용어·배경\n")
-        parts.append(glossary_md.strip() + "\n")
-
-    # Related Obsidian Notes
-    if related_notes:
-        parts.append("## 관련 노트\n")
-        for rn in related_notes:
-            clean = rn.strip().strip("[]")
-            if clean:
-                parts.append(f"- [[{clean}]]\n")
-        parts.append("")
-
-    # External refs
-    ref_lines = build_references(None, external_refs)
-    if ref_lines:
-        parts.append("## 참고 자료\n")
-        parts.append(ref_lines + "\n")
-
-    if web_sources_md.strip():
-        parts.append(web_sources_md.strip() + "\n")
-
-    # Transcript
-    if transcript_note_path:
-        transcript_base = (
-            transcript_note_path[:-3]
-            if transcript_note_path.lower().endswith(".md")
-            else transcript_note_path
-        )
-        parts.append("## 원문 전사\n")
-        parts.append(f"- [[{transcript_base}|전체 STT 전사]]\n")
-    elif transcript_md.strip() and transcript_mode == "append":
-        parts.append("## 전사 (Transcript)\n")
-        parts.append(transcript_md.strip() + "\n")
-
-    return "\n".join(parts)
-
-
 def build_planned_note_merge_content(
     meta: Dict[str, Any],
     pbody: str,
@@ -295,6 +182,80 @@ def build_planned_note_merge_content(
         parts.append(transcript_md.strip() + "\n")
 
     return "\n".join(parts)
+
+
+_REF_UPDATE_HEADER = "## 추가 언급 기록"
+
+
+def build_reference_note_update(
+    meta: Dict[str, Any],
+    body: str,
+    *,
+    new_description: str,
+    new_sources: Optional[List[Dict[str, str]]] = None,
+    mentioned_by: str = "",
+    now_iso: str = "",
+    max_updates: int = 5,
+) -> Optional[str]:
+    """기존 참조 노트(create_reference_note가 만든 것)에 새 언급을 추가한다.
+
+    원본 본문(제목/최초 설명/출처)은 그대로 보존하고, `## 추가 언급 기록` 섹션에
+    날짜별 블록(### YYYY-MM-DD — 회의명)을 덧붙인다. 오래된 블록은 max_updates개를
+    넘으면 가장 오래된 것부터 제거한다. 새 설명이 비어있거나 이미 본문에 있으면
+    (변경 없음) None을 반환 — 호출자는 원본을 그대로 둔다.
+    반환값은 frontmatter+body가 합쳐진 완성된 노트 콘텐츠 문자열.
+    """
+    new_description = (new_description or "").strip()
+    if not new_description:
+        return None
+    body = body or ""
+    if new_description[:200] in body:
+        return None
+
+    date_str = (now_iso or "")[:10] or "unknown-date"
+    heading = f"### {date_str}" + (f" — {mentioned_by}" if mentioned_by else "")
+    block_lines = [heading, "", new_description]
+    if new_sources:
+        block_lines.append("")
+        block_lines.append("#### 출처")
+        for s in new_sources:
+            u = s.get("url", "")
+            t = s.get("title", u)
+            if u:
+                block_lines.append(f"- [{t}]({u})")
+    new_block = "\n".join(block_lines).strip()
+
+    if _REF_UPDATE_HEADER in body:
+        pre, _, rest = body.partition(_REF_UPDATE_HEADER)
+        rest = rest.strip()
+        blocks = [b.strip() for b in re.split(r"\n(?=### )", rest) if b.strip()] if rest else []
+    else:
+        pre = body
+        blocks = []
+
+    blocks.append(new_block)
+    if len(blocks) > max_updates:
+        blocks = blocks[-max_updates:]
+
+    new_section = _REF_UPDATE_HEADER + "\n\n" + "\n\n".join(blocks)
+    new_body = pre.rstrip() + "\n\n" + new_section + "\n"
+
+    mentioned_in = meta.get("mentioned_in")
+    mentioned_in = list(mentioned_in) if isinstance(mentioned_in, list) else ([mentioned_in] if mentioned_in else [])
+    if mentioned_by and mentioned_by not in mentioned_in:
+        mentioned_in.append(mentioned_by)
+    try:
+        mention_count = int(meta.get("mention_count") or 1)
+    except (TypeError, ValueError):
+        mention_count = 1
+    mention_count += 1
+
+    new_meta = dict(meta)
+    new_meta["mentioned_in"] = mentioned_in
+    new_meta["mention_count"] = mention_count
+    new_meta["last_mentioned"] = now_iso or str(meta.get("last_mentioned", ""))
+
+    return "\n".join([build_frontmatter(new_meta), "", new_body])
 
 
 def build_recording_into_plan_content(

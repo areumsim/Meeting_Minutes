@@ -144,8 +144,9 @@ def _detect_obsidian_config(api_key_hint: str = "") -> dict:
 # ── 노트 포맷팅 유틸 (마크다운/frontmatter 조립은 note_builder.py로 분리) ──
 from meeting_minutes_app.wiki_core.note_builder import (  # noqa: E402
     build_frontmatter, safe_filename, wikilink, build_references,
-    render_transcript_note, build_meeting_note_content, build_recording_note_content,
+    render_transcript_note, build_meeting_note_content,
     build_planned_note_merge_content, build_recording_into_plan_content,
+    build_reference_note_update,
 )
 
 
@@ -260,8 +261,13 @@ def _year_from_date(date_str: str = "") -> str:
     return datetime.now().strftime("%Y")
 
 
-def _expand_path_template(path: str, date_str: str = "") -> str:
-    """볼트 상대경로 템플릿의 날짜 토큰을 치환."""
+def _expand_path_template(path: str, date_str: str = "", project: str = "") -> str:
+    """볼트 상대경로 템플릿의 날짜/프로젝트 토큰을 치환.
+
+    {project}는 ObsidianClient._project_domain()(project_domains 매핑 또는 project명)
+    으로 치환된다 — meetings_path/transcripts_path에 이 토큰을 넣으면 여러 도메인
+    (예: 양자/PhysicalAI)이 project_domains 설정만으로 서로 다른 폴더에 저장된다.
+    토큰이 없는 기존 값은 그대로 동작(하위호환)."""
     if not path:
         return ""
     year = _year_from_date(date_str)
@@ -276,6 +282,7 @@ def _expand_path_template(path: str, date_str: str = "") -> str:
         .replace("{yyyy}", year)
         .replace("{yy}", short_year)
         .replace("{month}", month)
+        .replace("{project}", project or "기타")
         .strip("/")
     )
 
@@ -310,13 +317,29 @@ class ObsidianClient:
 
     def _refs_subfolder(self, category: str) -> str:
         """category → References 서브폴더.
-        인물→People, 기업→Companies, 용어·기술→도메인 폴더(project 없으면 공통)."""
+        인물→People, 기업→Companies, 용어·기술→도메인 폴더(project 없으면 공통).
+
+        도메인 폴더명 결정 순서: 1) obsidian.ref_domains에 현재 project 키가 있으면
+        그 값(이미 수동으로 만들어둔 참조노트 폴더가 있을 때 새 폴더가 안 생기게 함)
+        2) project_domains 매핑값의 마지막 경로 조각(meetings_path용 매핑값에
+        "Archive/도메인_아카이브"처럼 아카이브 컨테이너 접두사가 붙어 있어도
+        참조노트는 그 접두사 없이 도메인명만 사용) 3) project명 그대로 4) "공통"."""
         c = category or ""
         if "인물" in c:
             return "People"
         if "기업" in c or "회사" in c or "기관" in c:
             return "Companies"
-        return self._project_domain() or "공통"
+        p = (self.project or "").strip()
+        if p:
+            pk = re.sub(r"[\s_\-]", "", p.lower())
+            for key, ref_domain in (self.ref_domains or {}).items():
+                kk = re.sub(r"[\s_\-]", "", str(key).lower())
+                if kk and (kk in pk or pk in kk):
+                    return str(ref_domain)
+        domain = self._project_domain()
+        if not domain:
+            return "공통"
+        return domain.rsplit("/", 1)[-1]
 
     def __init__(
         self,
@@ -328,6 +351,7 @@ class ObsidianClient:
         refs_subdir: str = "01_References",
         project: str = "",
         project_domains: Optional[Dict[str, str]] = None,
+        ref_domains: Optional[Dict[str, str]] = None,
         verify_ssl: bool = False,
         timeout: float = 15.0,
     ):
@@ -341,6 +365,7 @@ class ObsidianClient:
         self.refs_subdir = refs_subdir.strip("/")
         self.project = (project or "").strip()
         self.project_domains = project_domains or {}
+        self.ref_domains = ref_domains or {}
         self._refs_dirs: Optional[List[str]] = None   # 참고 서브폴더 목록 캐시(중복검사용)
         self._client = httpx.Client(
             base_url=self.api_url,
@@ -350,9 +375,13 @@ class ObsidianClient:
         )
 
     @classmethod
-    def from_config(cls) -> Optional["ObsidianClient"]:
+    def from_config(cls, project_override: str = "") -> Optional["ObsidianClient"]:
         """config.json 의 obsidian 섹션에서 생성. 비활성/미설정 시 None.
-        api_key 가 없으면 Windows에서 Obsidian 설치 경로를 자동 탐지한다."""
+        api_key 가 없으면 Windows에서 Obsidian 설치 경로를 자동 탐지한다.
+
+        project_override: 넘기면 config의 obsidian.project 대신 이 값을 사용한다
+        — CLI `--project` 플래그처럼 config.json을 고치지 않고 세션 단위로
+        다른 도메인(project_domains 매핑)에 발행할 때 쓴다."""
         if not _c("obsidian.enabled", False):
             return None
         api_url = _c("obsidian.api_url", "")
@@ -381,8 +410,9 @@ class ObsidianClient:
             meetings_path=_c("obsidian.meetings_path", ""),
             transcripts_path=_c("obsidian.transcripts_path", ""),
             refs_subdir=_c("obsidian.refs_subdir", "01_References"),
-            project=_c("obsidian.project", ""),
+            project=project_override or _c("obsidian.project", ""),
             project_domains=_c("obsidian.project_domains", {}) or {},
+            ref_domains=_c("obsidian.ref_domains", {}) or {},
             verify_ssl=bool(_c("obsidian.verify_ssl", False)),
         )
 
@@ -458,33 +488,42 @@ class ObsidianClient:
         3. 자동 녹음 처리에서만 vault_watcher.output_folder
         4. notes_subdir/<project-domain|기타>
         """
+        project_dir = self._project_domain() or "기타"
         if output_folder:
-            return _expand_path_template(output_folder, date_str)
+            return _expand_path_template(output_folder, date_str, project=project_dir)
         if self.meetings_path:
-            return _expand_path_template(self.meetings_path, date_str)
+            return _expand_path_template(self.meetings_path, date_str, project=project_dir)
         try:
             cfg_meetings = str(_c("obsidian.meetings_path", "") or "").strip("/")
             if cfg_meetings:
-                return _expand_path_template(cfg_meetings, date_str)
+                return _expand_path_template(cfg_meetings, date_str, project=project_dir)
             watcher_folder = str(_c("vault_watcher.output_folder", "") or "").strip("/")
             if use_watcher_fallback and watcher_folder:
-                return _expand_path_template(watcher_folder, date_str)
+                return _expand_path_template(watcher_folder, date_str, project=project_dir)
         except Exception:
             pass
-        project_dir = self._project_domain() or "기타"
         return f"{self.notes_subdir}/{project_dir}".strip("/")
 
-    def _transcript_folder(self, meeting_folder: str, date_str: str = "") -> str:
-        """전체 STT 전사를 쓸 볼트 상대 폴더."""
+    def _transcript_folder(self, meeting_folder: str, date_str: str = "",
+                           output_folder: str = "") -> str:
+        """전체 STT 전사를 쓸 볼트 상대 폴더.
+
+        output_folder(자동분류 라우팅의 명시적 폴더 override)가 있으면 transcripts_path
+        템플릿을 무시하고 meeting_folder와 같은 곳에 저장한다 — 그렇지 않으면 본문은
+        output_folder에, 전사는 project_domains 기반 아카이브 경로에 따로 떨어져 본문과
+        전사가 서로 다른 폴더로 갈라진다."""
+        if output_folder:
+            return meeting_folder
+        project_dir = self._project_domain() or "기타"
         if self.transcripts_path:
-            return _expand_path_template(self.transcripts_path, date_str)
+            return _expand_path_template(self.transcripts_path, date_str, project=project_dir)
         try:
             cfg_transcripts = str(_c("obsidian.transcripts_path", "") or "").strip("/")
             if cfg_transcripts:
-                return _expand_path_template(cfg_transcripts, date_str)
+                return _expand_path_template(cfg_transcripts, date_str, project=project_dir)
         except Exception:
             pass
-        return _expand_path_template(meeting_folder, date_str)
+        return _expand_path_template(meeting_folder, date_str, project=project_dir)
 
     def put_note(self, path: str, content: str) -> bool:
         """노트 생성/덮어쓰기. path 는 볼트 상대경로(.md 포함)."""
@@ -546,20 +585,23 @@ class ObsidianClient:
         except Exception:
             return []
 
-    def _ref_note_exists(self, base: str) -> bool:
-        """References 하위(루트 + 모든 도메인/타입 서브폴더)에 같은 이름 노트가 있는지.
-        서브폴더 목록은 최초 1회 캐시(런 중 동일 도메인 생성분은 직접 경로로 잡힘)."""
-        if self.exists(f"{self.refs_subdir}/{base}.md"):
-            return True
+    def _find_ref_note_path(self, base: str) -> Optional[str]:
+        """References 하위(루트 + 모든 도메인/타입 서브폴더)에서 같은 이름 노트를 찾아
+        경로를 반환(없으면 None). 서브폴더 목록은 최초 1회 캐시(런 중 동일 도메인
+        생성분은 직접 경로로 잡힘)."""
+        root_path = f"{self.refs_subdir}/{base}.md"
+        if self.exists(root_path):
+            return root_path
         if self._refs_dirs is None:
             self._refs_dirs = self._list_dirs(self.refs_subdir)
         # 캐시에 없을 수 있는 '현재 런에서 새로 만든 도메인'도 포함해 검사
         cur = self._refs_subfolder("용어·기술")
         subdirs = set(self._refs_dirs) | {cur, "People", "Companies"}
         for sub in subdirs:
-            if self.exists(f"{self.refs_subdir}/{sub}/{base}.md"):
-                return True
-        return False
+            candidate = f"{self.refs_subdir}/{sub}/{base}.md"
+            if self.exists(candidate):
+                return candidate
+        return None
 
     def search_simple(self, query: str, context_length: int = 100,
                       limit: int = 10) -> List[Dict[str, Any]]:
@@ -606,11 +648,14 @@ class ObsidianClient:
         confidence: str = "medium",
         source_type: str = "generated",
         evidence: Optional[List[str]] = None,
+        output_folder: str = "",
     ) -> Optional[str]:
         """
         회의록 노트를 볼트 상대 폴더에 작성. obsidian.meetings_path 가 있으면 그 경로를 우선한다.
         작성된 볼트 상대경로 반환(실패 시 None).
         extra_meta: 프론트매터에 추가할 키(예: 계획 매칭 보류 시 matched_plan).
+        output_folder: 넘기면 meetings_path보다 우선(예: 자동분류 라우팅이 고른
+        "00_Meetings/팀회의" 같은 폴더) — meeting_workflow.classify_meeting_route() 참고.
         review_status/confidence/source_type/evidence: Personal Wiki Schema — 사람이 검토 후
         review_status를 "reviewed"로 직접 변경. evidence는 회의록 생성에 실제 주입된 근거
         ("[[노트#헤딩]]" 또는 "[[노트]]") 목록.
@@ -619,7 +664,7 @@ class ObsidianClient:
         date_str = date_key(session_dt) or date_key(source_file_date) or datetime.now().strftime("%Y-%m-%d")
         file_date = yymmdd_key(date_str) or datetime.now().strftime("%y%m%d")
         base = safe_filename(f"{file_date} {title}" if title else f"{file_date} 회의록")
-        path = f"{self._meeting_folder(date_str=date_str)}/{base}.md"
+        path = f"{self._meeting_folder(output_folder, date_str=date_str)}/{base}.md"
 
         meta = {
             "title": title or base,
@@ -649,7 +694,9 @@ class ObsidianClient:
         transcript_mode = str(_c("obsidian.transcript_mode", "separate") or "separate").lower()
         transcript_note_path = ""
         if transcript_md.strip() and transcript_mode in ("separate", "note", "file"):
-            transcript_folder = self._transcript_folder(self._meeting_folder(date_str=date_str), date_str)
+            transcript_folder = self._transcript_folder(
+                self._meeting_folder(output_folder, date_str=date_str), date_str,
+                output_folder=output_folder)
             transcript_note_path = f"{transcript_folder}/{base} - 전사.md"
             transcript_meta = {
                 "title": f"{title or base} - 전사",
@@ -673,109 +720,6 @@ class ObsidianClient:
         content = build_meeting_note_content(
             meta, title or base, body_md, summary_md, glossary_md, actions_md,
             related_notes, external_refs, web_sources_md, transcript_md, transcript_mode,
-        )
-        if not self.put_note(path, content):
-            return None
-        _sm_save(content, metadata={"date": date_str, "type": doc_type, "topic": topic}, container_tag=topic or title or "")
-        return path
-
-    def write_recording_note(
-        self,
-        title: str,
-        body_md: str,
-        doc_type: str = "meeting",
-        topic: str = "",
-        attendees: Optional[List[str]] = None,
-        session_dt: str = "",
-        tags: Optional[List[str]] = None,
-        summary_md: str = "",
-        actions_md: str = "",
-        glossary_md: str = "",
-        related_notes: Optional[List[str]] = None,
-        external_refs: Optional[List[Dict[str, str]]] = None,
-        # 녹음 자동 처리 전용 필드
-        source_audio: str = "",
-        processed_at: str = "",
-        source_file_date: str = "",
-        stt_meta: Optional[Dict[str, Any]] = None,
-        duration: float = 0.0,
-        status: str = "processed",
-        key_points: Optional[List[str]] = None,
-        decisions: Optional[List[str]] = None,
-        open_questions: Optional[List[str]] = None,
-        important_claims: Optional[List[str]] = None,
-        transcript_md: str = "",
-        output_folder: str = "",
-        meeting_scope: str = "",
-        web_sources_md: str = "",
-        review_status: str = "pending",
-        confidence: str = "medium",
-        source_type: str = "generated",
-        evidence: Optional[List[str]] = None,
-    ) -> Optional[str]:
-        """자동 처리된 녹음 파일을 Obsidian 노트로 저장.
-        source_audio, processed_at, duration 등 확장 frontmatter 포함.
-        body_md 대신 섹션별(key_points, decisions 등) 구조화된 출력도 지원.
-        output_folder: vault 상대경로. 비우면 obsidian.meetings_path → vault_watcher.output_folder 순으로 사용.
-        review_status/confidence/source_type/evidence: Personal Wiki Schema (write_meeting_note 참고)."""
-        date_str = date_key(session_dt) or date_key(source_file_date) or datetime.now().strftime("%Y-%m-%d")
-        out_folder = self._meeting_folder(output_folder, use_watcher_fallback=True, date_str=date_str)
-        file_date = yymmdd_key(date_str) or datetime.now().strftime("%y%m%d")
-        base = safe_filename(f"{file_date} {title}" if title else f"{file_date} 녹음 기록")
-        path = f"{out_folder}/{base}.md"
-
-        now_iso = processed_at or datetime.now().isoformat(timespec="seconds")
-        meta: Dict[str, Any] = {
-            "title": title or base,
-            "date": date_str,
-            "session_date": date_str,
-            "session_dt": session_dt or "",
-            "source_file_date": source_file_date or "",
-            "type": doc_type,
-            "project": self.project or "",
-            "topic": topic,
-            "attendees": attendees or [],
-            "tags": list(dict.fromkeys((tags or []) + ["녹음처리", doc_type])),
-            "status": status,
-            "meeting_scope": meeting_scope or "",
-            "source_audio": os.path.basename(source_audio) if source_audio else "",
-            "created": session_dt or date_str,
-            "processed_at": now_iso,
-            "review_status": review_status,
-            "confidence": confidence,
-            "source_type": source_type,
-            "evidence": evidence or [],
-        }
-        if stt_meta:
-            meta.update({k: v for k, v in stt_meta.items() if v not in ("", None, [])})
-        if duration > 0:
-            mins, secs = divmod(int(duration), 60)
-            meta["duration"] = f"{mins}분 {secs}초" if mins else f"{secs}초"
-
-        transcript_mode = str(_c("obsidian.transcript_mode", "separate") or "separate").lower()
-        transcript_note_path = ""
-        if transcript_md.strip() and transcript_mode in ("separate", "note", "file"):
-            transcript_folder = self._transcript_folder(out_folder, date_str)
-            transcript_note_path = f"{transcript_folder}/{base} - 전사.md"
-            transcript_meta = {
-                "title": f"{title or base} - 전사",
-                "date": date_str,
-                "type": "transcript",
-                "parent_note": path,
-                "source_audio": os.path.basename(source_audio) if source_audio else "",
-                "created": now_iso,
-                "tags": ["전사", doc_type],
-            }
-            transcript_content = render_transcript_note(
-                transcript_meta, f"{title or base} - 전사", transcript_md,
-            )
-            if not self.put_note(transcript_note_path, transcript_content):
-                transcript_note_path = ""
-
-        content = build_recording_note_content(
-            meta, body_md, summary_md, key_points, decisions, actions_md,
-            open_questions, important_claims, glossary_md, related_notes, external_refs,
-            web_sources_md, transcript_md, transcript_mode, transcript_note_path,
         )
         if not self.put_note(path, content):
             return None
@@ -979,17 +923,36 @@ class ObsidianClient:
         self, term: str, description: str,
         sources: Optional[List[Dict[str, str]]] = None,
         category: str = "",
+        mentioned_by: str = "",
     ) -> Optional[str]:
         """
-        용어/인물/기업 설명 노트를 refs_subdir 에 작성(이미 있으면 건너뜀).
+        용어/인물/기업 설명 노트를 refs_subdir 에 작성.
+        이미 같은 이름의 노트가 있으면 덮어쓰지 않고 "## 추가 언급 기록" 섹션에
+        이번 설명/출처를 날짜별 블록으로 append한다(내용이 실질적으로 같으면 스킵).
+        mentioned_by: 이번에 이 노트를 다시 언급한 회의/세션 제목(선택) — frontmatter
+        mentioned_in 목록에 누적된다.
         위키링크용 basename 반환(실패해도 basename 은 반환해 링크는 유지).
         """
         base = safe_filename(term)
         # category + project → 도메인 서브폴더 결정
         sub = self._refs_subfolder(category)
         path = f"{self.refs_subdir}/{sub}/{base}.md"
-        # 같은 이름 노트가 References 하위 '어느 폴더에든' 이미 있으면 재사용 (중복 방지)
-        if self._ref_note_exists(base):
+        # 같은 이름 노트가 References 하위 '어느 폴더에든' 이미 있으면 그 노트를 보강
+        existing_path = self._find_ref_note_path(base)
+        if existing_path:
+            existing = self.get_note(existing_path)
+            if existing:
+                meta, body = parse_frontmatter(existing)
+                updated = build_reference_note_update(
+                    meta, body,
+                    new_description=description,
+                    new_sources=sources,
+                    mentioned_by=mentioned_by,
+                    now_iso=datetime.now().isoformat(timespec="seconds"),
+                    max_updates=int(_c("obsidian.reference_note_max_updates", 5) or 5),
+                )
+                if updated:
+                    self.put_note(existing_path, updated)
             return base
 
         meta = {
@@ -1092,12 +1055,29 @@ def _cli():
     p.add_argument("--refresh-index", action="store_true", help="기존 _index(MOC) 문구를 최신으로 갱신")
     p.add_argument("--search", metavar="QUERY", help="볼트 단순 검색")
     p.add_argument("--test-note", action="store_true", help="테스트 노트 작성")
+    p.add_argument("--project", default="", help="obsidian.project 오버라이드 (선택) — "
+                                                 "다른 도메인(project_domains 매핑)으로 진단/스캐폴딩")
     args = p.parse_args()
 
-    obs = ObsidianClient.from_config()
+    obs = ObsidianClient.from_config(project_override=args.project)
     if obs is None:
         print("✗ obsidian 설정 없음/비활성 — config.json 의 obsidian 섹션을 확인하세요.")
         print("  (enabled:true, api_url, api_key 필요. httpx 설치 필요.)")
+        if args.where:
+            # 연결이 안 되는 이유를 진단하는 게 --where의 목적이므로, 클라이언트
+            # 생성에 실패했어도 config 기준 경로 정보는 최대한 보여준다.
+            configured_vault = _c("obsidian.vault_path", "")
+            indexed_vault = _c("indexing.vault_path", "") or configured_vault
+            detected = _detect_obsidian_config()
+            print("\n경로 진단 (연결 실패 — config 기준 정보만 표시):")
+            print(f"  - config.obsidian.vault_path  : {configured_vault or '(미설정)'}")
+            print(f"  - config.indexing.vault_path  : {indexed_vault or '(미설정)'}")
+            print(f"  - detected vault by api key    : {detected.get('vault_path', '(감지 실패)')}")
+            if detected.get("open") is not None:
+                print(f"  - detected vault is open       : {detected.get('open')}")
+            print(f"  - notes_subdir (config)        : {_c('obsidian.notes_subdir', '00_Meetings')}")
+            print(f"  - meetings_path (config 템플릿) : {_c('obsidian.meetings_path', '') or '(미설정)'}")
+            print(f"  - transcripts_path (config 템플릿): {_c('obsidian.transcripts_path', '') or '(미설정)'}")
         sys.exit(1)
 
     if args.ping or args.where or not (args.search or args.test_note or args.init_vault or args.refresh_index or args.where):

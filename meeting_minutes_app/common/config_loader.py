@@ -76,6 +76,45 @@ def get_api_key(config_key: str, env_var: str, fallback: str = "") -> str:
     return (os.environ.get(env_var) or get(config_key) or fallback or "").strip()
 
 
+def set_nested(key_path: str, value: Any, persist: bool = True) -> None:
+    """점(.) 구분 키에 값을 설정. persist=True면 config.json에도 즉시 반영한다
+    (예: 회의 자동분류가 새 카테고리를 발견해 스스로 등록하는 경우).
+    디스크에서 다시 읽어 병합 후 저장해 동시 실행 중인 다른 프로세스의
+    무관한 키 변경을 최대한 덮어쓰지 않는다. 로컬 단일 사용자 도구 기준이며
+    엄밀한 파일 잠금은 하지 않는다."""
+    global _cache
+    cfg = _load()
+    node = cfg
+    parts = key_path.split(".")
+    for k in parts[:-1]:
+        if not isinstance(node.get(k), dict):
+            node[k] = {}
+        node = node[k]
+    node[parts[-1]] = value
+
+    if not persist:
+        return
+    on_disk = cfg
+    if _CONFIG_PATH.exists():
+        try:
+            with open(_CONFIG_PATH, "r", encoding="utf-8") as f:
+                on_disk = json.load(f)
+        except Exception:
+            on_disk = cfg
+    d_node = on_disk
+    for k in parts[:-1]:
+        if not isinstance(d_node.get(k), dict):
+            d_node[k] = {}
+        d_node = d_node[k]
+    d_node[parts[-1]] = value
+    try:
+        with open(_CONFIG_PATH, "w", encoding="utf-8") as f:
+            json.dump(on_disk, f, ensure_ascii=False, indent=2)
+        _cache = on_disk
+    except Exception as e:
+        print(f"[config] ⚠  config.json 저장 실패: {e}", file=sys.stderr)
+
+
 def reload():
     """config.json 재로드 (런타임 변경 반영용)"""
     global _cache

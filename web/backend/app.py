@@ -6,12 +6,19 @@ import sys
 from pathlib import Path
 from contextlib import asynccontextmanager
 
+for _s in (sys.stdout, sys.stderr):
+    if getattr(_s, "encoding", None) and _s.encoding.lower() in ("cp949", "euc-kr", "ansi"):
+        try:
+            _s.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
 
-from web.backend.paths import AR_ROOT, EXE_DIR
+from web.backend.paths import AR_ROOT, EXE_DIR  # noqa: F401 — import 시 sys.path 셋업 side effect
 from web.backend.database import init_db
 
 # Wiki Knowledge Graph를 원격 MCP 서버로 노출(/mcp) — Claude Cowork 커스텀 커넥터용.
@@ -59,6 +66,7 @@ from web.backend.api.realtime import router as realtime_router
 from web.backend.api.profiles import router as profiles_router
 from web.backend.api.settings import router as settings_router
 from web.backend.api.graph import router as graph_router
+from web.backend.api.wiki import router as wiki_router
 
 app.include_router(sessions_router, prefix="/api")
 app.include_router(batch_router, prefix="/api")
@@ -66,6 +74,7 @@ app.include_router(realtime_router)
 app.include_router(profiles_router, prefix="/api")
 app.include_router(settings_router, prefix="/api")
 app.include_router(graph_router, prefix="/api")
+app.include_router(wiki_router, prefix="/api")
 
 
 @app.get("/api/health")

@@ -10,7 +10,6 @@ seminar_paper_research.py
   python scripts/seminar_paper_research.py --date 2026-06-29 --output-dir ./output --dry-run
 """
 
-import os
 import sys
 import json
 import re

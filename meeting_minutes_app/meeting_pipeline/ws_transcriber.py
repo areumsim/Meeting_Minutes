@@ -186,6 +186,19 @@ class WebSocketAudioStreamer:
         )
         self._stream.start()
 
+    def reattach(self, connection):
+        """재연결된 새 connection으로 교체하고 송신 스레드를 재기동한다.
+
+        연결 단절 중에도 마이크 콜백은 큐에 계속 쌓이므로, 재부착 직후
+        밀린 오디오부터 순서대로 전송된다 (송신 루프는 오류 시 break하므로
+        죽어 있으면 새 스레드로 재시작)."""
+        self.connection = connection
+        if not (self._sender_thread and self._sender_thread.is_alive()):
+            self._sender_thread = threading.Thread(
+                target=self._sender_loop, daemon=True, name="ws-audio-sender"
+            )
+            self._sender_thread.start()
+
     def pause(self):
         """마이크 캡처 일시정지."""
         if self._stream:
@@ -249,6 +262,7 @@ class WebSocketTranscriber:
         logger                = None,
         indicator             = None,
         topic: str            = "",
+        vault_searcher        = None,
     ):
         self.connection      = connection
         self.language        = language
@@ -258,6 +272,7 @@ class WebSocketTranscriber:
         self.logger          = logger
         self._indicator      = indicator
         self.topic           = topic
+        self.vault_searcher  = vault_searcher  # 실시간 vault 검색 (논블로킹, 선택)
         self.segments: List[Dict] = []
         self._session_start  = time.time()
         self._translator_pool = ThreadPoolExecutor(max_workers=2)
@@ -267,20 +282,48 @@ class WebSocketTranscriber:
         self._speech_start: Dict[str, float] = {}     # item_id → audio_start_ms
         self._delta_started: Dict[str, bool] = {}     # item_id → 첫 delta 출력 여부
 
-    def run_event_loop(self, stop_event: threading.Event):
+    def run_event_loop(self, stop_event: threading.Event, reconnect_cb=None):
         """
-        이벤트 루프 — 별도 스레드에서 실행.
-        stop_event 설정 시 종료.
+        이벤트 루프 — 별도 스레드에서 실행. stop_event 설정 시 종료.
+
+        reconnect_cb: 연결 오류 시 새 RealtimeConnection을 반환하는 콜백.
+        지수 백오프(RECONNECT_BASE * 2^n)로 최대 MAX_RECONNECT회 재시도하고,
+        소진되면 루프를 종료한다 — 그때까지의 세그먼트는 self.segments에 보존.
+        (과거엔 MAX_RECONNECT/RECONNECT_BASE 상수만 선언돼 있고 재연결이 없었음)
         """
-        try:
-            for event in self.connection:
+        attempts = 0
+        while not stop_event.is_set():
+            try:
+                for event in self.connection:
+                    if stop_event.is_set():
+                        return
+                    self._handle_event(event)
+                    attempts = 0  # 정상 수신 → 재연결 카운터 리셋
+                return  # 서버 측 정상 종료
+            except Exception as e:
                 if stop_event.is_set():
-                    break
-                self._handle_event(event)
-        except Exception as e:
-            if not stop_event.is_set():
-                print(f"\n  {C_RED}[WS 이벤트 루프 오류]{C_RESET} {e}",
+                    return
+                if reconnect_cb is None or attempts >= self.MAX_RECONNECT:
+                    print(f"\n  {C_RED}[WS 이벤트 루프 오류]{C_RESET} {e}",
+                          file=sys.stderr)
+                    return
+                attempts += 1
+                delay = self.RECONNECT_BASE * (2 ** (attempts - 1))
+                print(f"\n  {C_YELLOW}[WS 연결 끊김]{C_RESET} {e} → "
+                      f"{delay}초 후 재연결 ({attempts}/{self.MAX_RECONNECT})",
                       file=sys.stderr)
+                if stop_event.wait(delay):
+                    return
+                try:
+                    new_conn = reconnect_cb()
+                except Exception as re_err:
+                    print(f"\n  {C_YELLOW}[WS 재연결 실패]{C_RESET} {re_err}",
+                          file=sys.stderr)
+                    new_conn = None
+                if new_conn is not None:
+                    self.connection = new_conn
+                    print(f"\n  {C_GREEN}[WS 재연결 성공]{C_RESET}", file=sys.stderr)
+                # new_conn이 None이면 다음 루프에서 backoff 증가 후 재시도
 
     def _handle_event(self, event):
         """서버 이벤트 디스패치."""
@@ -383,6 +426,8 @@ class WebSocketTranscriber:
             "speaker":       "",
         }
         self.segments.append(seg)
+        if self.vault_searcher:
+            self.vault_searcher.offer_segment(final_text)
 
         # 번역 또는 로깅
         if self.translate and final_text.strip():

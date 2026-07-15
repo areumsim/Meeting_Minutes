@@ -16,7 +16,7 @@ from __future__ import annotations
 import os
 import re
 import glob
-from typing import Optional, List, Dict, Tuple
+from typing import List, Dict, Tuple
 
 from meeting_minutes_app.wiki_core.obsidian import parse_frontmatter, build_frontmatter, safe_filename, _as_str_list
 

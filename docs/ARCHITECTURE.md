@@ -1,6 +1,6 @@
 # Meeting Minutes System — Architecture
 
-> 코드 기반 정확한 참조 문서 · 2026-06-29  
+> 코드 기반 정확한 참조 문서 · 2026-07-08  
 > `meeting_minutes_app/` · `web/backend/api/realtime.py` 분석
 
 ---
@@ -27,44 +27,60 @@
 
 ---
 
-## 메인 파이프라인 — Ingestion
+## 메인 파이프라인 — 공유 오케스트레이터(`finalize.run_post_session()`)
 
-`ingestion_pipeline.IngestPipeline.ingest()` 실행 시 전체 흐름. 배치, ingest, CLI 실시간, 서버 `/ws/realtime`은 종료 후 동일한 Wiki 품질 루프(컨텍스트 저장, 사실검증, registry/proposal)를 거친다. 단, 프론트 standalone/mobile direct OpenAI 경로는 서버 파이프라인을 우회한다.
+2026-07 통합: 배치(`pipeline.process_single`) · CLI 실시간/recover(`realtime_transcription.py`) ·
+웹(`web/backend/api/realtime.py`) · ingest(`ingestion_pipeline.IngestionPipeline.ingest()`) 4개
+진입점이 **전부** `finalize.run_post_session()` 하나로 수렴한다. 과거엔 이 흐름이 4곳에 손으로
+복사돼 있었고 ingest만 스키마 차이로 부분 채택(축소판 enrichment, 재인덱싱/그래프 동기화 누락)
+상태였으나, 지금은 완전히 동일한 코드 경로를 탄다. 호출자별 차이는 `FinalizeOptions`(무엇을
+실행할지)로 흡수한다.
 
 ```mermaid
 flowchart TD
-    A[오디오 파일\n.m4a / .mp3 / .wav / .webm] --> B[prepare_audio\nFFmpeg → MP3 변환]
-    B --> C{크기 ≥ 25MB\n또는 길이 ≥ 1200s?}
-    C -- 예 --> D[diarize chunking_strategy\n우선 검증]
-    C -- 아니오 --> E[STT 단일 요청]
-    D -- 실패/품질저하 --> F[gpt-4o-transcribe\n화자분리 없음]
-    D -- 성공 --> G
-    E --> G[gpt-4o-transcribe-diarize\n화자분리 포함]
-    G -- 실패 --> F
-    F --> H[segments 병합]
-    G --> H
+    A[segments + 메타데이터\nSessionInputs] --> B[plan_context\n계획 회의 매칭]
+    B --> C[extra_memo\n호출자 추가 메모 병합]
+    C --> D[context\nbuild_generation_context_memo\n도메인 스코프 검색 포함]
+    D --> D2[wiki_context.json 저장\nartifacts_dir]
+    D2 --> E[refine\n스크립트 교정]
+    E --> F[minutes\ngenerate_minutes]
+    F --> G[actions\nmeeting 타입만]
+    G --> H[claim_verify\nwiki.claim_verify=true]
+    H --> I[summary\ngenerate_summary]
+    I --> J[script\nbuild_script_md]
+    J --> K[publish\nenrich_and_publish]
+    K --> K1[enrichment.enrich\n웹리서치 + 신규 참조노트]
+    K --> K2[classify_meeting_route\n자동분류 라우팅]
+    K --> K3[write_meeting_note\nREST PUT]
+    K --> K4[_reindex_if_configured\nvault_index.json 갱신]
+    K --> K5[_send_notification\nemail/slack/teams/all]
+    K1 & K2 & K3 & K4 & K5 --> L[wiki_proposal\nmeeting + 관련노트 있을 때]
+    L --> M[registry\naction/decision, meeting 타입만]
+    M --> N[graph_sync\ndo_graph_sync=true 일 때]
+```
 
-    H --> I[date_utils\nYYMMDD / YYYYMMDD / YYYY-MM-DD\n파일명·폴더명에서 파싱]
+각 스테이지는 독립 try/except라 부가 스테이지 실패가 회의록 생성 자체를 막지 않는다
+(`res.errors`에 (stage, message)로 남음).
 
-    I --> J[build_generation_context_memo\n생성 전 vault 컨텍스트 주입]
-    J --> J2[save_wiki_context_package\n→ output/ wiki_context.json]
-    J2 --> K[generate_minutes\nLLM + vault 메모]
-    K --> L[generate_summary\n한눈에 보는 요약]
-    K --> M[extract_action_items\n액션 아이템 JSON]
+### ingest 전용 전처리 (STT 특화, finalize 호출 전)
 
-    K --> N[extract_entities\nLLM 엔티티 추출]
-    N --> O[entity vault search\nTF-IDF + REST\n관련 노트 + 용어집]
+`ingestion_pipeline.IngestionPipeline.ingest()`만 갖는 오디오 특화 단계 — 나머지는 위 공유
+흐름과 동일하다.
 
-    O --> P{speakers 없음?}
-    P -- 예 --> Q[attendee fallback\n관련 노트에서 참석자 복원]
-    P -- 아니오 --> R
-
-    Q --> R[claim_verify\n사실 검증]
-    R --> S[ObsidianClient.write_recording_note\nREST PUT]
-    S --> S2[_sm_save\nsupermemory_client\nenabled 시 동시 저장]
-    S2 --> T[_send_email_summary\nSMTP]
-    T --> U[update_action_registry\nupdate_decision_registry\nmeeting 타입 한정]
-    U --> V[build_wiki_update_proposal\n→ output/ wiki_proposal.json/md\n관련 노트 있을 때]
+```mermaid
+flowchart TD
+    A[오디오 파일] --> B[prepare_audio → run_stt]
+    B --> C{doc_type 있음?\n명시 인자 또는\n_detect_type_from_filename}
+    C -- 아니오 --> D[classify_doc_type_llm\n전사 내용으로 meeting/seminar/lecture 보완]
+    C -- 예 --> E
+    D --> E[화자 라벨→실명 추론\ninfer_speaker_names]
+    E --> F{speakers 없음?}
+    F -- 예 --> G[참석자 vault 폴백\n제목/주제로 직접 검색]
+    F -- 아니오 --> H
+    G --> H[finalize.run_post_session 호출]
+    H --> I{source_note 있음?}
+    I -- 아니오 --> J[output/ 로컬 폴백\n_save_to_output]
+    I -- 예 --> K[완료]
 ```
 
 ### 단계별 함수 참조
@@ -74,19 +90,23 @@ flowchart TD
 | 오디오 변환 | `prepare_audio()` · `split_audio()` | `stt.py` |
 | STT | `run_stt()` / `_transcribe_chunk_checked()` | `stt.py` |
 | 날짜 파싱 | `parse_session_dt_from_path()` · `parse_iso_date_from_text()` | `date_utils.py` |
+| 문서 유형 판별(파일명) | `_detect_type_from_filename()` | `ingestion_pipeline.py` |
+| 문서 유형 판별(내용 보완) | `classify_doc_type_llm()` | `meeting_workflow.py` |
 | 생성 전 vault 주입 | `build_generation_context_memo()` | `meeting_workflow.py` |
 | Wiki Context 저장 | `build_wiki_context_package()` · `save_wiki_context_package()` | `wiki_knowledge.py` |
 | 회의록 생성 | `generate_minutes()` | `minutes_generation.py` |
 | 요약 생성 | `generate_summary()` | `minutes_generation.py` |
 | 액션 아이템 | `extract_action_items()` | `minutes_generation.py` |
-| 엔티티 추출 | `extract_entities()` | `enrichment.py` |
-| 관련 노트 연결 | `enrich()` | `enrichment.py` |
+| 용어/인물/기업 보완(신규 노트 생성 포함) | `enrich()` | `enrichment.py` |
 | 사실 검증 | `claim_verify()` | `meeting_workflow.py` |
-| Obsidian 저장 | `write_recording_note()` | `obsidian.py` |
-| Supermemory 저장 | `_sm_save()` → `SupermemoryClient.save()` | `obsidian.py` → `supermemory_client.py` |
-| 이메일 발송 | `send_email_summary()` | `notifier.py` |
+| 자동 분류 라우팅 | `classify_meeting_route()` | `meeting_workflow.py` |
+| Obsidian 저장 | `write_meeting_note()` | `obsidian.py` |
+| 재인덱싱 | `_reindex_if_configured()` | `wiki_knowledge.py` |
+| 알림 발송 | `_send_notification()` | `publish.py` → `notifier.py` |
 | 액션/결정 Registry 갱신 | `update_action_registry_from_actions()` · `update_decision_registry_from_minutes()` | `wiki_knowledge.py` |
 | Wiki Update Proposal | `build_wiki_update_proposal()` · `save_wiki_update_proposal()` | `wiki_knowledge.py` |
+| 그래프 동기화 | `sync_session_graph()` | `graph_sync.py` |
+| 오케스트레이터 본체 | `run_post_session()` | `finalize.py` |
 
 ---
 
@@ -232,7 +252,7 @@ flowchart TD
 | 회의록 생성 | 전체 전사 후 1회 | 세션 종료 후 1회 |
 | 사실 검증 | ✅ (current_title 필터) | ✅ CLI/서버 WebSocket, ❌ standalone/mobile direct |
 | Wiki Context/Proposal | ✅ | ✅ CLI/서버 WebSocket, ❌ standalone/mobile direct |
-| Supermemory 저장 | ✅ `write_recording_note()` 성공 시 | ✅ CLI/서버 WebSocket의 `enrich_and_publish()` 성공 시 |
+| Supermemory 저장 | ✅ `write_meeting_note()` 성공 시(`finalize.run_post_session()` 경유) | ✅ CLI/서버 WebSocket의 `enrich_and_publish()` 성공 시 |
 
 ---
 
@@ -243,17 +263,35 @@ flowchart TD
 ```mermaid
 flowchart LR
     A[오디오] --> B{배치 파일 STT?}
-    B -- 예 --> C[gpt-4o-transcribe-diarize\nresponse_format=diarized_json\nchunking_strategy 우선 검증]
-    C -- 실패/품질저하 --> E[gpt-4o-transcribe\n화자분리 ❌\nspeakers = 없음]
+    B -- 예 --> S{split_audio\n25MB 또는 1200s 초과?}
+    S -- 아니오, 1개 청크 --> C[gpt-4o-transcribe-diarize\n1회 호출, response_format=diarized_json]
+    S -- 예, N개 청크 --> C2[청크별 gpt-4o-transcribe-diarize\n청크 간 화자 연속성 비보장]
+    C2 --> L[화자 라벨에 청크 번호 접미사\n예: 화자A 청크1]
+    C -- API 실패 --> E[해당 청크만 gpt-4o-transcribe\n화자분리 ❌]
+    C2 -- API 실패 --> E
     B -- 실시간 --> R[Realtime transcription\n화자분리 없음]
     C --> F{화자 resolved?}
+    L --> F
     F -- 예 --> G[attendees = 실명]
     F -- 아니오 --> H[attendees = A, B, C\nspeaker_cache/People 노트 매핑]
     E --> I[attendees = 미정\n액션 담당 = 미정]
     R --> J[종료 후 화자 추론\n또는 로컬 diarization 후처리]
 ```
 
-**핵심 제약**: `gpt-4o-transcribe-diarize`는 `/v1/audio/transcriptions` 배치 전사용이며 Realtime API에서는 지원되지 않는다. 긴 오디오는 `chunking_strategy` 적용 가능성을 먼저 검증하고, 실패·품질 저하·화자 연속성 손실이 확인되면 비화자분리 fallback 또는 로컬 diarization 후처리로 전환한다.
+**핵심 제약**: `gpt-4o-transcribe-diarize`는 `/v1/audio/transcriptions` 배치 전사용이며 Realtime API에서는 지원되지 않는다.
+`split_audio()`(`stt.py`)는 파일 크기(`MAX_FILE_SIZE_MB=25`) 또는 길이(`MAX_CHUNK_DURATION_SEC=1200s` —
+gpt-4o-transcribe 계열 API 자체 한도 ~1400s에 안전 마진을 둔 값) 초과 시 ffmpeg로 미리 청크를
+나눈다 — OpenAI `chunking_strategy` 파라미터로 API가 알아서 나누게 하는 방식이 아니라, 호출 전에
+직접 분할한다. **2026-07 수정 이전에는** 청크가 2개 이상 필요하면 diarize 모델을 아예 포기하고
+전체를 비화자분리 모델로 전사했다(화자 라벨이 청크 경계에서 끊겨 무의미해진다는 이유) — 즉 20분이
+넘는 녹음은 화자분리가 원천적으로 불가능했다. **지금은** 청크별로 diarize 모델을 그대로 유지하고
+라벨에 청크 번호를 붙여(`화자A (청크1)`) 청크 간 오인 병합만 방지한다 — 청크 내부(~20분)에서는
+화자가 정확히 구분되지만, 청크 경계를 넘어 같은 사람이 같은 라벨로 이어진다는 보장은 없다(완전한
+해결책은 아래 로컬 diarization 후처리).
+**실전에서 확인된 추가 위험**: 사내망 프록시가 `diarize` 엔드포인트 호출 자체를 네트워크 오류
+(tcp_error)로 계속 실패시켜, 코드가 정상이어도 매 청크가 비화자분리 모델로 폴백하는 사례가
+관측됐다 — 화자분리가 안 될 때는 코드 버그보다 이 가능성부터 로그(`청크 N/M 처리 중` 다음 줄의
+`WARNING ... 실패`)로 확인할 것.
 
 ### provider 분리 방향
 
@@ -288,7 +326,7 @@ flowchart LR
 
 ```mermaid
 flowchart LR
-    A[write_recording_note / write_meeting_note] --> B[프론트매터\ntitle / date / session_date\nsource_audio / source_file_date\nprocessed_at / stt_source / stt 품질]
+    A[write_meeting_note] --> B[프론트매터\ntitle / date / session_date\nsource_audio / source_file_date\nprocessed_at / stt_source / stt 품질]
     A --> C[본문 섹션 순서]
     C --> C1[한눈에 보는 요약\n결론·결정·리스크·액션]
     C --> C2[본문 회의록\n주요 논의 내용]
@@ -310,6 +348,48 @@ flowchart LR
 | 제외 | 상세 발언 흐름, 수치 근거 | (전사는 별도 파일) |
 
 요약과 회의록이 같은 불릿을 반복하면 실패한 출력이다.
+
+---
+
+## 참조 노트 자동 보강 (Reference Note Enrichment)
+
+`enrichment.enrich()`(용어·인물·기업 설명)와 `meeting_workflow._save_out_domain_fact_note()`(도메인 외 사실검증)가
+공통으로 쓰는 `obsidian.ObsidianClient.create_reference_note()`는, 과거엔 동일 이름 노트가 이미 있으면
+무조건 스킵하고 아무것도 갱신하지 않았다 — 같은 인물/용어가 열 번째 회의에서 언급돼도 노트는
+최초 생성 시점 그대로 멈춰 있었고, 웹 검색은 매번 새로 수행되고도 결과가 버려지는 낭비가 있었다.
+
+지금은 기존 노트를 찾으면 다음을 수행한다:
+
+```mermaid
+flowchart TD
+    A[create_reference_note\nterm, description, sources] --> B{_find_ref_note_path\n동일 이름 노트 존재?}
+    B -- 없음 --> C[신규 생성\n최초 설명 + 출처]
+    B -- 있음 --> D[get_note + parse_frontmatter]
+    D --> E[note_builder.build_reference_note_update]
+    E --> F{새 설명이\n이미 본문에 있음?}
+    F -- 예 --> G[변경 없음\nput_note 생략]
+    F -- 아니오 --> H["'추가 언급 기록' 섹션에\n날짜별 블록 append"]
+    H --> I[frontmatter\nmentioned_in / mention_count\nlast_mentioned 갱신]
+    I --> J[obsidian.reference_note_max_updates\n기본 5 — 초과 시 가장 오래된 블록 제거]
+    J --> K[put_note]
+```
+
+`mentioned_by`(회의/세션 제목)는 `enrich()`/`_save_out_domain_fact_note()` 양쪽에서 스레딩되어
+frontmatter `mentioned_in` 목록에 누적된다. 순수 병합 로직(`build_reference_note_update()`)은
+`note_builder.py`에 있어 HTTP 의존성 없이 단위 테스트 가능하다.
+
+---
+
+## 본문 자동 위키링크 (autolink_entities)
+
+`enrichment.enrich()`의 엔티티 추출 결과는 과거엔 글로서리 섹션("용어·배경")에만 반영되고,
+회의록 본문 텍스트 안에서 그 엔티티가 언급된 지점에는 링크가 걸리지 않았다. `enrich()`는 이제
+`entity_links: {표시명: 참조노트 basename}`을 함께 반환하고, `publish.enrich_and_publish()`가
+`enrichment.autolink_entities(minutes_md, entity_links)`를 발행 직전에 적용한다.
+
+각 엔티티명의 **첫 등장 위치만** `[[노트]]`(표시명이 다르면 `[[노트|표시명]]`)로 감싸며,
+헤딩 라인이나 이미 위키링크 안에 있는 등장은 건너뛰고 다음 등장을 계속 탐색한다(순수 함수,
+`meeting_pipeline/enrichment.py`).
 
 ---
 
@@ -372,7 +452,7 @@ evidence:
 ---
 ```
 
-`review_status`/`confidence`/`source_type`/`evidence`는 `write_meeting_note()`/`write_recording_note()`가 매 실행마다 자동 기록하는 **Personal Wiki Schema** 필드다 (`obsidian.py`).
+`review_status`/`confidence`/`source_type`/`evidence`는 `write_meeting_note()`가 매 실행마다 자동 기록하는 **Personal Wiki Schema** 필드다 (`obsidian.py`).
 `review_status`는 항상 `pending`으로 시작하며, 사람이 노트를 검토한 뒤 Obsidian에서 직접 `reviewed`로 바꾼다 —
 코드가 자동으로 `reviewed`/`curated`로 승격하지 않는다. `evidence`는 회의록 생성에 실제 주입된 근거를
 `[[노트#헤딩]]`(섹션 인덱스 히트) 또는 `[[노트]]`(whole-note 히트) 형식으로 기록한 목록이며,
@@ -382,32 +462,123 @@ evidence:
 
 ---
 
-## QC 프로젝트 볼트 경로 설정
+## 프로젝트 볼트 경로 설정
 
 ```jsonc
 "obsidian": {
-  "vault_path":        "D:\\Claude\\QC",
-  "meetings_path":     "도메인_아카이브/01_회의_세미나/회의별/{year}",
-  "transcripts_path":  "도메인_아카이브/01_회의_세미나/전사/{year}",
-  "transcript_mode":   "separate"
+  "vault_path":        "D:\\Obsidian\\MyVault",
+  "project":           "양자",
+  "project_domains": {
+    "양자": "Archive/도메인_아카이브",
+    "PhysicalAI": "Archive/PhysicalAI_통합아카이브"
+  },
+  "ref_domains": {
+    "양자": "퀀텀",
+    "백서온톨로지": "GraphDB-온톨로지"
+  },
+  "meetings_path":     "{project}/01_회의_세미나/회의별/{year}",
+  "transcripts_path":  "{project}/01_회의_세미나/전사/{year}",
+  "transcript_mode":   "separate",
+  "auto_route_enabled": true,
+  "auto_register_categories": true,
+  "meeting_categories": {
+    "양자": { "mode": "domain", "keywords": ["양자", "퀀텀", "..."] },
+    "백서온톨로지": { "mode": "folder", "folder": "00_Meetings/백서온톨로지", "keywords": ["백서", "온톨로지", "..."] },
+    "팀회의": { "mode": "folder", "folder": "00_Meetings/팀회의", "keywords": ["팀회의", "..."] }
+  }
 },
 "indexing": {
-  "vault_path": "D:\\Claude\\QC"
+  "vault_path": "D:\\Obsidian\\MyVault"
 }
 ```
 
 | 저장 위치 | 경로 |
 |---|---|
-| 회의록 | `D:\Claude\QC\도메인_아카이브\01_회의_세미나\회의별\{year}\yymmdd 제목.md` |
-| 전사 | `D:\Claude\QC\도메인_아카이브\01_회의_세미나\전사\{year}\yymmdd 제목 - 전사.md` |
+| 회의록(mode:"domain" 도메인, 예: 양자) | `D:\Obsidian\MyVault\Archive\도메인_아카이브\01_회의_세미나\회의별\{year}\yymmdd 제목.md` |
+| 전사 | `D:\Obsidian\MyVault\Archive\도메인_아카이브\01_회의_세미나\전사\{year}\yymmdd 제목 - 전사.md` |
+| 회의록(mode:"folder" 카테고리) | `D:\Obsidian\MyVault\00_Meetings\{팀회의\|주간보고\|외부회의\|백서온톨로지\|기타}\yymmdd 제목.md` — meeting_categories의 `folder` 필드 그대로 |
+| 참조노트(용어·기술) | `D:\Obsidian\MyVault\01_References\{ref_domains 매핑값, 없으면 project_domains 마지막 경로 조각}\` — `공통`은 project 미설정 시절 히스토리 유지용 |
 | 로컬 폴백 (Obsidian 꺼짐) | `./output/YYYYMMDD_HHMMSS_제목/recording_note.md` |
 
-**경로 토큰**: `{year}`, `{yyyy}`, `{yy}`, `{month}` — 회의 날짜 기준으로 치환.
+**경로 토큰**: `{year}`, `{yyyy}`, `{yy}`, `{month}` — 회의 날짜 기준으로 치환. `{project}` —
+`ObsidianClient._project_domain()`(project_domains 매핑 결과)로 치환.
 파일명 prefix는 회의 날짜 기준 `yymmdd`입니다. `260627_5.m4a`, `20260627_*`, `2026-06-27 14.10_*` 같은 파일명에서 날짜를 추출합니다.
+
+### 회의 자동 분류 라우팅 (`obsidian.auto_route_enabled`)
+
+`--project` 플래그 없이도 제목/주제/스크립트로 저장 위치를 자동 결정한다.
+`meeting_workflow.classify_meeting_route(title, topic, script_excerpt, llm)`가:
+
+1. `obsidian.meeting_categories`로 키워드 매칭 — 매칭된 카테고리가 `mode:"domain"`이면
+   도메인 아카이브 경로로(그 키는 `project_domains`에도 반드시 등록돼 있어야
+   `meetings_path`의 `{project}` 토큰이 해석됨), `mode:"folder"`(기본값)면 그 카테고리의
+   `folder` 필드를 그대로 저장 폴더로 쓴다. **카테고리 자신이 모드를 직접 선언**하므로
+   `project_domains`에 그 키가 있는지로 모드를 추론하지 않는다(2026-07 재설계 — 예전엔
+   `category_keywords`와 `project_domains` 두 딕셔너리를 손으로 동기화해야 했고, 하나를
+   빠뜨리면 조용히 잘못된 경로로 샜다. 예: 백서온톨로지가 실수로 `project_domains`에도
+   등록돼 있으면 기존 `00_Meetings/백서온톨로지` 대신 새 아카이브 경로로 갈 뻔했다).
+2. 매칭 안 되면(전부 0점) LLM에게 기존 카테고리 중 하나를 고르거나, 반복될 만한 새 주제라고
+   판단되면 새 카테고리(이름+키워드)를 제안하게 한다.
+3. `obsidian.auto_register_categories=true`(기본)면 LLM이 발견한 새 카테고리를
+   `config_loader.set_nested()`로 `config.json`의 `meeting_categories`에 `mode:"folder"`로
+   즉시 등록 — 다음부터는 같은 주제가 LLM 호출 없이 키워드만으로 인식된다. 새 카테고리는
+   항상 `00_Meetings/<이름>`으로만 생성되고, PhysicalAI처럼 전용 아카이브 구조(`mode:"domain"`)로
+   승격하려면 `meeting_categories`와 `project_domains` 양쪽에 수동으로 등록해야 한다.
+4. 전부 실패(매칭 없음 + LLM도 실패)하면 `00_Meetings/기타`로 폴백 — static `obsidian.project`
+   기본값으로 조용히 흘러가지 않는다.
+
+`publish.enrich_and_publish()`(배치/실시간/화자수정/웹)와 `ingestion_pipeline.ingest()`(watcher
+자동처리) 양쪽 모두 이 분류기를 거친다. 참조노트 폴더(`_refs_subfolder()`)는 별도 매핑
+`obsidian.ref_domains`를 먼저 보고(이미 수동으로 만들어둔 참조노트 폴더가 있을 때 새 폴더가
+안 생기게), 없으면 `project_domains` 값의 마지막 경로 조각(아카이브 접두사 제외)으로 폴백한다 —
+회의 저장 위치(`meeting_categories`)와 참조노트 폴더명은 서로 다른 관심사라 독립적으로 관리한다.
+
+### 도메인 스코프 검색 (prep-brief / wiki-ask / 실시간 관련노트)
+
+`vault_retrieval.detect_query_domain(text)`가 질문/메모/제목에서 카테고리를 감지하면
+`domain_search_prefixes(category)`가 검색 범위를 좁힌다 — `mode:"domain"` 카테고리(양자/PhysicalAI)면
+`[전용 아카이브 경로, "01_References"]`, `mode:"folder"` 카테고리(팀회의/외부회의 등)면
+`[00_Meetings/<카테고리 폴더>, "01_References"]`. (2026-07 수정 — 과거엔 `project_domains`에 등록된
+도메인 카테고리만 감지 대상이었고, 폴더형 카테고리는 전용 스코프가 없어 항상 볼트 전체 검색으로
+빠졌다.) 아무 카테고리도 감지되지 않으면 필터 없이 볼트 전체를 검색한다(기존 동작). `wiki_ask.py`,
+`wiki_knowledge.py`(prep-brief), 회의록 생성 컨텍스트(`vault_retrieval.build_obsidian_context_memo()`),
+사실 검증(`meeting_workflow._fetch_vault_notes_for_claim()`) 네 곳에 연결돼 있다.
+
+**도메인 아카이브 오염 방지 하드 게이트 (`is_domain_mismatched()`, 2026-07 추가)**: 실전에서
+무관한 팀 회의 스크립트에 "양자컴퓨터"라는 말이 지나가듯 한 번 언급됐다는 이유만으로, 검색이
+완전히 무관한 양자 아카이브 노트를 "관련 노트"로 끌어와 LLM이 그 내용을 회의록에 섞어버리는
+컨텍스트 오염 사고가 실제로 발생했다. `is_domain_mismatched(note_path, query_text)`는 후보
+노트의 `note_path`가 특정 도메인 전용 아카이브(`obsidian.project_domains`) 소속인데, 쿼리에
+그 도메인 키워드(`meeting_categories[domain].keywords`)가 **서로 다른 것으로 2개 이상** 나오지
+않으면 True(배제)를 반환한다 — 키워드 1개(예: "양자" 한 단어)만 우연히 겹치는 것은 신호로
+인정하지 않는다. `note_domain_score(title, content, query, note_path)`는 내부적으로 이 게이트를
+먼저 거쳐 걸리면 무조건 0점을 반환하고, `build_obsidian_context_memo()`(회의록 생성 컨텍스트)와
+`_fetch_vault_notes_for_claim()`(사실 검증)가 이를 통해 후보를 채택/배제한다. relevance
+재채점이 원래 없던 `wiki_knowledge._get_brief_related_notes()`(prep-brief)는 기존 TF-IDF 랭킹을
+그대로 신뢰하되 `is_domain_mismatched()`만 직접 호출해 도메인 오염만 걸러낸다(전체 재채점을
+끼얹으면 원래 신뢰하던 관련 결과까지 걸러지는 부작용이 있어 분리함). 세 경로 모두 REST 검색
+결과의 path가 필요해 `search_related_notes_rest(..., return_paths=True)`로 path를 함께 반환하도록
+확장했다. `build_related_notes_memo()`/`build_related_sections_memo()`가 조립하는 프롬프트에도
+"주제가 스크립트와 명백히 무관하면 완전히 무시하라"는 지시를 추가해 LLM 쪽 방어선도 함께
+강화했다.
+
+### 다중 도메인 (같은 볼트, 두 번째 프로젝트 추가)
+
+`meetings_path`/`transcripts_path`/`papers_path`에 `{project}` 토큰을 넣고 `project_domains`에
+도메인을 여러 개 등록하면, 같은 볼트 안에서 도메인별로 완전히 다른 최상위 폴더에 저장된다
+(그래프 `wiki_graph.db`와 TF-IDF 인덱스 `vault_index.json`은 도메인 무관 구조라 그대로 통합
+검색됨 — 코드 수정 불필요). `auto_route_enabled=true`면 위 자동 분류가 우선 적용되고,
+수동으로 세션 단위 오버라이드하려면 `ObsidianClient.from_config(project_override=...)` 또는
+CLI `--project` 플래그(`prep-brief --project PhysicalAI`,
+`python -m ...obsidian --project PhysicalAI --init-vault`)를 쓴다.
+
+새 도메인 최초 등록 시 `python -m meeting_minutes_app.wiki_core.obsidian --project <도메인> --init-vault`로
+`01_References/<도메인>/_index.md` 등 표준 참조 폴더를 스캐폴딩한다(기존 콘텐츠에 영향 없음, 멱등).
 
 현재 설정 확인:
 ```bash
 python run_meeting.py obsidian --where
+python run_meeting.py obsidian --project PhysicalAI --where
 ```
 
 ---
@@ -419,27 +590,27 @@ python run_meeting.py obsidian --where
 | `meeting_pipeline/meeting_minutes.py` | 배치 CLI(`main()`) + 공용 상수/로깅/파일명·비용 유틸 | `main()`, `setup_logging()`, `estimate_cost()`, `find_existing_output_dir()`, `load_segments_from_transcript()` | — |
 | `meeting_pipeline/stt.py` | 오디오 준비 + STT(OpenAI Transcription API) + 영→한 번역 | `prepare_audio()`, `split_audio()`, `run_stt()`, `translate_segments()` | OpenAI STT |
 | `meeting_pipeline/script_formatting.py` | STT 세그먼트 → 스크립트(Transcript) 마크다운 변환 | `build_script_md()` | — |
-| `meeting_pipeline/minutes_generation.py` | 회의록/세미나/강의 프롬프트 + 생성 (회의록·요약·액션아이템·스크립트 교정·화자 추론) | `generate_minutes()`, `generate_summary()`, `extract_action_items()`, `refine_script()`, `infer_speaker_names()` | GPT-4o, Claude |
+| `meeting_pipeline/minutes_generation.py` | 회의록/세미나/강의 프롬프트 + 생성 (회의록·요약·액션아이템·스크립트 교정·화자 추론). 회의록 생성은 `_minutes_is_usable()` 품질 게이트로 필수 섹션 누락/과도한 축약을 감지해 1회 재시도하며, 액션 아이템 추출은 발췌 한도 초과 시 청크 분할 후 병합·dedup한다 | `generate_minutes()`, `generate_summary()`, `extract_action_items()`, `_minutes_is_usable()`, `refine_script()`, `infer_speaker_names()` | GPT-4o, Claude |
 | `meeting_pipeline/publish.py` | 후처리 발행 — 알림 발송, 계획(planned) 노트 매칭/병합, Obsidian 기록 | `enrich_and_publish()`, `plan_context_memo()`, `_send_notification()` | Obsidian REST, SMTP/Webhooks |
 | `meeting_pipeline/pipeline.py` | 단일 오디오 파일 전체 처리 오케스트레이션 (stt/script_formatting/minutes_generation/publish 통합) | `process_single()` | 위 4개 모듈 |
 | `common/llm_client.py` | LLM 클라이언트 (GPT-4o ↔ Claude 폴백) — `wiki_core`/`meeting_pipeline` 공용 | `LLMClient`, `make_openai_client()`, `make_anthropic_client()` | OpenAI, Anthropic |
 | `meeting_pipeline/date_utils.py` | batch/ingest 날짜 파싱 (meeting_pipeline 전용) | `parse_session_dt_from_path()`, `parse_iso_date_from_text()`, `iso_to_yymmdd()` | 표준 라이브러리 |
-| `meeting_pipeline/meeting_workflow.py` | 회의록 생성 컨텍스트 오케스트레이션, claim verify | `build_generation_context_memo()`, `_keyword_vault_search()`, `claim_verify()`, `_extract_claims()`, `_fetch_vault_notes_for_claim()`, `graph_expand_titles()` | VaultIndexer, Obsidian REST, LLM, Graph DB |
-| `wiki_core/vault_retrieval.py` | 도메인 무관 vault/Obsidian 검색·메모 헬퍼 | `load_vault_indexer()`, `load_obsidian_client()`, `search_related_notes_rest()`, `build_obsidian_context_memo()` | VaultIndexer, Obsidian REST |
-| `meeting_pipeline/ingestion_pipeline.py` | 오디오→Obsidian 자동화 파이프라인 | `IngestionPipeline.ingest()`, `_detect_type()`, `_detect_meeting_scope()` | 위 모든 모듈 |
-| `wiki_core/wiki_knowledge.py` | Wiki 지식 순환 — 준비 브리프 + Registry + Context Package | `build_prep_brief()`, `load_action_registry()`, `load_decision_registry()`, `build_wiki_update_proposal()`, `build_wiki_context_package()`, `save_wiki_context_package()` | VaultIndexer, Obsidian REST (LLM 호출 없음) |
-| `wiki_core/graph_db.py` | Wiki Knowledge Graph SQLite 저장소 | `upsert_node()`, `upsert_edge()`, `get_neighbors()`, `find_path()`, `get_session_subgraph()` | `data/wiki_graph.db` |
-| `wiki_core/graph_sync.py` | registry/vault/세션 산출물 → 그래프 동기화, 엔티티 정규화 | `backfill_from_registries()`, `backfill_from_vault()`, `sync_session_graph()`, `resolve_canonical_key()` | graph_db, wiki_knowledge |
-| `wiki_core/vault_indexer.py` (~770줄) | TF-IDF/하이브리드 오프라인 인덱서 | `VaultIndexer.build()` (한국어 바이그램+영어), `.load()`, `.search()` (RRF 융합), `.find_related()` | 파일시스템, OpenAI 임베딩(선택) |
-| `wiki_core/obsidian.py` (~1155줄) | Obsidian REST API 클라이언트 (노트 포맷팅은 `note_builder.py`로 분리) | `ping()`, `ensure_running()`, `search_simple()`, `get_note()`, `put_note()`, `write_recording_note()`, `write_meeting_note()`, `parse_frontmatter()` | https://127.0.0.1:27124 |
-| `wiki_core/note_builder.py` | Obsidian 노트 마크다운/frontmatter 조립 (순수 함수, HTTP 의존성 없음) | `build_frontmatter()`, `build_meeting_note_content()`, `build_recording_note_content()` | — |
+| `meeting_pipeline/meeting_workflow.py` | 회의록 생성 컨텍스트 오케스트레이션, claim verify, 회의 자동분류/문서유형 판별. `_extract_claims()`는 발췌 한도 초과 시 청크 분할 후 청크 간 라운드로빈으로 `max_claims`를 채워 회의 뒷부분 주장 누락을 방지한다. `graph_expand_titles()`는 note/person/organization/topic 타입을 순서대로 조회한다 | `build_generation_context_memo()`, `_keyword_vault_search()`, `claim_verify()`, `_extract_claims()`, `_fetch_vault_notes_for_claim()`, `graph_expand_titles()`, `classify_meeting_route()`, `classify_doc_type_llm()` | VaultIndexer, Obsidian REST, LLM, Graph DB |
+| `wiki_core/vault_retrieval.py` | 도메인 무관 vault/Obsidian 검색·메모 헬퍼, 도메인 스코프 검색 감지 | `load_vault_indexer()`, `load_obsidian_client()`, `search_related_notes_rest()`, `build_obsidian_context_memo()`, `detect_query_domain()`, `domain_search_prefixes()` | VaultIndexer, Obsidian REST |
+| `meeting_pipeline/ingestion_pipeline.py` | 오디오→STT→문서유형 판별→`finalize.run_post_session()` 위임(watcher 자동처리 경로. 배치/웹/CLI실시간과 동일한 enrichment/재인덱싱/그래프동기화를 탐) | `IngestionPipeline.ingest()`, `_detect_type_from_filename()`, `_detect_meeting_scope()`, `_expected_recording_note_paths()` | `finalize.py`, `stt.py` |
+| `wiki_core/wiki_knowledge.py` | Wiki 지식 순환 — 준비 브리프 + Registry + Context Package. `extract_decisions_from_minutes()`는 결정 항목 아래 "배경:" 서브라인을 rationale로 함께 파싱해 `{"summary","rationale"}` dict로 반환(하위호환 문자열 입력도 허용) | `build_prep_brief()`, `load_action_registry()`, `load_decision_registry()`, `extract_decisions_from_minutes()`, `build_wiki_update_proposal()`, `build_wiki_context_package()`, `save_wiki_context_package()` | VaultIndexer, Obsidian REST (LLM 호출 없음) |
+| `wiki_core/graph_db.py` | Wiki Knowledge Graph SQLite 저장소 | `upsert_node()`, `upsert_edge()`, `get_node_by_key()`(진행 중인 트랜잭션 재사용 가능), `get_neighbors()`, `find_path()`, `get_session_subgraph()` | `data/wiki_graph.db` |
+| `wiki_core/graph_sync.py` | registry/vault/세션 산출물 → 그래프 동기화, 엔티티 정규화. `backfill_from_vault()`는 노트 자신이 참조 노트(인물/기업/용어 설명)면 `note` 타입 대신 그 엔티티 타입으로 직접 upsert해 다른 글의 위키링크가 만드는 노드와 하나로 합쳐진다(과거 note/entity 이중 정체성 해소). `merge_note_duplicates_into_entities()`는 이 수정 이전에 만들어진 기존 중복을 정리하는 1회성 마이그레이션 | `backfill_from_registries()`, `backfill_from_vault()`, `sync_session_graph()`, `resolve_canonical_key()`, `_resolve_or_create_note_node()`, `merge_note_duplicates_into_entities()` | graph_db, wiki_knowledge |
+| `wiki_core/vault_indexer.py` (~770줄) | TF-IDF/하이브리드 오프라인 인덱서. `search()`/`find_related()`/`search_sections()`는 `path_prefixes` 인자로 도메인 스코프 검색(위 "도메인 스코프 검색" 절)을 지원 | `VaultIndexer.build()` (한국어 바이그램+영어), `.load()`, `.search()` (RRF 융합, path_prefixes), `.find_related()` | 파일시스템, OpenAI 임베딩(선택) |
+| `wiki_core/obsidian.py` (~1070줄) | Obsidian REST API 클라이언트 (노트 포맷팅은 `note_builder.py`로 분리). `create_reference_note()`는 동일 이름 노트가 이미 있으면 스킵 대신 "추가 언급 기록" 섹션으로 보강한다 — "참조 노트 자동 보강" 절 참고. `write_meeting_note()`는 `output_folder` 인자로 자동분류 라우팅 결과를 받는다(2026-07: 녹음 전용이던 `write_recording_note()`는 watcher가 이 함수로 통합되며 삭제됨) | `ping()`, `ensure_running()`, `search_simple()`, `get_note()`, `put_note()`, `write_meeting_note()`, `create_reference_note()`, `parse_frontmatter()` | https://127.0.0.1:27124 |
+| `wiki_core/note_builder.py` | Obsidian 노트 마크다운/frontmatter 조립 (순수 함수, HTTP 의존성 없음) | `build_frontmatter()`, `build_meeting_note_content()`, `build_reference_note_update()` | — |
 | `wiki_core/supermemory_client.py` | Supermemory SDK 래퍼 — 크로스세션 팩트 메모리 | `SupermemoryClient.save()`, `.search()`, `get_client()` | Supermemory API 또는 로컬 서버 |
-| `meeting_pipeline/enrichment.py` | 엔티티 추출 + 참고 노트 생성 | `enrich()` | LLM (웹리서치 선택적) |
+| `meeting_pipeline/enrichment.py` | 엔티티 추출 + 참고 노트 생성/보강 + 본문 자동 위키링크 | `enrich()`, `autolink_entities()` | LLM (웹리서치 선택적) |
 | `common/notifier.py` | 이메일/Slack/Teams 알림 | `_build_html_body()`, `_send_email()`, `_send_email_summary()` | SMTP, Webhooks |
 | `meeting_pipeline/vault_audio.py` | 임베드 오디오 처리 | `process_vault()`, `merge_into_note_file()` | stt.py/minutes_generation.py 재사용 |
 | `cli.py` / `cli_init.py` | `meeting-minutes` 콘솔 커맨드 디스패치 / 최초 설정 마법사 | `dispatch()`, `run_init()` | 하위 모듈 subprocess 호출 |
 | `web/backend/api/graph.py` | Wiki Knowledge Graph 조회 REST (읽기 전용) | `list_nodes()`, `get_node_neighbors()`, `get_session_subgraph()` | graph_db |
-| `web/backend/api/realtime.py` (~936줄) | WebSocket 실시간 전사 | `BrowserRealtimeSession`, `_handle_event()`, `_search_vault_segment()`, `_finalize()` | OpenAI Realtime API |
+| `web/backend/api/realtime.py` | WebSocket 실시간 전사 | `BrowserRealtimeSession`, `_handle_event()`, `_finalize()` (finalize.run_post_session 위임) | OpenAI Realtime API, wiki_core/realtime_search |
 
 ---
 
@@ -449,16 +620,21 @@ python run_meeting.py obsidian --where
 
 ```mermaid
 flowchart TD
-    A["python run_meeting.py prep-brief\n--title 제목 --topic 주제"] --> B[load_vault_indexer\nload_obsidian_client]
+    A["python run_meeting.py prep-brief\n--title 제목 --topic 주제 --memo 파일경로(선택)"] --> B[load_vault_indexer\nload_obsidian_client]
 
-    B --> C[_get_brief_related_notes\nTF-IDF + Obsidian REST]
-    C --> D[일반 노트\nregular_notes]
-    C --> E[논문·학술자료\npaper_notes\ntype=paper/seminar/lecture]
+    B --> C[_get_brief_related_notes\ntitle+topic+memo TF-IDF/REST]
+    C --> C2[memo 키워드 보강 검색\nkeyword_terms + find_related]
+    C2 --> C3[graph_expand_titles\n찾은 노트를 1-hop+ 확장]
+    C3 --> D[일반 노트\nregular_notes]
+    C3 --> E[논문·학술자료\npaper_notes\ntype=paper/seminar/lecture]
 
     B --> F[load_action_registry\ndata/action_registry.json]
     B --> G[load_decision_registry\ndata/decision_registry.json]
-    F --> H[_filter_actions_by_topic\ntopic 키워드 매칭]
-    G --> I[recent_decisions 상위 10건]
+    A --> KW[keyword_terms memo]
+    F --> H["_filter_actions_by_topic\ntopic+memo 키워드 매칭\n매칭 0건 → 빈 목록(잡음 방지)"]
+    G --> I["_filter_decisions_by_topic\ntopic+memo 키워드 매칭\n매칭 0건 → 빈 목록"]
+    KW --> H
+    KW --> I
 
     D & E & H & I --> J[build_prep_brief\nLLM 없음 — 순수 포맷팅]
     J --> K["output/{yymmdd} {제목} 준비브리프.md\n항상 저장"]
@@ -469,6 +645,8 @@ flowchart TD
     N --> P{--reindex\nor auto_reindex_after_write?}
     P -- 예 --> Q[indexer.build\n전체 재빌드]
 ```
+
+**`--memo` 옵션**(파일 경로, batch의 `--memo`와 동일 방식): 회의 전 아젠다/메모 텍스트를 관련 노트 검색(TF-IDF 쿼리 확장 + 키워드 보강 검색 + 그래프 확장)과 액션/결정 필터링 양쪽에 반영한다. 실제 예정 회의 메모로 검증한 결과, 참석자 이름·회사명이 일치하는 과거 회의록·조직도 노트를 정확히 찾아냈다. `_filter_actions_by_topic()`/`_filter_decisions_by_topic()`은 필터 기준(topic/attendees/memo 키워드)이 있는데 매칭이 하나도 없으면 **전체를 반환하지 않고 빈 목록을 반환**한다 — registry에 여러 프로젝트가 섞여 있을 때 무관한 다른 프로젝트의 액션/결정을 잡음으로 보여주지 않기 위함(과거엔 "매칭 없음 → 전체 반환" 폴백이 있어 이 문제가 있었다).
 
 ### Registry 파일
 
@@ -547,7 +725,8 @@ LLM은 다음 고정 답변 구조를 반드시 따르도록 강제된다:
 | `models.llm` | `"claude"` | LLM 선호 (claude / gpt) |
 | `models.stt` | `"gpt-4o-transcribe-diarize"` | 배치 파일 STT 모델. diarize는 `/v1/audio/transcriptions` 전용이며 Realtime 미지원 |
 | `obsidian.enabled` | `false` | Obsidian REST 연동 활성화 |
-| `obsidian.meetings_path` | `""` | 회의록 저장 경로 (`{year}` 등 토큰 지원) |
+| `obsidian.meetings_path` | `""` | 회의록 저장 경로 (`{year}`/`{month}`/`{project}` 토큰 지원 — `{project}`로 다중 도메인 분리) |
+| `obsidian.project` / `project_domains` | `""` / `{}` | 현재 도메인 + 도메인→폴더 매핑. `--project` CLI로 세션 단위 오버라이드 가능 |
 | `obsidian.exe_path` | `""` | Obsidian.exe 경로 (자동 실행용) |
 | `obsidian.transcript_mode` | `"separate"` | 전사 저장 방식 (separate / append / off) |
 | `indexing.enabled` | `true` | TF-IDF 오프라인 인덱스 사용 |
@@ -559,11 +738,12 @@ LLM은 다음 고정 답변 구조를 반드시 따르도록 강제된다:
 | `wiki.context_max_chars` | `2000` | 노트당 주입 최대 글자 수 |
 | `wiki.online_search_enabled` | `false` | 웹 리서치 (Anthropic web_search tool) |
 | `wiki.claim_web_verify` | `false` | 불확실·충돌 주장에 웹 전문가 의견 검색 (API 비용 발생) |
+| `wiki.domain_relevance_keywords` | `[]`(내장 기본값 사용) | vault 검색 관련도 가산점 마커(`note_domain_score()`). 두 번째 도메인 추가 시 그 도메인 마커도 여기 합쳐야 검색 상위 노출됨 |
 | `wiki_knowledge.enabled` | `true` | Wiki 지식 순환 전체 활성화 (registry/context package/proposal/prep-brief 일괄 게이트) |
 | `wiki_knowledge.update_proposals_enabled` | `true` | meeting 처리 후 wiki_update_proposals 생성 |
 | `wiki_knowledge.action_registry_enabled` | `true` | 회의 후 action_registry.json 누적 |
 | `wiki_knowledge.decision_registry_enabled` | `true` | 회의 후 decision_registry.json 누적 |
-| `wiki_knowledge.registry_context_max_chars` | `2000` | 생성 프롬프트에 주입되는 이전 결정/미완료 액션 섹션 글자 제한 |
+| `wiki_knowledge.registry_context_max_chars` | `4000` | 생성 프롬프트에 주입되는 이전 결정/미완료 액션 섹션 글자 제한 |
 | `wiki_knowledge.embedding_enabled` | `false` | 임베딩 하이브리드 검색 (TF-IDF + 코사인 RRF 융합). 실패 시 TF-IDF 폴백 |
 | `wiki_knowledge.embedding_model` | `"text-embedding-3-small"` | 임베딩 모델 (OpenAI) |
 | `wiki_knowledge.embedding_dims` | `256` | 임베딩 차원 축소 (인덱스 크기/속도 절충) |
@@ -572,7 +752,8 @@ LLM은 다음 고정 답변 구조를 반드시 따르도록 강제된다:
 | `wiki_knowledge.proposal_llm_enabled` | `false` | LLM 기반 proposal 초안 생성 (향후 확장 후보) |
 | `wiki_knowledge.auto_apply_updates` | `false` | **항상 false — Obsidian 원본 자동 수정 금지** |
 | `wiki_knowledge.graph_enabled` | `true` | Wiki Knowledge Graph 동기화(registry/vault 백필 + 세션 실시간 동기화) — 파생 데이터라 기본 활성 |
-| `wiki_knowledge.graph_retrieval_expand_enabled` | `false` | 회의록 생성 컨텍스트를 그래프로 1-hop 확장(`graph_expand_titles()`) — 기존 RRF 파이프라인에 얹는 실험적 단계라 기본 비활성 |
+| `wiki_knowledge.graph_retrieval_expand_enabled` | `true` | 회의록 생성 컨텍스트를 그래프로 1-hop 확장(`graph_expand_titles()`) — 그래프 DB가 비어 있어도 조용히 건너뛰므로 기본 활성. 효과를 보려면 `scripts/graph_backfill.py`로 먼저 백필 |
+| `obsidian.reference_note_max_updates` | `5` | 참조 노트가 재언급될 때 "추가 언급 기록"에 유지할 최근 블록 수 — 초과분은 가장 오래된 것부터 제거 |
 | `supermemory.enabled` | `false` | Supermemory 팩트 메모리 활성화 — Obsidian 저장 시 동시 저장, 다음 회의 컨텍스트·사실 검증 시 자동 참조 |
 | `supermemory.api_key` | `""` | Supermemory API 키 (클라우드) 또는 로컬 서버는 빈 값 허용 |
 | `supermemory.base_url` | `"https://api.supermemory.ai"` | 자체 호스팅 시 `http://localhost:6767` |
@@ -765,6 +946,31 @@ person 노드의 흔한 직함/존칭 접미사 제거("홍길동 팀장" vs "�
 같은 사람·회의는 하나의 노드로 합쳐진다. 동명이인 구분, 오탈자 교정, LLM 기반 병합은 여전히
 범위 밖이다(향후 과제).
 
+**note/entity 이중 정체성 해소**: `backfill_from_vault()`는 과거 모든 노트(참조 노트 포함)를 일단
+`note` 타입 노드로 만들었다 — 참조 노트("01_References/공통/양자컴퓨팅.md")가 `note` 노드로,
+다른 글이 그 제목을 위키링크할 때는 `topic` 노드로 **별도** 생성돼 같은 실체가 두 행으로
+분리됐다. 지금은 노트 자신이 참조 노트(frontmatter `category`로 판정)면 `note` 대신 그
+엔티티 타입(person/organization/topic)으로 직접 upsert해, 다른 글의 위키링크가 만드는 노드와
+`canonical_key`가 일치해 하나로 합쳐진다. `sync_session_graph()`의 `related_note_titles` 처리도
+`_resolve_or_create_note_node()`로 동일 원리를 적용(이미 person/organization/topic 노드가 있으면
+재사용, 없으면 `note`로 생성).
+
+이 수정은 **새로 upsert되는 노드에만** 적용된다 — 수정 이전에 이미 "note" 타입으로 잘못
+만들어진 행은 재백필해도 저절로 정리되지 않는다(오히려 올바른 타입의 노드가 "추가로" 생겨
+중복이 더 늘어난 것처럼 보인다. 실측: 43개 → 재백필 후 64개). 기존 그래프에 이 수정을
+적용하려면 1회성 마이그레이션 `graph_sync.merge_note_duplicates_into_entities()`
+(`python scripts/graph_backfill.py --merge-duplicates`)를 실행해 중복 note 행을 살아있는
+엔티티 노드로 병합(엣지 재연결 + attrs 병합 + note 행 삭제)해야 한다.
+
+또한 실제 그래프 위상에서는 엔티티끼리 직접 연결되지 않고 항상 `note -[:MENTIONED]->
+entity`로만 연결된다 — 참조 노트 제목(엔티티 노드) 자신에서 확장을 시작하면 1-hop 이웃은
+그 노드를 언급한 `note`들뿐이라 필터링되어 사라진다. `graph_expand_titles()`는 시작 노드가
+`note` 타입이 아니면 유효 hop을 `max(hop, 2)`로 자동 상향해 이 문제를 해소한다.
+
+**Decision 노드 rationale**: `extract_decisions_from_minutes()`가 결정 항목 아래 "배경:" 서브라인을
+파싱하면, `sync_session_graph()`/`backfill_from_registries()`가 `decision` 노드의 `attributes.rationale`에
+그대로 저장한다 — "왜 이렇게 결정했는지"를 그래프 조회로도 확인할 수 있다.
+
 **조회 API** (읽기 전용, `web/backend/api/graph.py`): `GET /api/graph/nodes`,
 `/api/graph/nodes/{id}`, `/api/graph/nodes/{id}/neighbors`, `/api/graph/edges`, `/api/graph/path`,
 `/api/graph/sessions/{session_id}`. 쓰기 엔드포인트 없음 — 그래프 데이터는 `graph_sync.py`를 통해서만
@@ -776,13 +982,15 @@ person 노드의 흔한 직함/존칭 접미사 제거("홍길동 팀장" vs "�
 목표 질의(지난 회의 이후 바뀐 결정사항, 프로젝트별 미완료 액션, 특정 업체가 언급된 모든 회의)는
 `get_neighbors()`/`find_path()`를 조합해 애플리케이션 레벨에서 구성한다.
 
-**검색 품질 연동 (`graph_expand_titles()`, 옵트인)**: `wiki_knowledge.graph_retrieval_expand_enabled`
-(기본 false)를 켜면 `meeting_workflow.build_generation_context_memo()`가 TF-IDF/RRF로 찾은 관련
+**검색 품질 연동 (`graph_expand_titles()`, 기본 활성화)**: `wiki_knowledge.graph_retrieval_expand_enabled`
+(기본 true)를 켜면 `meeting_workflow.build_generation_context_memo()`가 TF-IDF/RRF로 찾은 관련
 노트를 그래프로 1-hop 확장해 연결된 person/organization/topic 라벨을 추가로 끌어온다 — 대부분
 People/Organizations/Topics 폴더의 실제 노트 제목과 일치하므로 `build_related_notes_memo()`가
-그대로 본문을 찾아 주입한다. 그래프 DB가 비어 있거나(백필 전) 조회 실패해도 예외를 삼키고 빈
-목록을 반환하므로 기존 TF-IDF/RRF 파이프라인 동작에는 영향이 없다. 켜기 전에
-`python scripts/graph_backfill.py`로 그래프를 먼저 채워야 실제로 확장될 노트가 있다.
+그대로 본문을 찾아 주입한다. 각 제목은 `note`→`person`→`organization`→`topic` 순서로 조회한다 —
+회의/세미나 노트 제목뿐 아니라 참조 노트 제목 자신(위 이중 정체성 해소로 person/organization/topic
+타입으로 직접 존재)으로도 확장이 동작한다. 그래프 DB가 비어 있거나(백필 전) 조회 실패해도 예외를
+삼키고 빈 목록을 반환하므로 기존 TF-IDF/RRF 파이프라인 동작에는 영향이 없다. 효과를 보려면
+`python scripts/graph_backfill.py`로 그래프를 먼저 채워야 한다.
 
 ---
 

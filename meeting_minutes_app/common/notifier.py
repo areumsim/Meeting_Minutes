@@ -22,10 +22,8 @@ notifier.py – 알림 훅 (Email / Slack / Teams)
 
 from __future__ import annotations
 
-import json
 import os
 import smtplib
-import ssl as ssl_module
 from email import encoders
 from email.mime.base import MIMEBase
 from email.mime.text import MIMEText
@@ -380,7 +378,6 @@ class Notifier:
         # 우선순위 섹션 먼저, 나머지는 순서대로
         SKIP_KEYS = {"회의 정보", "한눈에 보는 요약"}
         CONCLUSION_KEYS = {"한눈에 보는 결론", "결론"}
-        ORDERED_KEYS = {"결정/합의", "결정사항", "결정 사항"}
 
         body_html = meeting_info_html
 

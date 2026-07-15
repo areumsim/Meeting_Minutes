@@ -66,3 +66,7 @@ data/*.json
 
 # bash 크래시 덤프
 *.stackdump
+
+# ── 개인 작업 메모 / 발표자료 ─────────────────────
+/TODO.md
+*.pptx

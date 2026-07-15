@@ -34,27 +34,42 @@ _CATEGORIES = [
     ("orgs",   "기업·기관"),
 ]
 
-_ALIASES = {
-    "한빗": "한빛",
-    "한빚": "한빛",
-    "한빝": "한빛",
-    "코롱베니트": "한빛솔루션",
-    "코론베니트": "한빛솔루션",
-    "한빗 커스텀 문제": "한빛 커스텀 트랙",
-    "한빚 커스텀 문제": "한빛 커스텀 트랙",
-    "퀀텀4 AI": "Quantum for AI",
-    "AI4 퀀텀": "AI for Quantum",
-}
+def _load_alias_config():
+    """config.analysis.entity_aliases / entity_alias_patterns 로드.
 
-_BAD_ENTITY_PATTERNS = (
-    re.compile(r"코[롱론]\s*커스텀\s*문제"),
-)
+    과거엔 특정 고객사("한빛" 등) 별칭이 이 모듈에 하드코딩돼 있었다 —
+    도메인 별칭은 전부 config로 이동 (config.example.json 참고).
+    """
+    aliases: Dict[str, str] = {}
+    patterns: List[tuple] = []
+    try:
+        from meeting_minutes_app.common import config_loader as _cfg
+        raw_aliases = _cfg.get("analysis.entity_aliases", {}) or {}
+        raw_patterns = _cfg.get("analysis.entity_alias_patterns", {}) or {}
+    except Exception:
+        raw_aliases, raw_patterns = {}, {}
+    if isinstance(raw_aliases, dict):
+        aliases = {str(k): str(v) for k, v in raw_aliases.items()
+                   if not str(k).startswith("_")}
+    if isinstance(raw_patterns, dict):
+        for pat, repl in raw_patterns.items():
+            if str(pat).startswith("_"):
+                continue
+            try:
+                patterns.append((re.compile(str(pat), re.IGNORECASE), str(repl)))
+            except re.error as e:
+                logger.warning(f"[enrichment] entity_alias_patterns 정규식 오류 무시: {pat} ({e})")
+    return aliases, patterns
+
+
+_ALIASES, _ALIAS_PATTERNS = _load_alias_config()
 
 
 def normalize_entity_name(name: str) -> str:
     out = (name or "").strip()
-    if re.search(r"코[오롱론]+\s*커스텀\s*문제", out):
-        return "한빛 커스텀 트랙"
+    for pat, repl in _ALIAS_PATTERNS:
+        if pat.search(out):
+            return repl
     for src, dst in _ALIASES.items():
         out = re.sub(re.escape(src), dst, out, flags=re.IGNORECASE)
     return out
@@ -97,8 +112,6 @@ def extract_entities(minutes: str, llm, topic: str = "",
             for v in vals:
                 name = (v if isinstance(v, str) else str(v)).strip()
                 name = normalize_entity_name(name)
-                if any(p.search(name) for p in _BAD_ENTITY_PATTERNS):
-                    name = "한빛 커스텀 트랙"
                 if name and name.lower() not in seen:
                     seen.add(name.lower())
                     out[key].append(name)
@@ -107,11 +120,14 @@ def extract_entities(minutes: str, llm, topic: str = "",
 
 
 def enrich(minutes: str, llm, obs=None, topic: str = "",
-           max_items: int = 8, presenter_name: str = "") -> Dict[str, Any]:
+           max_items: int = 8, presenter_name: str = "",
+           meeting_title: str = "") -> Dict[str, Any]:
     """
     회의록을 보완: 엔티티 추출 → 외부검색 설명 → 글로서리/참고노트 구성.
 
     presenter_name: 발표자 이름 (동명이인 오검색 방지를 위해 인물 enrichment에서 제외)
+    meeting_title: 이번 회의/세션 제목 — 참조 노트가 이미 있어 보강(append)될 때
+                  frontmatter의 mentioned_in에 누적된다(선택, 없으면 익명 보강)
 
     Returns:
       {
@@ -151,7 +167,7 @@ def enrich(minutes: str, llm, obs=None, topic: str = "",
     workers = min(_MAX_WORKERS, len(flat))
     results: List[Optional[Dict[str, Any]]] = [None] * len(flat)
     with ThreadPoolExecutor(max_workers=workers) as ex:
-        fut_idx = {ex.submit(_research_one, label, name, llm, obs, topic): i
+        fut_idx = {ex.submit(_research_one, label, name, llm, obs, topic, meeting_title): i
                    for i, (label, name) in enumerate(flat)}
         for fut in as_completed(fut_idx):
             i = fut_idx[fut]
@@ -162,6 +178,7 @@ def enrich(minutes: str, llm, obs=None, topic: str = "",
 
     glossary_lines: List[str] = []
     related_notes: List[str] = []
+    entity_links: Dict[str, str] = {}
     all_sources: List[Dict[str, str]] = []
     source_warnings: List[str] = []
     for r in results:
@@ -175,6 +192,7 @@ def enrich(minutes: str, llm, obs=None, topic: str = "",
             source_warnings.append(r["source_warning"])
         if r["base"]:
             related_notes.append(r["base"])
+            entity_links[r["name"]] = r["base"]
 
     top_sources = all_sources[:8]
     web_sources_md = _build_web_sources_md(top_sources)
@@ -189,10 +207,52 @@ def enrich(minutes: str, llm, obs=None, topic: str = "",
         "glossary_md": "\n".join(glossary_lines),
         "web_sources_md": web_sources_md,
         "related_notes": related_notes,
+        "entity_links": entity_links,
         "sources": top_sources,
         "entity_count": len(glossary_lines),
         "entities": entities,
     }
+
+
+def autolink_entities(text: str, entity_links: Dict[str, str]) -> str:
+    """본문에서 각 엔티티명의 **첫 등장 위치만** `[[위키링크]]`로 감싼다.
+
+    entity_links: {표시명: 참조노트 basename} (enrich()가 반환하는 entity_links).
+    헤딩 라인(#, ##, ...)이나 이미 위키링크 안에 있는 등장은 건너뛴다 — 회의록 본문
+    안에서 엔티티가 언급된 지점을 실제 wiki 노트로 연결해 그래프 연결성을 높인다.
+    """
+    if not text or not entity_links:
+        return text
+    remaining = {name: base for name, base in entity_links.items() if name and len(name) >= 2}
+    if not remaining:
+        return text
+    # 긴 이름부터 검사해야 짧은 이름이 긴 이름의 부분 문자열일 때의 오매칭을 줄인다
+    ordered_names = sorted(remaining, key=len, reverse=True)
+
+    lines = text.split("\n")
+    for name in ordered_names:
+        base = remaining[name]
+        linked = False
+        for i, line in enumerate(lines):
+            if linked:
+                break
+            if re.match(r"^\s*#{1,6}\s", line):
+                continue  # 헤딩 라인은 건너뜀
+            search_start = 0
+            while True:
+                idx = line.find(name, search_start)
+                if idx == -1:
+                    break
+                before = line[max(0, idx - 2):idx]
+                if before.endswith("[["):
+                    search_start = idx + len(name)
+                    continue  # 이미 위키링크 안 — 다음 등장 탐색
+                link = f"[[{base}]]" if base == name else f"[[{base}|{name}]]"
+                line = line[:idx] + link + line[idx + len(name):]
+                lines[i] = line
+                linked = True
+                break
+    return "\n".join(lines)
 
 
 _NO_INFO_PHRASES = (
@@ -204,8 +264,9 @@ _NO_INFO_PHRASES = (
 _UNKNOWN_DESC = "확인 불가: 외부 검색에서 신뢰할 만한 설명을 찾지 못했습니다."
 
 
-def _research_one(label: str, name: str, llm, obs, topic: str) -> Optional[Dict[str, Any]]:
-    """단일 항목: 외부검색 설명 + (옵션)Obsidian 참고노트 생성. 워커 스레드에서 실행."""
+def _research_one(label: str, name: str, llm, obs, topic: str,
+                  meeting_title: str = "") -> Optional[Dict[str, Any]]:
+    """단일 항목: 외부검색 설명 + (옵션)Obsidian 참고노트 생성/보강. 워커 스레드에서 실행."""
     res = llm.web_research(_build_query(name, label, topic))
     desc = (res.get("text") or "").strip()
     if not desc:
@@ -222,6 +283,7 @@ def _research_one(label: str, name: str, llm, obs, topic: str) -> Optional[Dict[
         try:
             base = obs.create_reference_note(
                 term=name, description=desc, sources=srcs, category=label,
+                mentioned_by=meeting_title,
             )
         except Exception as e:
             logger.warning(f"[enrichment] 참고노트 생성 실패({name}): {e}")
@@ -246,14 +308,27 @@ def _build_web_sources_md(sources: List[Dict[str, str]]) -> str:
         elif title:
             lines.append(f"- {title}")
     return "\n".join(lines)
+def _load_query_hints() -> Dict[str, str]:
+    """config.analysis.entity_query_hints — 특정 엔티티 웹검색 시 쓸 맞춤 지시문."""
+    try:
+        from meeting_minutes_app.common import config_loader as _cfg
+        raw = _cfg.get("analysis.entity_query_hints", {}) or {}
+        if isinstance(raw, dict):
+            return {str(k): str(v) for k, v in raw.items()
+                    if not str(k).startswith("_")}
+    except Exception:
+        pass
+    return {}
+
+
+_QUERY_HINTS = _load_query_hints()
+
+
 def _build_query(name: str, label: str, topic: str) -> str:
     name = normalize_entity_name(name)
-    if name == "한빛 커스텀 트랙":
-        return (
-            "'한빛 커스텀 트랙'은 회의 맥락상 한빛/Hanbit 관련 해커톤 산업문제 트랙을 뜻합니다. "
-            "Kolmogorov complexity나 수학의 콜모고로프 복잡도와 혼동하지 말고, "
-            "회의 맥락에서 산업 문제 정의·데이터 제공·평가 기준 관점으로 한국어 설명을 작성하세요."
-        )
+    hint = _QUERY_HINTS.get(name)
+    if hint:
+        return hint
     if label == "인물":
         domain = f"'{topic}' 분야" if topic else "이 세미나/회의"
         return (

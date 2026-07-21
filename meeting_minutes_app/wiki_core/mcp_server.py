@@ -15,6 +15,33 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
+# ── fastmcp 버전 메타데이터 폴백 (PyInstaller 동결 실행 대응) ──
+# fastmcp/__init__ 는 importlib.metadata.version("fastmcp-slim"/"fastmcp") 로 __version__ 을
+# 읽는데, PyInstaller 가 fastmcp 의 .dist-info 를 번들에서 제외해(datas/런타임훅으로도 못 살림)
+# 동결 실행 시 PackageNotFoundError → fastmcp import 실패 → MCP 비활성화된다.
+# fastmcp import '직전에' version() 을 감싸 폴백을 제공한다(순서 보장). dev 환경(실제 메타데이터
+# 존재)에서는 폴백이 발동하지 않아 무해하다.
+def _install_fastmcp_metadata_fallback() -> None:
+    import importlib.metadata as _im
+    if getattr(_im.version, "_mm_patched", False):
+        return
+    _orig = _im.version
+    _fallback = {"fastmcp": "0.0.0", "fastmcp-slim": "0.0.0"}
+
+    def _version(name, *args, **kwargs):
+        try:
+            return _orig(name, *args, **kwargs)
+        except _im.PackageNotFoundError:
+            if name in _fallback:
+                return _fallback[name]
+            raise
+
+    _version._mm_patched = True
+    _im.version = _version
+
+
+_install_fastmcp_metadata_fallback()
+
 from fastmcp import FastMCP
 from fastmcp.server.auth import AccessToken, TokenVerifier
 

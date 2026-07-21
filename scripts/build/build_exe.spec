@@ -9,6 +9,8 @@ PyInstaller spec — Meeting Minutes Web UI (run_ui.exe)
 import os
 from pathlib import Path
 
+from PyInstaller.utils.hooks import collect_data_files, copy_metadata
+
 block_cipher = None
 ROOT = os.path.abspath('.')
 APP = os.path.join(ROOT, 'meeting_minutes_app')
@@ -29,6 +31,21 @@ datas = [
 # config.example.json이 있으면 포함
 if os.path.exists(os.path.join(ROOT, 'config.example.json')):
     datas.append((os.path.join(ROOT, 'config.example.json'), '.'))
+
+# ── 원격 MCP(fastmcp) 데이터 파일 ──
+# fastmcp→mcp→jsonschema 포맷 검증이 rfc3987_syntax 를 쓰는데, 이 패키지는 문법
+# 파일(syntax_rfc3987.lark)을 패키지 폴더 상대경로로 읽는다. PyInstaller가 .py만
+# 수집하고 .lark 데이터파일은 빠뜨려서 exe 에서 MCP(/mcp)가 비활성화됐다.
+# 해당 패키지(및 파서 lark)의 데이터파일을 명시 수집한다. 미설치여도 빌드는 계속.
+for _pkg in ('rfc3987_syntax', 'lark'):
+    try:
+        datas += collect_data_files(_pkg)
+    except Exception as _e:
+        print(f"[spec] collect_data_files({_pkg}) 건너뜀: {_e}")
+
+# fastmcp/mcp 메타데이터(.dist-info)는 Analysis 이후 a.datas 에 직접 주입한다(아래 참고).
+# fastmcp __init__ 가 importlib.metadata.version("fastmcp-slim"/"fastmcp") 로 버전을 읽는데,
+# 이 메타데이터를 Analysis 전 datas 로 넣으면 COLLECT 단계에서 누락되는 케이스가 있다.
 
 # ── ffmpeg 번들 (vendor/ffmpeg/*.exe 가 있으면 포함, 없으면 스킵) ──
 # 런타임에 app_paths.get_ffmpeg_path()가 _MEIPASS/vendor/ffmpeg/ 를 먼저 찾는다.
@@ -172,6 +189,19 @@ a = Analysis(
     ],
     noarchive=False,
 )
+
+# ── fastmcp/mcp 패키지 메타데이터 주입 (원격 MCP /mcp 활성화용) ──
+# Analysis 후 a.datas 에 직접 더해야 COLLECT 에서 확실히 포함된다(pre-Analysis datas 로는
+# fastmcp-*.dist-info 가 누락됐다). 없으면 "No package metadata was found for fastmcp" 로
+# fastmcp import 가 실패해 MCP 서버가 비활성화된다. fastmcp-slim 이 먼저 조회된다.
+import sys as _sys
+for _pkg in ('fastmcp', 'fastmcp-slim', 'mcp'):
+    try:
+        _m = copy_metadata(_pkg)
+        a.datas += _m
+        print(f"[spec] +metadata {_pkg}: {[d for s, d in _m]}", file=_sys.stderr)
+    except Exception as _e:
+        print(f"[spec] copy_metadata({_pkg}) 건너뜀: {_e}", file=_sys.stderr)
 
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 

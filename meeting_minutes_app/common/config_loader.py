@@ -181,6 +181,18 @@ def migrate() -> bool:
         target_version = config_schema.CONFIG_VERSION
         for field in config_schema.iter_fields():
             section, key = field["section"], field["key"]
+            if not key:
+                # 최상위 스칼라 필드(예: output_dir) — 중첩 dict가 아니다.
+                # 과거 마이그레이션이 이 값을 {"": 값} dict로 변질시켰다면 복구하고,
+                # 아예 없으면 기본값을 주입한다. (dict 취급 시 str(dict) 경로 오염 발생)
+                cur = user_cfg.get(section)
+                if isinstance(cur, dict) and "" in cur:
+                    user_cfg[section] = cur[""]
+                    changed = True
+                elif section not in user_cfg:
+                    user_cfg[section] = copy.deepcopy(field.get("default"))
+                    changed = True
+                continue
             node = user_cfg.get(section)
             if not isinstance(node, dict):
                 node = {}

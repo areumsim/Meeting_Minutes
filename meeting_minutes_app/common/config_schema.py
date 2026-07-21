@@ -191,3 +191,14 @@ def iter_fields() -> Iterator[Dict[str, Any]]:
 
 def sensitive_paths() -> List[str]:
     return [f"{f['section']}.{f['key']}" for f in iter_fields() if f.get("sensitive")]
+
+
+def field_for(section: str, key: str) -> Dict[str, Any] | None:
+    """(section, key) 에 해당하는 스키마 필드를 반환(없으면 None).
+
+    최상위 스칼라(예: output_dir)는 key="" 로 등록돼 있으므로 그대로 조회된다.
+    """
+    for f in iter_fields():
+        if f.get("section") == section and f.get("key") == key:
+            return f
+    return None

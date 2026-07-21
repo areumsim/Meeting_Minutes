@@ -71,3 +71,4 @@ data/*.json
 /TODO.md
 *.pptx
 _tmp*.txt
+tmp_*.txt

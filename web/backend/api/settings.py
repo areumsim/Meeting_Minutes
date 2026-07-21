@@ -14,15 +14,75 @@ router = APIRouter(tags=["settings"])
 
 CONFIG_PATH = Path(EXE_DIR) / "config.json"
 
-# config.json에서 허용하는 최상위 섹션 목록 — config.example.json의 실제 최상위
-# 키(_readme 제외)와 반드시 일치시킬 것. 예전엔 "output"이 들어 있었지만 실제 키는
-# "output_dir"이라 어차피 무의미했고, wiki_knowledge/vault_watcher/mcp/supermemory/
-# analysis는 아예 빠져 있어서 그 섹션들은 이 엔드포인트로 저장이 불가능했다(422).
-_ALLOWED_SECTIONS = {
+# 허용 최상위 섹션은 config.example.json 의 실제 최상위 키에서 자동 도출한다.
+# (과거엔 이 목록을 손으로 유지하다 "output" 오타·wiki_knowledge/vault_watcher 누락으로
+#  해당 섹션 저장이 422로 막히는 버그가 반복됐다. 새 기능 섹션은 example 에만 추가하면 됨.)
+_ALLOWED_FALLBACK = {
     "api", "models", "realtime", "email", "obsidian",
     "indexing", "wiki", "wiki_knowledge", "notify", "ssl",
     "output_dir", "vault_watcher", "mcp", "supermemory", "analysis",
 }
+
+
+def _allowed_sections() -> set:
+    """config.example.json 최상위 키(_접두·config_version 제외)에서 허용 섹션 도출."""
+    try:
+        from meeting_minutes_app.common import app_paths
+        p = app_paths.get_example_config_path()
+        if p.exists():
+            with open(p, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            derived = {k for k in data if not k.startswith("_") and k != "config_version"}
+            if derived:
+                return derived
+    except Exception:
+        pass
+    return set(_ALLOWED_FALLBACK)
+
+
+def _coerce_value(field: dict, value):
+    """스키마 필드 타입에 맞춰 값 변환/검증. 실패 시 ValueError(한국어 메시지).
+
+    프론트 폼은 이미 올바른 타입을 보내므로 이 함수는 주로 '고급: 전체 설정(JSON)'
+    편집기·API 직접 호출에 대한 안전망이다. 스키마에 없는 키는 이 함수를 거치지 않는다.
+    """
+    ftype = field.get("type", "text")
+    label = field.get("label", field.get("key", ""))
+    if value is None:
+        return value
+    if ftype == "bool":
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return bool(value)
+        if isinstance(value, str):
+            return value.strip().lower() in ("true", "1", "yes", "on", "y")
+        raise ValueError(f"'{label}' 값은 참/거짓이어야 합니다.")
+    if ftype == "number":
+        if isinstance(value, bool):
+            raise ValueError(f"'{label}' 값은 숫자여야 합니다.")
+        if isinstance(value, (int, float)):
+            return value
+        if isinstance(value, str):
+            s = value.strip()
+            if s == "":
+                raise ValueError(f"'{label}' 값은 숫자여야 합니다(비어 있음).")
+            try:
+                return int(s)
+            except ValueError:
+                try:
+                    return float(s)
+                except ValueError:
+                    raise ValueError(f"'{label}' 값은 숫자여야 합니다: {value!r}")
+        raise ValueError(f"'{label}' 값은 숫자여야 합니다.")
+    if ftype == "select":
+        valid = set()
+        for o in field.get("options") or []:
+            valid.add(o["value"] if isinstance(o, dict) else o)
+        if valid and value not in valid:
+            raise ValueError(f"'{label}' 에 허용되지 않는 값: {value!r} (허용: {sorted(valid)})")
+        return value
+    return value
 
 
 def _mask_key(key: str) -> str:
@@ -88,14 +148,29 @@ def update_config(data: dict):
     # 주석(_readme 등)·config_version 은 전체 설정 저장(고급 JSON 편집) 시 함께 넘어올 수 있으므로
     # 검증 대상에서 제외하고 무시한다.
     data = {k: v for k, v in data.items() if not k.startswith("_") and k != "config_version"}
-    unknown = [s for s in data if s not in _ALLOWED_SECTIONS]
+    allowed = _allowed_sections()
+    unknown = [s for s in data if s not in allowed]
     if unknown:
         raise HTTPException(status_code=422, detail=f"허용되지 않는 섹션: {unknown}")
+
+    try:
+        from meeting_minutes_app.common import config_schema
+    except Exception:
+        config_schema = None
 
     with open(CONFIG_PATH, "r", encoding="utf-8") as f:
         cfg = json.load(f)
 
     sensitive = set(_sensitive_paths())
+
+    def _set(sec: str, key: str, val):
+        """섹션/키에 값 기록. 최상위 스칼라(output_dir 등)는 key='' 로 처리."""
+        if key:
+            if not isinstance(cfg.get(sec), dict):
+                cfg[sec] = {}
+            cfg[sec][key] = val
+        else:
+            cfg[sec] = val
 
     for section, values in data.items():
         # output_dir은 config.json에서 유일하게 중첩 dict가 아닌 스칼라(문자열)
@@ -115,7 +190,18 @@ def update_config(data: dict):
             # endswith 가 아니라 포함 여부로 판별하되, 비밀 필드에만 적용한다.
             if f"{section}.{k}" in sensitive and isinstance(v, str) and ("***" in v or "..." in v):
                 continue
+            # 스키마 필드가 있으면 타입 검증/변환(안전망). 없는 키는 그대로 통과.
+            field = config_schema.field_for(section, k) if config_schema else None
+            if field is not None:
+                try:
+                    v = _coerce_value(field, v)
+                except ValueError as e:
+                    raise HTTPException(status_code=422, detail=str(e))
             cfg[section][k] = v
+            # 서버측 mirror: obsidian.vault_path → indexing.vault_path 등 동시 반영.
+            for mt in (field.get("mirror") if field else None) or []:
+                if isinstance(mt, (list, tuple)) and len(mt) == 2:
+                    _set(mt[0], mt[1], v)
 
     with open(CONFIG_PATH, "w", encoding="utf-8") as f:
         json.dump(cfg, f, ensure_ascii=False, indent=2)

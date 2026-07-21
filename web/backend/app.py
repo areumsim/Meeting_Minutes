@@ -45,6 +45,13 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         print(f"[startup] config 마이그레이션 경고: {e}")
     init_db()
+    # 지식 그래프 스키마 보장(멱등) — 새 데이터 폴더에서 nodes/edges 테이블이 없어
+    # /api/graph/* 조회가 500(no such table)나던 문제 방지. 데이터가 없으면 빈 결과 반환.
+    try:
+        from meeting_minutes_app.wiki_core import graph_db
+        graph_db.init_graph_db()
+    except Exception as e:
+        print(f"[graph] 그래프 스키마 초기화 경고: {e}")
     try:
         from web.backend.session_scanner import scan_output_dir
         scan_output_dir()
@@ -62,10 +69,13 @@ app = FastAPI(title="AI Meeting Minutes", lifespan=lifespan)
 if _mcp_app is not None:
     app.mount("/mcp", _mcp_app)
 
+# 단일 오리진(localhost) 데스크톱 앱이라 CORS 는 사실상 불필요하지만, dev(Vite:5173)에서
+# 백엔드(8501)로 직접 붙는 경우를 위해 localhost 계열만 허용한다.
+# 참고: allow_origins=["*"] + allow_credentials=True 는 CORS 명세상 무효 조합이라 쓰지 않는다.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$",
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -79,6 +89,7 @@ from web.backend.api.settings import router as settings_router
 from web.backend.api.graph import router as graph_router
 from web.backend.api.wiki import router as wiki_router
 from web.backend.api.tools import router as tools_router
+from web.backend.api.watcher import router as watcher_router
 
 app.include_router(sessions_router, prefix="/api")
 app.include_router(batch_router, prefix="/api")
@@ -88,6 +99,7 @@ app.include_router(settings_router, prefix="/api")
 app.include_router(graph_router, prefix="/api")
 app.include_router(wiki_router, prefix="/api")
 app.include_router(tools_router, prefix="/api")
+app.include_router(watcher_router, prefix="/api")
 
 
 @app.post("/api/shutdown")

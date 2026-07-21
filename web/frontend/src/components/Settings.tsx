@@ -8,8 +8,10 @@ import {
   testOpenAIKey, testAnthropicKey, testObsidianPath, reindexVault, shutdownApp,
   getProfiles, createProfile, deleteProfile, clearSessions,
   getApiKey, setApiKey, getAnthropicKey, setAnthropicKey,
+  getWatcherStatus, startWatcher, stopWatcher,
 } from "../lib/api";
 import type { Profile } from "../lib/types";
+import type { WatcherStatus } from "../lib/api";
 
 interface Field {
   section: string;
@@ -296,6 +298,9 @@ export default function SettingsView() {
         </section>
       )}
 
+      {/* 폴더 자동 감시 (패키지 모드) */}
+      {packaged && <WatcherCard />}
+
       {/* Profiles */}
       <section className="bg-white border border-brand-200 rounded-2xl p-4 md:p-5 mb-3">
         <div className="flex items-center justify-between mb-6">
@@ -387,6 +392,115 @@ export default function SettingsView() {
         </button>
       </section>
     </div>
+  );
+}
+
+function WatcherCard() {
+  const [status, setStatus] = useState<WatcherStatus | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState("");
+
+  const refresh = async () => setStatus(await getWatcherStatus());
+
+  useEffect(() => {
+    refresh();
+    const id = setInterval(refresh, 5000);  // 실행 중 상태·처리 건수 갱신
+    return () => clearInterval(id);
+  }, []);
+
+  const onStart = async () => {
+    setBusy(true); setMsg("");
+    const r = await startWatcher();
+    setMsg(r.message);
+    await refresh();
+    setBusy(false);
+  };
+  const onStop = async () => {
+    setBusy(true); setMsg("");
+    const r = await stopWatcher();
+    setMsg(r.message);
+    await refresh();
+    setBusy(false);
+  };
+
+  const running = !!status?.running;
+  const c = status?.counts;
+
+  return (
+    <section className="bg-white border border-brand-200 rounded-2xl p-4 md:p-5 mb-3 shadow-sm">
+      <h3 className="text-base font-bold mb-1 flex items-center gap-2 text-brand-900">
+        <Settings size={16} /> 폴더 자동 감시
+        <span className={`ml-1 text-[11px] font-bold px-2 py-0.5 rounded-full ${running ? "bg-emerald-100 text-emerald-700" : "bg-zinc-100 text-zinc-500"}`}>
+          {running ? "● 감시 중" : "○ 중지됨"}
+        </span>
+      </h3>
+      <p className="text-xs text-brand-500 mb-3">
+        지정한 폴더에 새 녹음 파일이 생기면 자동으로 회의록을 생성합니다. 감시 폴더는
+        위 <b>'고급: 전체 설정(JSON)'</b>에서 <code>vault_watcher.watch_folders</code> 에 추가하세요.
+      </p>
+
+      {status?.folders && status.folders.length > 0 ? (
+        <div className="mb-3 text-xs text-brand-600">
+          <span className="font-bold">감시 폴더:</span>
+          <ul className="list-disc ml-5 mt-1 space-y-0.5 font-mono">
+            {status.folders.map((f) => <li key={f}>{f}</li>)}
+          </ul>
+        </div>
+      ) : (
+        <div className="mb-3 text-xs text-amber-600">감시 폴더가 설정되지 않았습니다.</div>
+      )}
+
+      {c && (
+        <div className="mb-3 flex flex-wrap gap-2 text-xs">
+          <Stat label="완료" value={c.done} tone="emerald" />
+          <Stat label="처리중" value={c.processing} tone="sky" />
+          <Stat label="실패" value={c.failed} tone="red" />
+          <Stat label="건너뜀" value={c.skipped} tone="zinc" />
+        </div>
+      )}
+
+      {status?.recent && status.recent.length > 0 && (
+        <div className="mb-3 text-xs">
+          <div className="font-bold text-brand-600 mb-1">최근 처리</div>
+          <div className="space-y-1">
+            {status.recent.slice(0, 5).map((r, i) => (
+              <div key={i} className="flex items-center gap-2 text-brand-500">
+                <span className={`w-1.5 h-1.5 rounded-full ${r.status === "done" ? "bg-emerald-500" : r.status === "failed" ? "bg-red-500" : "bg-sky-500"}`} />
+                <span className="font-mono truncate max-w-[16rem]">{r.file}</span>
+                <span className="text-brand-400">{r.processed_at?.replace("T", " ")}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div className="flex items-center gap-3">
+        {running ? (
+          <button onClick={onStop} disabled={busy} className="flex items-center gap-2 px-5 py-2.5 bg-zinc-800 text-white rounded-xl text-sm font-bold hover:bg-zinc-900 transition-all">
+            {busy ? <Loader2 size={16} className="animate-spin" /> : <XCircle size={16} />} 감시 중지
+          </button>
+        ) : (
+          <button onClick={onStart} disabled={busy} className="flex items-center gap-2 px-5 py-2.5 bg-brand-950 text-white rounded-xl text-sm font-bold hover:bg-brand-900 transition-all">
+            {busy ? <Loader2 size={16} className="animate-spin" /> : <Plug size={16} />} 감시 시작
+          </button>
+        )}
+      </div>
+      {msg && <p className="text-xs text-brand-500 mt-2">{msg}</p>}
+    </section>
+  );
+}
+
+function Stat({ label, value, tone }: { label: string; value: number; tone: string }) {
+  const tones: Record<string, string> = {
+    emerald: "bg-emerald-50 text-emerald-700",
+    sky: "bg-sky-50 text-sky-700",
+    red: "bg-red-50 text-red-700",
+    zinc: "bg-zinc-100 text-zinc-600",
+  };
+  return (
+    <span className={`px-2.5 py-1 rounded-lg font-bold ${tones[tone] || tones.zinc}`}>
+      {label} {value}
+    </span>
   );
 }
 

@@ -102,6 +102,14 @@ hiddenimports = [
     'web.backend.api.graph',
     'web.backend.api.wiki',
     'web.backend.api.tools',
+    'web.backend.api.watcher',
+
+    # 폴더 자동 감시(vault_watcher) — watchdog FS 이벤트 모드 + 감시/처리 모듈
+    'watchdog',
+    'watchdog.observers',
+    'watchdog.observers.polling',
+    'watchdog.events',
+    'meeting_minutes_app.meeting_pipeline.audio_watcher',
 
     # meeting_minutes_app 서브패키지 (common/wiki_core/meeting_pipeline)
     'meeting_minutes_app',
@@ -125,8 +133,8 @@ hiddenimports = [
     'meeting_minutes_app.meeting_pipeline.ingestion_pipeline',
     'meeting_minutes_app.meeting_pipeline.profiles',
     'meeting_minutes_app.meeting_pipeline.speaker_cache',
-    'meeting_minutes_app.meeting_pipeline.ws_transcriber',
-    'meeting_minutes_app.meeting_pipeline.realtime_transcription',
+    # 주의: ws_transcriber / realtime_transcription 은 numpy·sounddevice 의존(CLI 실시간 전용)이며
+    # 웹 서버 런타임에서 import되지 않으므로 hiddenimports 에 넣지 않는다(넣으면 dead weight).
 
     # 기타
     'multipart',
@@ -160,7 +168,7 @@ a = Analysis(
         'sounddevice',  # 웹 UI에서는 브라우저가 마이크 처리
         'numpy',        # 웹 UI 모드에서는 불필요 (HTTP 폴백용 wave만 사용)
         'webrtcvad',    # CLI 전용
-        'watchdog',     # CLI watcher 전용
+        # watchdog 는 폴더 자동 감시(vault_watcher) 웹 기능에서 사용하므로 번들에 포함한다.
     ],
     noarchive=False,
 )

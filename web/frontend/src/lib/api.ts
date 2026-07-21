@@ -1,5 +1,5 @@
 import { sessionsStore, segmentsStore, documentsStore } from './db';
-import type { Session, Segment, Document as Doc, SessionGraph, GraphNeighbors } from './types';
+import type { Session, Segment, Document as Doc, SessionGraph, GraphNeighbors, GraphNode } from './types';
 
 // Authentication & Config Storage (localStorage for simple key/values)
 export const getApiKey = () => localStorage.getItem("OPENAI_API_KEY") || "";
@@ -129,6 +129,42 @@ export const reindexVault = async (): Promise<{ ok: boolean; message: string }> 
   }
 };
 
+// 폴더 자동 감시(vault_watcher) — 서버 내장 감시 제어/상태 (패키지 모드 전용).
+export interface WatcherStatus {
+  running: boolean;
+  config_enabled: boolean;
+  folders: string[];
+  counts: { done: number; failed: number; processing: number; skipped: number; total: number };
+  recent: { file: string; status: string; processed_at: string; note_path: string; error: string }[];
+  error?: string;
+}
+
+export const getWatcherStatus = async (): Promise<WatcherStatus | null> => {
+  try {
+    const res = await fetch("/api/watcher/status");
+    if (res.ok) return await res.json();
+  } catch { /* 백엔드 없음 */ }
+  return null;
+};
+
+export const startWatcher = async (): Promise<{ ok: boolean; running: boolean; message: string }> => {
+  try {
+    const res = await fetch("/api/watcher/start", { method: "POST" });
+    return await res.json();
+  } catch (e: any) {
+    return { ok: false, running: false, message: `시작 실패: ${e?.message || e}` };
+  }
+};
+
+export const stopWatcher = async (): Promise<{ ok: boolean; running: boolean; message: string }> => {
+  try {
+    const res = await fetch("/api/watcher/stop", { method: "POST" });
+    return await res.json();
+  } catch (e: any) {
+    return { ok: false, running: true, message: `중지 실패: ${e?.message || e}` };
+  }
+};
+
 // 회의 준비 브리핑 생성.
 export const prepBrief = async (title: string, topic: string): Promise<{ ok: boolean; brief?: string; message?: string }> => {
   try {
@@ -203,6 +239,20 @@ export const getSession = async (id: string): Promise<{ session: Session; segmen
 export const getSessionGraph = async (sessionId: string): Promise<SessionGraph> => {
   const res = await fetch(`/api/graph/sessions/${sessionId}`);
   if (!res.ok) throw new Error(`Graph fetch failed (${res.status})`);
+  return res.json();
+};
+
+// 전역 그래프 노드 검색/목록 (지식그래프 탐색 UI).
+export const listGraphNodes = async (
+  opts?: { type?: string; q?: string; limit?: number }
+): Promise<GraphNode[]> => {
+  const params = new URLSearchParams();
+  if (opts?.type) params.set("type", opts.type);
+  if (opts?.q) params.set("q", opts.q);
+  if (opts?.limit) params.set("limit", String(opts.limit));
+  const qs = params.toString();
+  const res = await fetch(`/api/graph/nodes${qs ? `?${qs}` : ""}`);
+  if (!res.ok) throw new Error(`Nodes fetch failed (${res.status})`);
   return res.json();
 };
 

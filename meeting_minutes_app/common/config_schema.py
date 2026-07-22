@@ -42,7 +42,7 @@ SCHEMA: List[Dict[str, Any]] = [
         "label": "모델",
         "desc": "회의록/요약 생성 AI와 음성 인식 모델. 비용은 100만 토큰당 대략치(입력/출력)이며 변동될 수 있습니다.",
         "fields": [
-            {"section": "models", "key": "llm", "label": "회의록 생성 AI", "type": "select", "default": "claude", "options": [{"value": "gpt", "label": "GPT (OpenAI)"}, {"value": "claude", "label": "Claude (Anthropic)"}], "desc": "Claude 선택 시 Anthropic 키 필요."},
+            {"section": "models", "key": "llm", "label": "회의록 생성 AI", "type": "select", "default": "gpt", "options": [{"value": "gpt", "label": "GPT (OpenAI)"}, {"value": "claude", "label": "Claude (Anthropic)"}], "desc": "기본 GPT(OpenAI 키만 필요). Claude 선택 시 Anthropic 키 별도 필요."},
             {"section": "models", "key": "stt", "label": "음성 인식(STT) 모델", "type": "select", "default": "gpt-4o-mini-transcribe", "options": [{"value": "gpt-4o-mini-transcribe", "label": "gpt-4o-mini-transcribe — 저렴·빠름 (추천)"}, {"value": "gpt-4o-transcribe", "label": "gpt-4o-transcribe — 고정확·비쌈"}, {"value": "gpt-4o-transcribe-diarize", "label": "gpt-4o-transcribe-diarize — 화자분리"}, {"value": "whisper-1", "label": "whisper-1 — 구형·안정"}]},
             {"section": "models", "key": "claude_model", "label": "Claude 모델", "type": "select", "default": "claude-opus-4-8", "options": [{"value": "claude-opus-4-8", "label": "Opus 4.8 — 최고 성능 (약 $5/$25)"}, {"value": "claude-sonnet-5", "label": "Sonnet 5 — 균형·빠름 (약 $3/$15)"}, {"value": "claude-haiku-4-5", "label": "Haiku 4.5 — 저렴·빠름 (약 $1/$5)"}, {"value": "claude-opus-4-6", "label": "Opus 4.6 — 구버전"}]},
             {"section": "models", "key": "gpt_model", "label": "GPT 모델", "type": "select", "default": "gpt-4o-mini", "options": [{"value": "gpt-4o-mini", "label": "gpt-4o-mini — 저렴·빠름 (추천)"}, {"value": "gpt-4o", "label": "gpt-4o — 고품질·비쌈"}, {"value": "o1", "label": "o1 — 추론(느림·고비용)"}, {"value": "o3-mini", "label": "o3-mini — 추론(경량)"}]},
@@ -173,7 +173,7 @@ SCHEMA: List[Dict[str, Any]] = [
         "label": "알림 (선택)",
         "desc": "처리 완료 시 알림 채널.",
         "fields": [
-            {"section": "notify", "key": "on_finish", "label": "완료 알림 채널", "type": "select", "default": "email", "options": [{"value": "email", "label": "email"}, {"value": "slack", "label": "slack"}, {"value": "teams", "label": "teams"}, {"value": "none", "label": "none — 끔"}]},
+            {"section": "notify", "key": "on_finish", "label": "완료 알림 채널", "type": "select", "default": "none", "options": [{"value": "none", "label": "none — 끔"}, {"value": "email", "label": "email"}, {"value": "slack", "label": "slack"}, {"value": "teams", "label": "teams"}], "desc": "기본 꺼짐. 이메일/Slack/Teams는 해당 설정을 채운 뒤 선택."},
             {"section": "notify", "key": "slack.webhook_url", "label": "Slack Webhook URL", "type": "password", "sensitive": True, "default": "", "placeholder": "https://hooks.slack.com/services/...", "desc": "알림 채널을 slack 으로 쓸 때 필요. Slack 채널 → 앱 → Incoming Webhooks 에서 발급."},
             {"section": "notify", "key": "teams.webhook_url", "label": "Teams Webhook URL", "type": "password", "sensitive": True, "default": "", "placeholder": "https://outlook.office.com/webhook/...", "desc": "알림 채널을 teams 로 쓸 때 필요. Teams 채널 → 커넥터 → Incoming Webhook 에서 발급."},
         ],

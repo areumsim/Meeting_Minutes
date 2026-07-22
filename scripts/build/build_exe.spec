@@ -43,9 +43,15 @@ for _pkg in ('rfc3987_syntax', 'lark'):
     except Exception as _e:
         print(f"[spec] collect_data_files({_pkg}) 건너뜀: {_e}")
 
-# fastmcp/mcp 메타데이터(.dist-info)는 Analysis 이후 a.datas 에 직접 주입한다(아래 참고).
-# fastmcp __init__ 가 importlib.metadata.version("fastmcp-slim"/"fastmcp") 로 버전을 읽는데,
-# 이 메타데이터를 Analysis 전 datas 로 넣으면 COLLECT 단계에서 누락되는 케이스가 있다.
+# fastmcp/mcp 패키지 메타데이터(.dist-info) — fastmcp __init__ 가 importlib.metadata.version()
+# 으로 버전을 읽으므로 필요. copy_metadata 는 (src, dest) 2-튜플을 반환하며, 반드시 Analysis
+# '전'의 datas 에 넣어야 한다(Analysis 가 정규화해 준다). Analysis '후' a.datas 에 넣으면
+# a.datas 는 이미 3-튜플이라 COLLECT normalize_toc 가 터진다("expected 3, got 2").
+for _pkg in ('fastmcp', 'fastmcp-slim', 'mcp'):
+    try:
+        datas += copy_metadata(_pkg)
+    except Exception as _e:
+        print(f"[spec] copy_metadata({_pkg}) 건너뜀: {_e}")
 
 # ── ffmpeg 번들 (vendor/ffmpeg/*.exe 가 있으면 포함, 없으면 스킵) ──
 # 런타임에 app_paths.get_ffmpeg_path()가 _MEIPASS/vendor/ffmpeg/ 를 먼저 찾는다.
@@ -189,19 +195,6 @@ a = Analysis(
     ],
     noarchive=False,
 )
-
-# ── fastmcp/mcp 패키지 메타데이터 주입 (원격 MCP /mcp 활성화용) ──
-# Analysis 후 a.datas 에 직접 더해야 COLLECT 에서 확실히 포함된다(pre-Analysis datas 로는
-# fastmcp-*.dist-info 가 누락됐다). 없으면 "No package metadata was found for fastmcp" 로
-# fastmcp import 가 실패해 MCP 서버가 비활성화된다. fastmcp-slim 이 먼저 조회된다.
-import sys as _sys
-for _pkg in ('fastmcp', 'fastmcp-slim', 'mcp'):
-    try:
-        _m = copy_metadata(_pkg)
-        a.datas += _m
-        print(f"[spec] +metadata {_pkg}: {[d for s, d in _m]}", file=_sys.stderr)
-    except Exception as _e:
-        print(f"[spec] copy_metadata({_pkg}) 건너뜀: {_e}", file=_sys.stderr)
 
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 

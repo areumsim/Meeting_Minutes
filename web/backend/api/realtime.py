@@ -385,6 +385,22 @@ class BrowserRealtimeSession:
             msg = getattr(error, "message", str(error)) if error else "Unknown error"
             self._send_to_browser({"type": "error", "message": msg})
 
+    def _translate_text(self, text, openai_client, translate_model, topic) -> str:
+        """발화 1건을 자연스러운 한국어로 번역해 반환(WS·HTTP 경로 공용)."""
+        topic_hint = f"\n주제 맥락: {topic}" if topic else ""
+        r = openai_client.chat.completions.create(
+            model=translate_model,
+            temperature=0.2,
+            messages=[
+                {"role": "system",
+                 "content": (f"전문 영한 번역가. 회의/세미나 발화를 자연스러운 한국어로 번역.{topic_hint}\n"
+                             "번역문만 출력. Markdown/설명 없이.\n"
+                             "반드시 한국어로만 출력.")},
+                {"role": "user", "content": text},
+            ],
+        )
+        return r.choices[0].message.content.strip()
+
     def _translate_segment(self, text, seg, openai_client, translate_model, topic):
         """세그먼트 번역 (백그라운드 스레드).
 
@@ -393,20 +409,8 @@ class BrowserRealtimeSession:
         실행 맥락이 다른 **의도된 별도 구현**이다. 둘을 통합하면 실시간 지연·스트리밍이 깨지므로
         합치지 말 것. (회의록 본문 생성 LLM은 config.models.llm을 따름 — 번역만 OpenAI 고정)
         """
-        topic_hint = f"\n주제 맥락: {topic}" if topic else ""
         try:
-            r = openai_client.chat.completions.create(
-                model=translate_model,
-                temperature=0.2,
-                messages=[
-                    {"role": "system",
-                     "content": (f"전문 영한 번역가. 회의/세미나 발화를 자연스러운 한국어로 번역.{topic_hint}\n"
-                                 "번역문만 출력. Markdown/설명 없이.\n"
-                                 "반드시 한국어로만 출력.")},
-                    {"role": "user", "content": text},
-                ],
-            )
-            ko_text = r.choices[0].message.content.strip()
+            ko_text = self._translate_text(text, openai_client, translate_model, topic)
             seg["translated_text"] = ko_text
             self._send_to_browser({
                 "type": "segment",
@@ -554,9 +558,21 @@ class BrowserRealtimeSession:
                             self.segments.append(seg)
                             if self.session_id:
                                 db.add_segment(self.session_id, "", text, seg["start"], seg["end"])
+                            # 실시간 번역(영→한): WS 경로와 동일 게이트. HTTP 청크 모드도
+                            # 청크마다 번역해 한국어를 즉시 함께 보낸다(과거엔 번역이 최종
+                            # 회의록에만 있고 실시간 화면엔 영어만 떴다).
+                            translated = ""
+                            if translate and language == "en":
+                                try:
+                                    translated = self._translate_text(
+                                        text, openai_client, translate_model, topic)
+                                    seg["translated_text"] = translated
+                                except Exception as _te:
+                                    print(f"[http-translate] error: {_te}")
                             await self.ws.send_json({
                                 "type": "segment",
                                 "text": text,
+                                "translatedText": translated,
                                 "speaker": "",
                                 "start": seg["start"],
                                 "end": seg["end"],

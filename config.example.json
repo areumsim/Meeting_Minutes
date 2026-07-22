@@ -78,9 +78,9 @@
     "_audio_backup_comment": "true 시 세션 오디오를 PCM 파일로 백업 (크래시 복구용, ~115MB/hr)",
     "audio_backup": true,
 
-    "_mode_comment": "http=기존 청크 방식, ws=WebSocket 스트리밍 (~1초 지연, 비용 ~3배), auto=자동",
-    "_mode_options": ["http", "ws", "auto"],
-    "mode": "http",
+    "_mode_comment": "auto=WS 실시간 우선 후 실패 시 HTTP 폴백(추천), ws=WebSocket 스트리밍(~1초 지연, 비용 ~3배), http=청크(안정·저비용)",
+    "_mode_options": ["auto", "ws", "http"],
+    "mode": "auto",
 
     "_vad_comment": "HTTP 모드 VAD(webrtcvad) 튜닝 — 미설정 시 기본값(30ms/6.0s/0.5s/공격성2)",
     "vad_frame_ms": 30,

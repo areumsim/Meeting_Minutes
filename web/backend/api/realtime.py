@@ -127,7 +127,7 @@ class BrowserRealtimeSession:
             # realtime.mode를 존중한다. "http"로 명시했으면(비용/지연/방화벽 등 이유로
             # WS를 쓰지 않으려는 의도) WS 시도 자체를 건너뛴다 — 과거엔 이 설정을
             # 무시하고 항상 WS부터 시도해 CLI와 다르게 동작했다.
-            realtime_mode = cfg.get("realtime.mode", "http")
+            realtime_mode = cfg.get("realtime.mode", "auto")
             if realtime_mode == "http":
                 await self._run_http_fallback(
                     openai_client, language, translate, translate_model,

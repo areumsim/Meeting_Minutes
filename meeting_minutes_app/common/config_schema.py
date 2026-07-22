@@ -85,7 +85,7 @@ SCHEMA: List[Dict[str, Any]] = [
         "label": "실시간 녹취",
         "desc": "실시간 녹음/전사 기본값입니다.",
         "fields": [
-            {"section": "realtime", "key": "mode", "label": "전사 방식", "type": "select", "default": "http", "options": [{"value": "http", "label": "http — 청크(안정)"}, {"value": "ws", "label": "ws — WebSocket 스트리밍(지연↓·비용↑)"}, {"value": "auto", "label": "auto — 자동"}]},
+            {"section": "realtime", "key": "mode", "label": "전사 방식", "type": "select", "default": "auto", "desc": "auto=WebSocket 실시간 우선, 실패(사내망 차단 등) 시 HTTP 청크로 자동 폴백. 비용을 아끼려면 http.", "options": [{"value": "auto", "label": "auto — 자동(WS 우선·폴백, 추천)"}, {"value": "ws", "label": "ws — WebSocket 스트리밍(단어별 실시간·비용↑)"}, {"value": "http", "label": "http — 청크(안정·저비용)"}]},
             {"section": "realtime", "key": "language", "label": "기본 언어", "type": "select", "default": "en", "options": ["en", "ko", "auto"]},
             {"section": "realtime", "key": "type", "label": "기본 문서 유형", "type": "select", "default": "meeting", "options": ["meeting", "seminar", "lecture"]},
             {"section": "realtime", "key": "translate", "label": "번역 사용", "type": "bool", "default": False},

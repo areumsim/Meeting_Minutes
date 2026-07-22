@@ -339,9 +339,9 @@ class WebSocketTranscriber:
             self._on_speech_stopped(event)
         elif etype == "error":
             self._on_error(event)
-        elif etype == "transcription_session.created":
-            pass  # 세션 생성 확인
-        elif etype == "transcription_session.updated":
+        elif etype in ("session.created", "transcription_session.created"):
+            pass  # 세션 생성 확인 (GA: session.created / 구 beta: transcription_session.created)
+        elif etype in ("session.updated", "transcription_session.updated"):
             pass  # 세션 업데이트 확인
 
     def _on_speech_started(self, event):

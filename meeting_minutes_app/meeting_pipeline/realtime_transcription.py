@@ -1683,7 +1683,7 @@ class RealtimeSession:
         ws_model = strip_model_date_suffix(self.stt_model)
 
         try:
-            conn_mgr = self.openai.beta.realtime.connect(
+            conn_mgr = self.openai.realtime.connect(
                 model=ws_model,
                 websocket_connection_options=ws_opts,
             )
@@ -1700,7 +1700,7 @@ class RealtimeSession:
                 # 전사 세션 설정
                 session_cfg = build_ws_session_config(ws_model, self.language, _c)
 
-                conn.transcription_session.update(session=session_cfg)
+                conn.session.update(session=session_cfg)
 
                 # 스트리머 + 트랜스크라이버 생성
                 ws_streamer = WebSocketAudioStreamer(
@@ -1731,10 +1731,10 @@ class RealtimeSession:
                         _conn_holder["conn"].close()
                     except Exception:
                         pass
-                    mgr2 = self.openai.beta.realtime.connect(
+                    mgr2 = self.openai.realtime.connect(
                         model=ws_model, websocket_connection_options=ws_opts)
                     conn2 = mgr2.__enter__()
-                    conn2.transcription_session.update(session=session_cfg)
+                    conn2.session.update(session=session_cfg)
                     _conn_holder["mgr"], _conn_holder["conn"] = mgr2, conn2
                     ws_streamer.reattach(conn2)
                     return conn2

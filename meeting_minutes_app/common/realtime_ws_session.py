@@ -5,10 +5,15 @@
 import re
 from typing import Any, Callable, Dict, Optional, Tuple
 
-#: WebSocket Realtime API가 지원하는 전사 모델 (base 이름 기준).
-#: 과거 이 목록이 CLI(realtime_transcription)와 웹 백엔드(api/realtime.py)에
-#: 서로 다른 방식으로 하드코딩돼 있었다.
-WS_SUPPORTED_BASE = {"gpt-4o-transcribe", "gpt-4o-realtime-preview"}
+#: GA Realtime 전사(transcription) 세션이 지원하는 모델 (base 이름 기준).
+#: GA(/v1/realtime, openai>=1.107)에서는 과거 beta에서 미지원이던 mini·whisper 계열도
+#: 전사 세션에 쓸 수 있다(gpt-realtime-whisper가 최저지연 스트리밍 STT).
+WS_SUPPORTED_BASE = {
+    "gpt-4o-transcribe",
+    "gpt-4o-mini-transcribe",
+    "gpt-realtime-whisper",
+    "whisper-1",
+}
 
 _DATE_SUFFIX = re.compile(r"-\d{4}-\d{2}-\d{2}$")
 
@@ -22,17 +27,18 @@ def strip_model_date_suffix(model: str) -> str:
 
 
 def normalize_ws_model(stt_model: str) -> Tuple[str, Optional[str]]:
-    """WS Realtime API에서 사용할 모델로 정규화.
+    """실시간(WS) 전사에서 사용할 모델로 정규화.
 
     반환: (사용할 모델, 전환 사유 또는 None)
-    diarize/mini 등 미지원 모델은 gpt-4o-transcribe로 전환하고 사유를 돌려준다 —
-    호출자가 모델 전환(웹) 또는 HTTP 모드 폴백(CLI)을 결정한다.
+    diarize 모델은 GA 스키마상 허용되나 실시간 화자분리가 신뢰할 수 없어(접근 게이트·
+    빈 speaker) gpt-4o-transcribe로 전환한다 — 화자분리는 F2(녹음본 배치 diarize
+    후처리)에서 처리한다. 그 외 미지원 모델은 gpt-4o-transcribe로 폴백.
     """
     base = strip_model_date_suffix(stt_model)
     if "diarize" in (stt_model or ""):
-        return "gpt-4o-transcribe", "diarize 모델은 WebSocket 미지원"
+        return "gpt-4o-transcribe", "실시간 화자분리 불안정 — 배치 후처리로 처리(전사는 gpt-4o-transcribe)"
     if base not in WS_SUPPORTED_BASE:
-        return "gpt-4o-transcribe", f"{stt_model}은(는) WebSocket 미지원"
+        return "gpt-4o-transcribe", f"{stt_model}은(는) 실시간 전사 미지원"
     return base, None
 
 
@@ -41,26 +47,30 @@ def build_ws_session_config(
     language: Optional[str],
     cfg_get: Callable[..., Any],
 ) -> Dict[str, Any]:
-    """`cfg_get(key, default)` 형태의 설정 조회 함수를 받아 session_cfg 딕셔너리를 구성한다."""
-    session_cfg: Dict[str, Any] = {
-        "input_audio_format": "pcm16",
-        "input_audio_transcription": {"model": stt_model},
+    """GA Realtime 전사 세션 설정(session)을 구성한다.
+
+    GA(/v1/realtime)에서는 beta의 평면 구조(input_audio_format/input_audio_transcription)
+    대신 session.type='transcription' + audio.input.{format,transcription,turn_detection,
+    noise_reduction} 중첩 구조를 사용한다.
+    """
+    input_cfg: Dict[str, Any] = {
+        "format": {"type": "audio/pcm", "rate": 24000},
+        "transcription": {"model": stt_model},
         "turn_detection": {
             "type": cfg_get("realtime.ws_vad_type", "server_vad") or "server_vad",
         },
     }
 
     if language and language != "auto":
-        session_cfg["input_audio_transcription"]["language"] = language
+        input_cfg["transcription"]["language"] = language
 
-    vad_type = session_cfg["turn_detection"]["type"]
-    if vad_type == "semantic_vad":
-        session_cfg["turn_detection"]["eagerness"] = (
+    if input_cfg["turn_detection"]["type"] == "semantic_vad":
+        input_cfg["turn_detection"]["eagerness"] = (
             cfg_get("realtime.ws_vad_eagerness", "medium") or "medium"
         )
 
     nr_type = cfg_get("realtime.ws_noise_reduction", "near_field")
     if nr_type:
-        session_cfg["input_audio_noise_reduction"] = {"type": nr_type}
+        input_cfg["noise_reduction"] = {"type": nr_type}
 
-    return session_cfg
+    return {"type": "transcription", "audio": {"input": input_cfg}}

@@ -41,6 +41,10 @@ class BrowserRealtimeSession:
         self._session_start = time.time()
         self._stop = False
         self._loop: Optional[asyncio.AbstractEventLoop] = None
+        # 실시간(WS) 세션이 OpenAI 오류로 죽었는지 / 사용자가 정지했는지 추적.
+        # WS가 유효한 전사 없이 실패하면 같은 오디오 스트림으로 HTTP 청크 전사에 폴백한다.
+        self._ws_failed = False
+        self._user_stopped = False
 
         # 이벤트 상태 추적
         self._current_text: Dict[str, str] = {}
@@ -63,6 +67,12 @@ class BrowserRealtimeSession:
         self._web_pool = ThreadPoolExecutor(max_workers=1)  # 웹 검색 보완용
         self._segment_counter = 0  # 웹 검색 throttle용
 
+        # F2 화자분리 후처리(opt-in): 실시간 전사는 화자 라벨을 못 만들므로, 활성화 시
+        # 스트리밍 PCM을 모아 두었다가 종료 후 diarize 모델로 재전사해 speaker를 채운다.
+        # 메모리(약 173MB/시간)·STT 재호출 비용이 있어 기본 꺼짐.
+        self._diarize_pp = False
+        self._pcm = bytearray()
+
     async def run(self):
         """메인 실행 루프."""
         from meeting_minutes_app.common import config_loader as cfg
@@ -73,6 +83,7 @@ class BrowserRealtimeSession:
         translate = self.config.get("translate", preset["translate"])
         doc_type = self.config.get("type") or preset["type"]
         title = self.config.get("title", "")
+        self._diarize_pp = bool(cfg.get("realtime.diarize_postprocess", False))
         topic = self.config.get("topic", "")
         speakers = self.config.get("speakers", "")
 
@@ -108,9 +119,16 @@ class BrowserRealtimeSession:
             openai_key = os.environ.get("OPENAI_API_KEY", "")
         if not openai_key:
             await self.ws.send_json({"type": "error", "message": "OpenAI API 키가 설정되지 않았습니다."})
+            # 방금 만든 빈 세션이 'processing'으로 영구 고착되지 않도록 삭제
+            if self.session_id:
+                try:
+                    db.delete_session(self.session_id)
+                except Exception:
+                    db.update_session_status(self.session_id, "error")
+                self.session_id = None
             return
 
-        ssl_verify = cfg.get("ssl.verify", False)
+        ssl_verify = cfg.get("ssl.verify", True)  # 안전 기본값: 키 누락 시 검증 켜짐
 
         try:
             from openai import OpenAI
@@ -171,8 +189,18 @@ class BrowserRealtimeSession:
 
         stop_event = threading.Event()
 
+        # GA Realtime API(client.realtime, openai>=1.107)를 사용한다. 구버전 SDK로
+        # 빌드돼 client.realtime이 없으면 (사문화된) beta 경로 대신 곧바로 HTTP 폴백.
+        if not hasattr(openai_client, "realtime"):
+            print("[realtime] openai SDK가 GA realtime 미지원(<1.107) → HTTP 청크 전사로 폴백")
+            await self._run_http_fallback(
+                openai_client, language, translate, translate_model,
+                doc_type, topic, title, speakers, cfg,
+            )
+            return
+
         try:
-            conn_mgr = openai_client.beta.realtime.connect(
+            conn_mgr = openai_client.realtime.connect(
                 model=stt_model,
                 websocket_connection_options=ws_opts,
             )
@@ -187,10 +215,10 @@ class BrowserRealtimeSession:
 
         try:
             with conn_mgr as conn:
-                # 전사 세션 설정
+                # 전사 세션 설정 (GA: session.type='transcription')
                 session_cfg = build_ws_session_config(stt_model, language, cfg.get)
 
-                conn.transcription_session.update(session=session_cfg)
+                conn.session.update(session=session_cfg)
 
                 await self.ws.send_json({"type": "ready", "model": stt_model})
 
@@ -222,6 +250,9 @@ class BrowserRealtimeSession:
                 # 브라우저로부터 오디오 수신
                 try:
                     while not self._stop:
+                        # 이벤트 루프가 OpenAI 오류로 죽었으면(WS 실패) 즉시 탈출 → HTTP 폴백
+                        if self._ws_failed:
+                            break
                         try:
                             data = await asyncio.wait_for(self.ws.receive(), timeout=1.0)
                         except asyncio.TimeoutError:
@@ -231,40 +262,63 @@ class BrowserRealtimeSession:
 
                         if "bytes" in data and data["bytes"]:
                             # PCM16 바이너리 데이터
+                            if self._ws_failed:
+                                break
+                            if self._diarize_pp:
+                                self._pcm.extend(data["bytes"])
                             audio_b64 = base64.b64encode(data["bytes"]).decode("ascii")
                             try:
                                 conn.input_audio_buffer.append(audio=audio_b64)
                             except Exception:
+                                self._ws_failed = True
                                 break
                         elif "text" in data and data["text"]:
                             msg = json.loads(data["text"])
                             if msg.get("type") == "stop":
+                                self._user_stopped = True
                                 break
                             elif msg.get("type") == "audio":
                                 # base64 인코딩된 오디오
+                                if self._diarize_pp:
+                                    try: self._pcm.extend(base64.b64decode(msg["data"]))
+                                    except Exception: pass
                                 try:
                                     conn.input_audio_buffer.append(audio=msg["data"])
                                 except Exception:
+                                    self._ws_failed = True
                                     break
                 except WebSocketDisconnect:
                     pass
 
-                # 종료
-                self._stop = True
+                # WS 이벤트 루프/컨슈머 정리
                 stop_event.set()
                 consumer_task.cancel()
                 event_thread.join(timeout=10)
-                self._translator_pool.shutdown(wait=True, cancel_futures=False)
-                self._web_pool.shutdown(wait=True, cancel_futures=False)
-                # vault 검색이 모두 끝나야 _finalize()의 collected_notes()가 완전함
-                if self._searcher is not None:
-                    self._searcher.shutdown(wait=True)
 
         except Exception as e:
             traceback.print_exc()
-            await self.ws.send_json({"type": "error", "message": str(e)})
+            self._ws_failed = True
 
-        # 최종 처리
+        # OpenAI 실시간(WS)이 유효한 전사를 만들지 못하고 실패했고(사내망/서버 측
+        # beta_api_shape_disabled 등), 사용자가 정지한 것도 아니면 → 같은 브라우저
+        # 오디오 스트림을 계속 읽어 HTTP 청크 전사로 자동 폴백한다(끊김 없이 이어감).
+        if self._ws_failed and not self._user_stopped and not self.segments:
+            print("[realtime] 실시간(WS) 실패 → HTTP 청크 전사로 자동 폴백")
+            try:
+                await self._run_http_fallback(
+                    openai_client, language, translate, translate_model,
+                    doc_type, topic, title, speakers, cfg,
+                )
+                return
+            except Exception:
+                traceback.print_exc()
+
+        # 정상 종료: 풀/검색 정리 후 최종 처리
+        self._stop = True
+        self._translator_pool.shutdown(wait=True, cancel_futures=False)
+        self._web_pool.shutdown(wait=True, cancel_futures=False)
+        if self._searcher is not None:
+            self._searcher.shutdown(wait=True)
         await self._finalize(
             openai_client, language, translate, doc_type, topic, title,
         )
@@ -283,6 +337,9 @@ class BrowserRealtimeSession:
         except Exception as e:
             if not stop_event.is_set():
                 print(f"[realtime] event loop error: {e}")
+                # OpenAI 실시간 WS가 오류로 끊김(beta_api_shape_disabled 등)
+                # → 상위(run_ws_realtime)에서 HTTP 청크 전사로 폴백하도록 표시.
+                self._ws_failed = True
 
     def _handle_event(self, event, language, translate, translate_model,
                       openai_client, topic):
@@ -516,12 +573,17 @@ class BrowserRealtimeSession:
 
                 if "bytes" in data and data["bytes"]:
                     audio_buffer.extend(data["bytes"])
+                    if self._diarize_pp:
+                        self._pcm.extend(data["bytes"])
                 elif "text" in data and data["text"]:
                     msg = json.loads(data["text"])
                     if msg.get("type") == "stop":
                         break
                     elif msg.get("type") == "audio":
-                        audio_buffer.extend(base64.b64decode(msg["data"]))
+                        _b = base64.b64decode(msg["data"])
+                        audio_buffer.extend(_b)
+                        if self._diarize_pp:
+                            self._pcm.extend(_b)
 
                 # 충분한 오디오가 모이면 STT 호출
                 if len(audio_buffer) >= CHUNK_BYTES:
@@ -594,6 +656,47 @@ class BrowserRealtimeSession:
             openai_client, language, translate, doc_type, topic, title,
         )
 
+    def _diarize_postprocess(self, language):
+        """모아둔 세션 PCM(24kHz mono s16le)을 WAV로 저장 후 diarize 모델로 재전사.
+
+        반환: 화자 라벨이 채워진 세그먼트 리스트(start/end/text/speaker) 또는 None.
+        blocking(ffmpeg+STT)이라 finalize에서 asyncio.to_thread로 호출한다.
+        """
+        import wave
+        import tempfile
+        import shutil
+        from meeting_minutes_app.common import config_loader as cfg
+
+        if not self._pcm:
+            return None
+        model_cfg = cfg.get("models.stt", "") or ""
+        diar_model = model_cfg if "diarize" in model_cfg else "gpt-4o-transcribe-diarize"
+
+        tmpdir = tempfile.mkdtemp(prefix="mm_diar_")
+        try:
+            wav_path = os.path.join(tmpdir, "session.wav")
+            with wave.open(wav_path, "wb") as wf:
+                wf.setnchannels(1)
+                wf.setsampwidth(2)       # int16
+                wf.setframerate(24000)   # 브라우저 스트림과 동일
+                wf.writeframes(bytes(self._pcm))
+
+            from meeting_minutes_app.meeting_pipeline import stt
+            segs = stt.run_stt(
+                wav_path, diar_model,
+                language=None if (language in (None, "auto")) else language,
+                work_dir=tmpdir,
+            )
+            # 화자가 하나도 안 붙었으면(모델이 라벨 미제공) 후처리 이득이 없으니 원본 유지
+            if not segs or not any((s.get("speaker") or "").strip() for s in segs):
+                return None
+            return segs
+        finally:
+            try:
+                shutil.rmtree(tmpdir, ignore_errors=True)
+            except Exception:
+                pass
+
     async def _finalize(self, openai_client, language, translate, doc_type, topic, title):
         """세션 종료: 공유 오케스트레이터(finalize.run_post_session)로 회의록/요약 생성.
 
@@ -604,11 +707,35 @@ class BrowserRealtimeSession:
         with self._event_lock:
             segments_snapshot = list(self.segments)
         if not segments_snapshot or not self.session_id:
+            # 세그먼트가 하나도 없는 세션(연결만 하고 발화 없이 종료)은 문서·전사가
+            # 전혀 없어 대시보드에 빈 행으로만 남는다 → 'completed'로 두지 말고 삭제.
             if self.session_id:
-                db.update_session_status(self.session_id, "completed")
+                try:
+                    db.delete_session(self.session_id)
+                except Exception:
+                    db.update_session_status(self.session_id, "completed")
+                self.session_id = None
             return
         # _finalize 전체에서 snapshot 사용 (스레드 안전)
         self.segments = segments_snapshot
+
+        # F2: 화자분리 후처리(opt-in). 모아둔 PCM을 diarize 모델로 재전사해 speaker를
+        # 채우고 세그먼트를 교체한다 — 이후 회의록/요약 생성이 화자 라벨을 반영한다.
+        # 완전 best-effort: 어떤 실패든 원본 세그먼트를 그대로 유지한다.
+        if self._diarize_pp and self._pcm and self.session_id:
+            try:
+                await self.ws.send_json({"type": "status", "message": "화자 분리 후처리 중..."})
+            except Exception:
+                pass
+            try:
+                diar_segs = await asyncio.to_thread(self._diarize_postprocess, language)
+                if diar_segs:
+                    db.replace_segments(self.session_id, diar_segs)
+                    self.segments = diar_segs
+                    segments_snapshot = diar_segs
+                    print(f"[diarize-pp] 화자분리 완료: {len(diar_segs)}개 세그먼트")
+            except Exception as e:
+                print(f"[diarize-pp] 실패(원본 유지): {e}")
 
         await self.ws.send_json({"type": "generating", "message": "회의록 생성 중..."})
 

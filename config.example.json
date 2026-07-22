@@ -5,24 +5,19 @@
     "복사: copy config.example.json config.json  (Windows)",
     "복사: cp config.example.json config.json    (Mac/Linux)"
   ],
-
   "_config_version_comment": "스키마 버전 — 앱 시작 시 자동 마이그레이션(누락 키 기본값 주입)에 사용. 직접 수정하지 마세요.",
   "config_version": 1,
-
   "api": {
     "_comment": "API 키 — 비워 두세요(웹 [설정]에서 입력). 예시 형식은 sk-proj-.../sk-ant-... · 환경변수(OPENAI_API_KEY 등)가 있으면 환경변수 우선",
-    "openai_api_key":    "",
+    "openai_api_key": "",
     "anthropic_api_key": ""
   },
-
   "ssl": {
-    "_comment": "회사/학교 네트워크에서 SSL 오류 시 false 로 설정",
-    "verify": false
+    "_comment": "OpenAI/Anthropic 등 외부 API 호출의 SSL 인증서 검증. 기본 true(권장). 회사/학교망 SSL 검사로 인증서 오류가 나면 false 로 설정(단, MITM 노출 위험).",
+    "verify": true
   },
-
   "models": {
     "_comment": "아래 _options 목록에서 선택해 값을 변경하세요.",
-
     "_stt_options": [
       "gpt-4o-mini-transcribe",
       "gpt-4o-mini-transcribe-2025-12-15",
@@ -31,11 +26,12 @@
       "whisper-1"
     ],
     "stt": "gpt-4o-mini-transcribe",
-
     "_llm_comment": "회의록/요약/용어보완 생성 LLM. STT(음성인식)는 항상 OpenAI 사용(하이브리드).",
-    "_llm_options": ["gpt", "claude"],
+    "_llm_options": [
+      "gpt",
+      "claude"
+    ],
     "llm": "claude",
-
     "_gpt_model_options": [
       "gpt-4o",
       "gpt-4o-mini",
@@ -45,65 +41,78 @@
     ],
     "_gpt_model_note": "o1/o3 계열은 reasoning 모델 — 품질은 높으나 느리고 비용 높음",
     "gpt_model": "gpt-4o-mini",
-
     "_minutes_model_comment": "회의록 생성 모델 — 미설정 시 gpt_model 사용 (상세 기록이므로 고성능 모델 권장)",
     "minutes_model": "gpt-4o",
-
     "_summary_model_comment": "요약본 생성 모델 — 미설정 시 gpt_model 사용",
     "summary_model": "gpt-4o",
-
     "_claude_model_options": [
       "claude-opus-4-6",
       "claude-sonnet-4-6",
       "claude-haiku-4-5-20251001"
     ],
     "claude_model": "claude-opus-4-8",
-
-    "_translate_model_options": ["gpt-4o-mini", "gpt-4o"],
+    "_translate_model_options": [
+      "gpt-4o-mini",
+      "gpt-4o"
+    ],
     "translate_model": "gpt-4o-mini"
   },
-
   "realtime": {
     "_comment": "실시간 녹취(realtime_transcription.py) 기본값",
-
-    "_language_options": ["en", "ko", "auto"],
+    "_language_options": [
+      "en",
+      "ko",
+      "auto"
+    ],
     "language": "en",
-
     "translate": false,
     "chunk_duration": 3.0,
-
-    "_type_options": ["meeting", "seminar", "lecture"],
+    "_type_options": [
+      "meeting",
+      "seminar",
+      "lecture"
+    ],
     "type": "meeting",
-
     "_audio_backup_comment": "true 시 세션 오디오를 PCM 파일로 백업 (크래시 복구용, ~115MB/hr)",
     "audio_backup": true,
-
     "_mode_comment": "auto=WS 실시간 우선 후 실패 시 HTTP 폴백(추천), ws=WebSocket 스트리밍(~1초 지연, 비용 ~3배), http=청크(안정·저비용)",
-    "_mode_options": ["auto", "ws", "http"],
-    "mode": "auto",
-
+    "_mode_options": [
+      "auto",
+      "ws",
+      "http"
+    ],
+    "mode": "http",
     "_vad_comment": "HTTP 모드 VAD(webrtcvad) 튜닝 — 미설정 시 기본값(30ms/6.0s/0.5s/공격성2)",
     "vad_frame_ms": 30,
     "vad_max_chunk_sec": 6.0,
     "vad_silence_sec": 0.5,
     "vad_aggressiveness": 2,
-
     "_ws_vad_comment": "WebSocket 모드 VAD 설정 — server_vad(빠름) 또는 semantic_vad(자연스러움)",
-    "_ws_vad_options": ["server_vad", "semantic_vad"],
+    "_ws_vad_options": [
+      "server_vad",
+      "semantic_vad"
+    ],
     "ws_vad_type": "server_vad",
-
     "_ws_vad_eagerness_comment": "semantic_vad 전용 — 발화 종료 판단 민감도",
-    "_ws_vad_eagerness_options": ["low", "medium", "high", "auto"],
+    "_ws_vad_eagerness_options": [
+      "low",
+      "medium",
+      "high",
+      "auto"
+    ],
     "ws_vad_eagerness": "medium",
-
     "_ws_noise_reduction_comment": "WebSocket 노이즈 리덕션 — near_field(헤드셋), far_field(회의실)",
-    "_ws_noise_reduction_options": ["near_field", "far_field", null],
+    "_ws_noise_reduction_options": [
+      "near_field",
+      "far_field",
+      null
+    ],
     "ws_noise_reduction": "near_field",
-
     "_email_on_finish_comment": "실시간 녹음 종료 후 회의록을 이메일로 자동 발송(email 섹션 설정 필요)",
-    "email_on_finish": false
+    "email_on_finish": false,
+    "_diarize_postprocess_comment": "웹 실시간 녹음 종료 후, 모아둔 오디오를 gpt-4o-transcribe-diarize로 재전사해 '누가 말했는지'(화자) 라벨을 채움. 실시간 화면엔 화자가 안 나오지만 최종 회의록엔 반영됨. STT를 한 번 더 호출하므로 비용·시간 추가, 메모리 약 173MB/시간. 기본 꺼짐.",
+    "diarize_postprocess": false
   },
-
   "email": {
     "_comment": [
       "Gmail 앱 비밀번호: https://myaccount.google.com/apppasswords (2단계 인증 먼저)",
@@ -112,15 +121,14 @@
       "  → 회사 비밀번호 또는 앱 비밀번호 사용. 테넌트가 SMTP AUTH 차단 시 IT에 허용 요청.",
       "smtp_host 가 비어있으면 발신자 도메인으로 자동 추정(gmail/naver/outlook 인식)."
     ],
-    "sender":    "",
-    "password":  "",
+    "sender": "",
+    "password": "",
     "recipient": "",
     "_markdown_attachment_comment": "메일에서 .md 한글이 깨지는 클라이언트가 많아 기본은 UTF-8 .txt로 변환 첨부. markdown으로 두면 text/markdown 유지.",
     "markdown_attachment": "txt",
     "smtp_host": "",
     "smtp_port": 0
   },
-
   "notify": {
     "_comment": [
       "on_finish: 배치 처리 완료 시 --notify 없이도 자동 발송할 채널(email/slack/teams). 끄려면 null.",
@@ -129,23 +137,26 @@
       "환경변수 SLACK_WEBHOOK_URL / TEAMS_WEBHOOK_URL 도 지원"
     ],
     "on_finish": "email",
-    "slack": { "webhook_url": "" },
-    "teams": { "webhook_url": "" }
+    "slack": {
+      "webhook_url": ""
+    },
+    "teams": {
+      "webhook_url": ""
+    }
   },
-
   "obsidian": {
     "_comment": [
       "Obsidian 'Local REST API (with MCP)' 플러그인 연동 설정.",
       "토큰 발급: Obsidian → 설정 → Local REST API → 'API Key' 복사",
       "enabled:false 또는 api_key 미설정 시 Obsidian 기록을 건너뜀(파일 출력만 유지)."
     ],
-    "enabled":      false,
+    "enabled": false,
     "_exe_path_comment": "Obsidian 실행 파일 경로. 설정 시 파이프라인 시작 전 자동 실행. 예: C:\\tools\\Obsidian\\Obsidian.exe",
-    "exe_path":     "",
-    "api_url":      "https://127.0.0.1:27124",
-    "api_key":      "",
+    "exe_path": "",
+    "api_url": "https://127.0.0.1:27124",
+    "api_key": "",
     "_vault_path_comment": "실제 Obsidian 볼트 루트. 예: D:\\Obsidian\\MyVault. Local REST API가 보고 있는 열린 볼트와 같아야 합니다.",
-    "vault_path":   "",
+    "vault_path": "",
     "notes_subdir": "00_Meetings",
     "_meetings_path_comment": "선택: 회의록을 notes_subdir/<프로젝트> 대신 특정 볼트 상대경로에 바로 저장. {year}/{yyyy}/{yy}/{month} 토큰 + {project}(project_domains로 해석된 도메인 폴더명) 토큰 사용 가능. 여러 도메인을 한 볼트에서 운영하려면 project_domains를 여러 개 등록하고 여기에 {project}를 넣으면 도메인별로 자동 분리 저장됨. 예: {project}/01_회의_세미나/회의별/{year}",
     "meetings_path": "",
@@ -153,14 +164,14 @@
     "transcripts_path": "",
     "_transcript_mode_comment": "전체 STT 전사 저장 방식: separate=별도 전사 노트/파일, append=회의록 본문에 포함, off=저장 안 함",
     "transcript_mode": "separate",
-    "refs_subdir":  "01_References",
+    "refs_subdir": "01_References",
     "_project_comment": "프로젝트명(=도메인). meetings_path에 {project} 토큰이 있으면 project_domains로 해석된 값이 거기에 채워지고, meetings_path가 비어 있으면 회의록·용어가 notes_subdir/<도메인>, 01_References/<도메인>으로 묶임. CLI `--project` 플래그로 config 수정 없이 세션 단위 오버라이드 가능(예: prep-brief --project PhysicalAI).",
-    "project":      "",
+    "project": "",
     "_project_domains_comment": "domain 모드 카테고리(meeting_categories 참고)의 아카이브 경로 매핑 + 수동 --project 오버라이드 해석용. meetings_path의 {project} 토큰이 여기서 해석된다. 부분일치(대소문자·공백·- _ 무시). 값에 슬래시를 넣어 상위 컨테이너 폴더로 묶을 수 있음(예: 'Archive/도메인_아카이브'). 주의: meeting_categories에서 mode:'domain'으로 등록한 카테고리는 반드시 여기에도 같은 키로 등록해야 한다 — 안 하면 classify_meeting_route가 'folder'로 처리하지 못하고(domain 모드인데 project_domains가 없으면) 경로가 어긋난다. 예: {\"양자\": \"Archive/도메인_아카이브\", \"PhysicalAI\": \"Archive/PhysicalAI_통합아카이브\"}",
     "project_domains": {},
     "_ref_domains_comment": "참조노트(01_References) 하위 폴더명 매핑 — project_domains/meeting_categories와는 독립적인 별도 설정이다(회의 저장 경로와 참조노트 경로는 다른 관심사). 여기 없으면 project_domains 값의 마지막 경로 조각(슬래시 이후)을 쓰고, 그마저 없으면 project명 그대로, 최종 폴백은 '공통'. 이미 수동으로 만들어둔 참조노트 폴더가 있으면(예: 01_References/퀀텀) 여기에 등록해서 새 폴더가 따로 안 생기게 한다. 예: {\"양자\": \"퀀텀\", \"백서온톨로지\": \"GraphDB-온톨로지\"}",
     "ref_domains": {},
-    "verify_ssl":   false,
+    "verify_ssl": false,
     "_planning_path_comment": "prep-brief 명령이 저장할 볼트 상대경로. 기본: Planning/Prep Briefs",
     "planning_path": "Planning/Prep Briefs",
     "_papers_path_comment": "선택: 세미나/논문 노트를 저장할 볼트 상대경로. {year}/{yyyy}/{yy}/{month} + {project} 토큰 사용 가능. 예: {project}/02_이론_학습/논문DB/{year}",
@@ -172,16 +183,20 @@
     "_auto_register_categories_comment": "true면 키워드 매칭이 전부 실패했을 때 LLM이 새로 발견한 반복 주제(예: 'Claude TF')를 meeting_categories에 folder 모드로 자동 등록해 config.json에 저장 — 다음부터는 같은 주제가 키워드만으로 인식됨. 일회성 회의는 LLM이 '기타'로 판단해 등록하지 않음. 새 카테고리는 항상 folder 모드로만 등록되고 domain 모드 승격은 수동으로 한다. false면 매번 LLM에게 물어보되 저장은 안 함.",
     "auto_register_categories": true
   },
-
   "output_dir": "./output",
-
   "vault_watcher": {
     "_comment": "음성 파일 폴더 자동 감시 및 처리 파이프라인. enabled:true 로 활성화.",
     "enabled": false,
     "watch_folders": [],
     "output_folder": "Inbox/Processed Recordings",
     "processed_state_path": "data/processed_audio.json",
-    "supported_extensions": ["mp3", "m4a", "wav", "webm", "mp4"],
+    "supported_extensions": [
+      "mp3",
+      "m4a",
+      "wav",
+      "webm",
+      "mp4"
+    ],
     "poll_interval": 10,
     "stability_checks": 3,
     "stability_interval": 2.0,
@@ -190,7 +205,6 @@
     "_process_timeout_sec_comment": "legacy-watcher가 파일 1개 처리에 허용하는 최대 시간(초)",
     "process_timeout_sec": 3600
   },
-
   "indexing": {
     "_comment": "볼트 .md 파일 키워드 인덱스 — wiki_ask 및 관련 노트 자동 링크에 사용.",
     "enabled": true,
@@ -201,7 +215,6 @@
     "_vault_path_comment": "비우면 obsidian.vault_path 를 공유. 직접 파일시스템 접근 경로이며 Local REST API 볼트와 같아야 검색/저장 경로가 어긋나지 않습니다.",
     "vault_path": ""
   },
-
   "wiki": {
     "_comment": "LLM Wiki Q&A 및 실시간 사실 검증 설정.",
     "citation_required": true,
@@ -218,13 +231,16 @@
     "_realtime_interval_comment": "N개 세그먼트마다 1회 검색 (0=매 세그먼트, throttle)",
     "realtime_search_interval": 3,
     "_realtime_backend_comment": "실시간 검색 백엔드 — auto=로컬 인덱스 우선·Obsidian REST 폴백, index=인덱스만, rest=REST만",
-    "_realtime_backend_options": ["auto", "index", "rest"],
+    "_realtime_backend_options": [
+      "auto",
+      "index",
+      "rest"
+    ],
     "realtime_search_backend": "auto",
     "_realtime_fact_check_comment": "실시간 전사 중 발화 내용을 vault 노트와 비교해 충돌·검증 필요 항목 표시 (향후 구현)",
     "realtime_fact_check": false,
     "_realtime_web_search_interval_comment": "웹 검색을 트리거할 세그먼트 간격 (0=사용 안 함)",
     "realtime_web_search_interval": 0,
-
     "_vault_enrich_comment": "회의록 생성 후 엔티티(용어/인물/기관) 추출 → vault에서 관련 노트 찾아 링크. 추가 LLM 호출 1회.",
     "vault_enrich": true,
     "_claim_verify_comment": "회의 주장을 vault 노트와 비교해 충돌/일치/확인불가 판정. 주장 수만큼 LLM 추가 호출.",
@@ -235,7 +251,6 @@
     "claim_source_max_chars": 5000,
     "_claim_web_verify_comment": "vault 불확실·충돌 주장에 대해 웹 전문가 의견 추가 검색 (Claude web_search → GPT 폴백, 주장당 LLM 호출 추가 발생)",
     "claim_web_verify": false,
-
     "_domain_routing_comment": [
       "도메인 라우팅 사실검증 — domain_keywords에 주 지식 도메인(예: 양자컴퓨팅) 키워드를 넣으면",
       "도메인 내 주장은 vault/그래프 우선 검증, 도메인 외 주장은 웹 검색 검증으로 직행합니다.",
@@ -256,7 +271,6 @@
     "_domain_relevance_keywords_comment": "vault 검색 결과 관련도 가산점 마커(note_domain_score). 비우면 내장 기본값(과거 하드코딩값, 양자 도메인 위주) 사용. 다른 도메인을 추가하면 그 도메인 마커도 이 리스트에 합쳐서 넣어야 해당 도메인 노트가 검색 상위에 정상적으로 노출됨.",
     "domain_relevance_keywords": []
   },
-
   "wiki_knowledge": {
     "_comment": "Wiki 지식 순환 설정 — prep-brief, registry, wiki update proposal",
     "enabled": true,
@@ -290,7 +304,6 @@
     "_doc_type_classify_llm_comment": "파일명 키워드로 문서 유형(meeting/seminar/lecture)을 못 정했을 때, STT 완료 후 전사 내용으로 LLM이 보완 판단. wiki.domain_classify_llm(클레임 검증용)과는 별개 플래그.",
     "doc_type_classify_llm": true
   },
-
   "mcp": {
     "_comment": [
       "Wiki Knowledge Graph를 원격 MCP 서버(/mcp)로 노출 — Claude Cowork 커스텀 커넥터 연동용.",
@@ -301,7 +314,6 @@
     ],
     "allowed_tokens": []
   },
-
   "supermemory": {
     "_comment": [
       "회의록 저장 시 Supermemory에도 동시 저장, 다음 회의 컨텍스트 빌딩 시 자동 조회.",
@@ -314,11 +326,15 @@
     "api_key": "",
     "base_url": "https://api.supermemory.ai"
   },
-
   "analysis": {
     "_comment": "분석 프롬프트 템플릿 설정. prompts/ 폴더의 .md 파일로 교체 가능.",
     "templates_dir": "prompts",
-    "_default_type_options": ["meeting", "seminar", "lecture", "memo"],
+    "_default_type_options": [
+      "meeting",
+      "seminar",
+      "lecture",
+      "memo"
+    ],
     "default_type": "meeting",
     "_entity_aliases_comment": [
       "STT가 자주 오인식하는 표기 → 정식 명칭 치환 맵 (부분일치, 대소문자 무시).",

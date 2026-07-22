@@ -13,7 +13,11 @@ config_schema.py — 설정 스키마 단일 소스
   2) 여기 해당 그룹의 fields 에 한 줄 추가(웹 노출용 UI 메타).
 
 field 키: section, key, label, type(text|password|bool|select|number),
-  default, desc, options([str|{value,label}]), sensitive, mirror, placeholder
+  default, desc, options([str|{value,label}]), sensitive, mirror, placeholder,
+  picker(bool: 폴더 선택 '찾아보기' 버튼 표시), required(bool: 필수값 * 표시/경고)
+그룹 키: id, label, desc, advanced(bool: 웹에서 기본 접힘 '고급 설정')
+
+key 에 점(.)이 있으면 중첩 경로로 해석된다(예: "slack.webhook_url" → notify.slack.webhook_url).
 ============================================================
 """
 
@@ -28,9 +32,9 @@ SCHEMA: List[Dict[str, Any]] = [
         "label": "API 키",
         "desc": "키는 이 PC의 config.json 에만 저장되며 화면에는 마스킹되어 표시됩니다.",
         "fields": [
-            {"section": "api", "key": "openai_api_key", "label": "OpenAI API 키 (필수)", "type": "password", "sensitive": True, "default": "", "placeholder": "sk-proj-...", "desc": "음성 인식(STT)과 회의록 생성에 사용."},
+            {"section": "api", "key": "openai_api_key", "label": "OpenAI API 키 (필수)", "type": "password", "sensitive": True, "required": True, "default": "", "placeholder": "sk-proj-...", "desc": "음성 인식(STT)과 회의록 생성에 사용."},
             {"section": "api", "key": "anthropic_api_key", "label": "Anthropic(Claude) API 키 (선택)", "type": "password", "sensitive": True, "default": "", "placeholder": "sk-ant-...", "desc": "회의록 생성 AI를 Claude로 쓸 때 필요."},
-            {"section": "ssl", "key": "verify", "label": "SSL 인증서 검증", "type": "bool", "default": False, "desc": "회사/학교망에서 SSL 오류가 나면 끄세요."},
+            {"section": "ssl", "key": "verify", "label": "SSL 인증서 검증", "type": "bool", "default": True, "desc": "기본값 켜짐(권장). 회사/학교망 SSL 검사로 인증서 오류가 나면 이 옵션을 끄세요 — 단, MITM 노출 위험이 있으니 필요할 때만."},
         ],
     },
     {
@@ -52,7 +56,7 @@ SCHEMA: List[Dict[str, Any]] = [
         "label": "저장 위치",
         "desc": "만들어진 회의록 파일이 어디에 저장될지 정합니다. Obsidian 볼트를 연결했다면 회의록은 볼트에도 저장되며, 아래 폴더에는 항상 사본이 남습니다. 잘 모르겠으면 그대로 두세요.",
         "fields": [
-            {"section": "output_dir", "key": "", "label": "결과물 저장 폴더", "type": "text", "default": "./output", "scalar": True, "desc": "회의록·요약·전사(.md/.txt) 결과 파일이 저장되는 폴더입니다. 기본값 ./output 은 프로그램 옆 MeetingMinutesData\\output 폴더를 뜻합니다. 특정 위치에 모으려면 절대경로를 넣으세요(예: D:\\Minutes)."},
+            {"section": "output_dir", "key": "", "label": "결과물 저장 폴더", "type": "text", "default": "./output", "scalar": True, "picker": True, "desc": "회의록·요약·전사(.md/.txt) 결과 파일이 저장되는 폴더입니다. 기본값 ./output 은 프로그램 옆 MeetingMinutesData\\output 폴더를 뜻합니다. 특정 위치에 모으려면 절대경로를 넣으세요(예: D:\\Minutes)."},
             {"section": "analysis", "key": "templates_dir", "label": "AI 프롬프트 폴더 (고급)", "type": "text", "default": "prompts", "desc": "회의록을 만들 때 쓰는 AI 지시문(.md) 폴더입니다. 문구를 직접 바꾸고 싶은 게 아니면 기본값(prompts) 그대로 두세요."},
             {"section": "analysis", "key": "default_type", "label": "기본 문서 유형", "type": "select", "default": "meeting", "options": ["meeting", "seminar", "lecture", "memo"], "desc": "유형을 따로 고르지 않았을 때 적용되는 기본값입니다(회의/세미나/강의/메모)."},
         ],
@@ -63,11 +67,11 @@ SCHEMA: List[Dict[str, Any]] = [
         "desc": "볼트 폴더만 지정하면 REST API 없이도 회의록이 그 폴더의 .md로 저장되고 위키 검색에 쓰입니다. Local REST API는 Obsidian 앱에 실시간 반영이 필요할 때만 켜세요.",
         "fields": [
             {"section": "obsidian", "key": "enabled", "label": "Obsidian REST 저장 사용", "type": "bool", "default": False, "desc": "켜면 Local REST API로 Obsidian 앱에 직접 기록. 꺼도 볼트 폴더가 있으면 .md로 저장됨."},
-            {"section": "obsidian", "key": "vault_path", "label": "Obsidian 볼트 폴더", "type": "text", "default": "", "placeholder": r"D:\Obsidian\MyVault", "desc": "회의록을 저장할 볼트 루트. 검색 인덱스 경로에도 함께 반영됩니다.", "mirror": [["indexing", "vault_path"]]},
+            {"section": "obsidian", "key": "vault_path", "label": "Obsidian 볼트 폴더", "type": "text", "default": "", "placeholder": r"D:\Obsidian\MyVault", "picker": True, "desc": "회의록을 저장할 볼트 루트. 검색 인덱스 경로에도 함께 반영됩니다.", "mirror": [["indexing", "vault_path"]]},
             {"section": "obsidian", "key": "api_url", "label": "Local REST API 주소", "type": "text", "default": "https://127.0.0.1:27124"},
             {"section": "obsidian", "key": "api_key", "label": "Local REST API 키", "type": "password", "sensitive": True, "default": "", "desc": "Obsidian → 설정 → Local REST API 에서 발급."},
             {"section": "obsidian", "key": "verify_ssl", "label": "REST SSL 검증", "type": "bool", "default": False},
-            {"section": "obsidian", "key": "exe_path", "label": "Obsidian 실행파일 경로(선택)", "type": "text", "default": "", "placeholder": r"C:\...\Obsidian.exe", "desc": "설정 시 처리 전 Obsidian 자동 실행."},
+            {"section": "obsidian", "key": "exe_path", "label": "Obsidian 실행파일 경로(선택)", "type": "text", "default": "", "placeholder": r"C:\...\Obsidian.exe", "picker": True, "desc": "설정 시 처리 전 Obsidian 자동 실행. (파일 선택 후 폴더가 아닌 Obsidian.exe 경로로 조정하세요.)"},
             {"section": "obsidian", "key": "notes_subdir", "label": "회의록 기본 폴더", "type": "text", "default": "00_Meetings"},
             {"section": "obsidian", "key": "meetings_path", "label": "회의록 저장 경로(선택)", "type": "text", "default": "", "desc": "비우면 회의록 기본 폴더/<프로젝트>에 저장. {year}/{project} 토큰 사용 가능."},
             {"section": "obsidian", "key": "transcripts_path", "label": "전사 저장 경로(선택)", "type": "text", "default": "", "desc": "비우면 회의록과 같은 폴더."},
@@ -82,10 +86,11 @@ SCHEMA: List[Dict[str, Any]] = [
     },
     {
         "id": "realtime",
+        "advanced": True,
         "label": "실시간 녹취",
         "desc": "실시간 녹음/전사 기본값입니다.",
         "fields": [
-            {"section": "realtime", "key": "mode", "label": "전사 방식", "type": "select", "default": "auto", "desc": "auto=WebSocket 실시간 우선, 실패(사내망 차단 등) 시 HTTP 청크로 자동 폴백. 비용을 아끼려면 http.", "options": [{"value": "auto", "label": "auto — 자동(WS 우선·폴백, 추천)"}, {"value": "ws", "label": "ws — WebSocket 스트리밍(단어별 실시간·비용↑)"}, {"value": "http", "label": "http — 청크(안정·저비용)"}]},
+            {"section": "realtime", "key": "mode", "label": "전사 방식", "type": "select", "default": "http", "desc": "http=5초 단위 청크 전사(안정·권장). auto/ws는 OpenAI 실시간 WebSocket을 쓰는데, 현재 OpenAI가 구 Beta 실시간 API를 종료해 대부분 실패하며 http로 자동 폴백됩니다. 특별한 이유가 없으면 http 유지.", "options": [{"value": "http", "label": "http — 청크(안정·권장)"}, {"value": "auto", "label": "auto — WS 우선·실패 시 http 폴백"}, {"value": "ws", "label": "ws — WebSocket 전용(현재 대부분 미지원)"}]},
             {"section": "realtime", "key": "language", "label": "기본 언어", "type": "select", "default": "en", "options": ["en", "ko", "auto"]},
             {"section": "realtime", "key": "type", "label": "기본 문서 유형", "type": "select", "default": "meeting", "options": ["meeting", "seminar", "lecture"]},
             {"section": "realtime", "key": "translate", "label": "번역 사용", "type": "bool", "default": False},
@@ -99,6 +104,7 @@ SCHEMA: List[Dict[str, Any]] = [
     },
     {
         "id": "features",
+        "advanced": True,
         "label": "기능 토글",
         "desc": "부가 기능을 켜고 끕니다.",
         "fields": [
@@ -120,6 +126,7 @@ SCHEMA: List[Dict[str, Any]] = [
     },
     {
         "id": "wiki_detail",
+        "advanced": True,
         "label": "위키/검증 세부",
         "desc": "위키 Q&A·사실검증 세부 설정.",
         "fields": [
@@ -137,6 +144,7 @@ SCHEMA: List[Dict[str, Any]] = [
     },
     {
         "id": "indexing",
+        "advanced": True,
         "label": "검색 인덱스",
         "desc": "볼트 .md 키워드 인덱스 설정.",
         "fields": [
@@ -161,14 +169,18 @@ SCHEMA: List[Dict[str, Any]] = [
     },
     {
         "id": "notify",
+        "advanced": True,
         "label": "알림 (선택)",
-        "desc": "처리 완료 시 알림 채널. Slack/Teams Webhook URL 은 아래 '고급: 전체 설정'에서 입력하세요.",
+        "desc": "처리 완료 시 알림 채널.",
         "fields": [
             {"section": "notify", "key": "on_finish", "label": "완료 알림 채널", "type": "select", "default": "email", "options": [{"value": "email", "label": "email"}, {"value": "slack", "label": "slack"}, {"value": "teams", "label": "teams"}, {"value": "none", "label": "none — 끔"}]},
+            {"section": "notify", "key": "slack.webhook_url", "label": "Slack Webhook URL", "type": "password", "sensitive": True, "default": "", "placeholder": "https://hooks.slack.com/services/...", "desc": "알림 채널을 slack 으로 쓸 때 필요. Slack 채널 → 앱 → Incoming Webhooks 에서 발급."},
+            {"section": "notify", "key": "teams.webhook_url", "label": "Teams Webhook URL", "type": "password", "sensitive": True, "default": "", "placeholder": "https://outlook.office.com/webhook/...", "desc": "알림 채널을 teams 로 쓸 때 필요. Teams 채널 → 커넥터 → Incoming Webhook 에서 발급."},
         ],
     },
     {
         "id": "supermemory",
+        "advanced": True,
         "label": "Supermemory (선택)",
         "desc": "Supermemory 연동을 켠 경우에만 필요.",
         "fields": [

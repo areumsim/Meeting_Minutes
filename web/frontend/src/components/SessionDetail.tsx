@@ -3,9 +3,10 @@ import { Share as ShareIcon, ArrowLeft, Copy, Download, Loader2, CheckCircle, Cl
   FileText, List, Zap, AlertCircle, RefreshCw, Send, Network
 } from "lucide-react";
 import { motion } from "motion/react";
+import Markdown from "./Markdown";
 import { Share } from '@capacitor/share';
 import { getSession, getSessionStatus, generateSummaryForSession, getTargetEmail,
-  getSessionGraph, getNodeNeighbors } from "../lib/api";
+  getSessionGraph, getNodeNeighbors, getUploadProgress, getSessionCost, cancelUpload, type SessionCost } from "../lib/api";
 import { formatDuration, formatTime } from "../lib/format";
 import type { Session, Segment, Document as Doc, SessionGraph, GraphNeighbors } from "../lib/types";
 
@@ -40,6 +41,23 @@ export default function SessionDetail({ id, onBack }: Props) {
   const [expandedNodeId, setExpandedNodeId] = useState<string | null>(null);
   const [neighborsCache, setNeighborsCache] = useState<Record<string, GraphNeighbors>>({});
   const [neighborsLoading, setNeighborsLoading] = useState<string | null>(null);
+  const [progress, setProgress] = useState<{ percent: number; stage: string; elapsed: number } | null>(null);
+  const [cost, setCost] = useState<SessionCost | null>(null);
+  const [cancelling, setCancelling] = useState(false);
+
+  const handleCancel = async () => {
+    if (!window.confirm("처리를 취소하시겠습니까? 현재 단계가 끝나면 중단되고 이 세션은 삭제됩니다.")) return;
+    setCancelling(true);
+    const r = await cancelUpload(id);
+    if (!r.ok) {
+      setCancelling(false);
+      alert(r.message || "취소할 수 없습니다.");
+      return;
+    }
+    // 성공: 백그라운드가 다음 단계 경계에서 중단·세션 삭제. 목록으로 복귀한다
+    // (STT 등 긴 단계 실행 중이면 그 단계가 끝난 뒤 실제 중단됨).
+    onBack();
+  };
 
   const load = async () => {
     try {
@@ -47,6 +65,9 @@ export default function SessionDetail({ id, onBack }: Props) {
       setSession(data.session);
       setSegments(data.segments || []);
       setDocuments(data.documents || []);
+      if (data.session?.status === "completed") {
+        getSessionCost(id).then((c) => { if (c?.ok) setCost(c); });
+      }
     } catch (e) {
       console.error(e);
     }
@@ -95,9 +116,11 @@ export default function SessionDetail({ id, onBack }: Props) {
     const t = setInterval(async () => {
       try {
         const s = await getSessionStatus(id);
-        if (s.status !== "processing") load();
+        if (s.status !== "processing") { setProgress(null); load(); return; }
+        const p = await getUploadProgress(id);
+        if (p.found) setProgress({ percent: p.percent ?? 0, stage: p.stage ?? "", elapsed: p.elapsed ?? 0 });
       } catch { /* ignore */ }
-    }, 3000);
+    }, 2000);
     return () => clearInterval(t);
   }, [id]);
 
@@ -206,9 +229,17 @@ export default function SessionDetail({ id, onBack }: Props) {
                <AlertCircle size={14} className="text-red-500" />}
               {({ completed: "완료", processing: "처리 중", error: "오류" } as Record<string, string>)[session.status] || session.status}
             </span>
-            <span>{({ meeting: "회의", seminar: "세미나", lecture: "강의" } as Record<string, string>)[session.type] || session.type}</span>
+            <span>{({ meeting: "회의", seminar: "세미나", lecture: "강의", prep: "회의 준비" } as Record<string, string>)[session.type] || session.type}</span>
             {session.duration_sec > 0 && <span>{formatDuration(session.duration_sec)}</span>}
             {session.translate ? <span className="text-amber-600">번역됨</span> : null}
+            {cost && typeof cost.total === "number" && (
+              <span
+                className="flex items-center gap-1 text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-md font-medium"
+                title={`STT $${cost.stt} + 번역 $${cost.translate} + 회의록 $${cost.minutes} (${cost.stt_model}) · 대략치`}
+              >
+                💵 예상 ${cost.total?.toFixed(3)}
+              </span>
+            )}
             {session.source === "cli" && <span className="text-zinc-400">CLI</span>}
           </div>
         </div>
@@ -218,13 +249,51 @@ export default function SessionDetail({ id, onBack }: Props) {
       </div>
 
       {session.status === "processing" ? (
-        <div className="bg-white border border-brand-200 rounded-3xl p-16 text-center">
+        <div className="bg-white border border-brand-200 rounded-3xl p-12 md:p-16 text-center">
           <Loader2 size={48} className="mx-auto text-amber-500 animate-spin mb-6" />
           <h3 className="text-xl font-bold mb-2">처리 중입니다...</h3>
-          <p className="text-brand-500">AI가 회의 문서를 생성하고 있습니다. 이 화면은 자동으로 갱신됩니다.</p>
+          <p className="text-brand-500 mb-6">AI가 회의 문서를 생성하고 있습니다. 이 화면은 자동으로 갱신됩니다.</p>
+          {progress && (
+            <div className="max-w-md mx-auto">
+              <div className="flex items-center justify-between text-sm mb-2">
+                <span className="font-semibold text-brand-700">{progress.stage || "처리 중"}</span>
+                <span className="font-mono text-brand-500">{progress.percent}%</span>
+              </div>
+              <div className="h-2.5 bg-brand-100 rounded-full overflow-hidden">
+                {/* STT 단계는 내부 진행률이 없어 퍼센트가 한동안 멈춘 것처럼 보인다.
+                    실제로는 동작 중임을 알리도록 이동 애니메이션(pulse)을 겹쳐 보여준다. */}
+                <div
+                  className={`h-full bg-emerald-500 rounded-full transition-all duration-500 ${progress.percent < 100 ? "animate-pulse" : ""}`}
+                  style={{ width: `${Math.max(3, progress.percent)}%` }}
+                />
+              </div>
+              <p className="text-xs text-brand-400 mt-2">
+                경과 {formatDuration(progress.elapsed)} · 오디오 길이·서버 상황에 따라 수 분 걸릴 수 있습니다.
+                {progress.stage.includes("STT") || progress.stage.includes("음성 인식")
+                  ? " (음성 인식은 파일 길이에 비례해 가장 오래 걸리며, 이 구간에서는 퍼센트가 잠시 멈춘 것처럼 보일 수 있습니다.)"
+                  : ""}
+              </p>
+            </div>
+          )}
+          <button
+            onClick={handleCancel}
+            disabled={cancelling}
+            className="mt-8 inline-flex items-center gap-2 px-5 py-2.5 bg-red-50 text-red-600 rounded-xl text-sm font-semibold hover:bg-red-100 transition-all disabled:opacity-50"
+          >
+            {cancelling ? <Loader2 size={16} className="animate-spin" /> : <AlertCircle size={16} />}
+            {cancelling ? "취소 중..." : "처리 취소"}
+          </button>
         </div>
       ) : (
         <div className="bg-white border border-brand-200 rounded-3xl shadow-xl overflow-hidden">
+          {/* 회의 준비(prep) 세션은 브리핑 문서 1개만 생성되므로 스크립트·사실확인 등
+              다른 탭이 없다. 사용자가 "탭이 비었다"고 오해하지 않도록 안내한다. */}
+          {session.type === "prep" && (
+            <div className="px-6 py-3 bg-brand-50 border-b border-brand-200 text-sm text-brand-600 flex items-center gap-2">
+              <FileText size={14} className="shrink-0" />
+              회의 준비 브리핑 세션입니다 — 아래 <b>회의록</b> 탭에 브리핑이 들어 있습니다(스크립트·사실확인 등 다른 문서는 생성되지 않습니다).
+            </div>
+          )}
           {/* Tabs */}
           <div className="flex border-b border-brand-200 overflow-x-auto scrollbar-hide">
             {tabs.filter(t => isTabAvailable(t.key)).map(t => (
@@ -342,15 +411,13 @@ export default function SessionDetail({ id, onBack }: Props) {
                     ))}
                   </div>
                 ) : (
-                  <div className="prose prose-zinc max-w-none max-h-[600px] overflow-y-auto">
+                  <div className="max-h-[600px] overflow-y-auto">
                     {activeDoc.format === "json" ? (
                       <pre className="bg-zinc-50 p-6 rounded-xl text-sm overflow-x-auto">
                         {(() => { try { return JSON.stringify(JSON.parse(activeDoc.content), null, 2); } catch { return activeDoc.content; } })()}
                       </pre>
                     ) : (
-                      <div className="whitespace-pre-wrap font-medium text-brand-800 leading-relaxed">
-                        {activeDoc.content}
-                      </div>
+                      <Markdown content={activeDoc.content} />
                     )}
                   </div>
                 )}

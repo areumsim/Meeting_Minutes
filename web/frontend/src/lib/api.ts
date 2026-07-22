@@ -109,6 +109,89 @@ export const testObsidianPath = async (): Promise<{ ok: boolean; message: string
   }
 };
 
+// 메일 연결 테스트 — SMTP 로그인 후 테스트 메일 1통 발송.
+export const testEmail = async (): Promise<{ ok: boolean; message: string }> => {
+  try {
+    const res = await fetch("/api/config/test/email", { method: "POST" });
+    return await res.json();
+  } catch (e: any) {
+    return { ok: false, message: `메일 테스트 실패: ${e?.message || e}` };
+  }
+};
+
+// Slack/Teams Webhook 연결 테스트 — 테스트 메시지 발송.
+export const testSlack = async (): Promise<{ ok: boolean; message: string }> => {
+  try {
+    const res = await fetch("/api/config/test/slack", { method: "POST" });
+    return await res.json();
+  } catch (e: any) {
+    return { ok: false, message: `Slack 테스트 실패: ${e?.message || e}` };
+  }
+};
+export const testTeams = async (): Promise<{ ok: boolean; message: string }> => {
+  try {
+    const res = await fetch("/api/config/test/teams", { method: "POST" });
+    return await res.json();
+  } catch (e: any) {
+    return { ok: false, message: `Teams 테스트 실패: ${e?.message || e}` };
+  }
+};
+
+// 네이티브 폴더 선택 다이얼로그 — 서버(이 PC)에서 폴더 브라우저를 띄우고 선택 경로를 받는다.
+// 패키지(로컬 백엔드) 모드에서만 동작. 취소/실패 시 { ok:false }.
+export const pickFolder = async (initial?: string): Promise<{ ok: boolean; path?: string; message?: string; cancelled?: boolean }> => {
+  try {
+    const res = await fetch("/api/system/pick-folder", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ initial: initial || "" }),
+    });
+    return await res.json();
+  } catch (e: any) {
+    return { ok: false, message: `폴더 선택 실패: ${e?.message || e}` };
+  }
+};
+
+// 업로드/배치 처리 진행 상태 — 처리 중 폴링용. (백엔드 배치 모드 전용)
+export const getUploadProgress = async (
+  sessionId: string
+): Promise<{ found: boolean; percent?: number; stage?: string; elapsed?: number }> => {
+  try {
+    const res = await fetch(`/api/upload/progress/${sessionId}`);
+    if (res.ok) return await res.json();
+  } catch { /* 백엔드 없음/무시 */ }
+  return { found: false };
+};
+
+// 진행 중인 업로드 처리 취소 요청 — 파이프라인이 다음 단계 경계에서 협조적으로 중단.
+export const cancelUpload = async (
+  sessionId: string
+): Promise<{ ok: boolean; message?: string }> => {
+  try {
+    const res = await fetch(`/api/upload/cancel/${sessionId}`, { method: "POST" });
+    if (res.ok) return await res.json();
+  } catch { /* 백엔드 없음 */ }
+  return { ok: false, message: "취소 요청 실패" };
+};
+
+// 비용 추정 — 세션 최종 비용(USD) / 실시간 요율.
+export interface SessionCost { ok: boolean; duration_sec?: number; stt?: number; translate?: number; minutes?: number; total?: number; stt_model?: string; }
+export const getSessionCost = async (sessionId: string): Promise<SessionCost | null> => {
+  try {
+    const res = await fetch(`/api/sessions/${sessionId}/cost`);
+    if (res.ok) return await res.json();
+  } catch { /* 백엔드 없음 */ }
+  return null;
+};
+export interface CostRates { stt_model: string; stt_per_min: number; translate_per_min: number; minutes_flat: number; }
+export const getCostRates = async (): Promise<CostRates | null> => {
+  try {
+    const res = await fetch(`/api/cost/rates`);
+    if (res.ok) return await res.json();
+  } catch { /* 백엔드 없음 */ }
+  return null;
+};
+
 // 앱(서버) 종료 — 콘솔 창 없는 배포에서 웹으로 깔끔히 끄기.
 export const shutdownApp = async (): Promise<boolean> => {
   try {
@@ -237,17 +320,42 @@ export const planStop = async (): Promise<{ ok: boolean; running: boolean; messa
   catch (e: any) { return { ok: false, running: true, message: `중지 실패: ${e?.message || e}` }; }
 };
 
-// 회의 준비 브리핑 생성.
-export const prepBrief = async (title: string, topic: string): Promise<{ ok: boolean; brief?: string; message?: string }> => {
+// 회의 준비 브리핑 생성. 참석자·추가노트를 검색·생성에 반영하고,
+// 찾은 관련 볼트 노트(related)와 vault 연결 여부를 함께 반환한다.
+export interface NoteRef { title: string; path: string; score?: number }
+export interface PrepBriefResult {
+  ok: boolean; brief?: string; message?: string;
+  vault_connected?: boolean; related?: NoteRef[]; related_count?: number;
+  open_actions?: number; recent_decisions?: number;
+}
+export const prepBrief = async (
+  title: string, topic: string, opts?: { attendees?: string; notes?: string }
+): Promise<PrepBriefResult> => {
   try {
     const res = await fetch("/api/prep-brief", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ title, topic }),
+      body: JSON.stringify({ title, topic, attendees: opts?.attendees || "", notes: opts?.notes || "" }),
     });
     return await res.json();
   } catch (e: any) {
     return { ok: false, message: `브리핑 생성 실패: ${e?.message || e}` };
+  }
+};
+
+// 생성된 회의 준비 브리핑을 세션으로 저장 → 대시보드에 표시.
+export const savePrepBrief = async (
+  data: { title: string; brief: string; topic?: string; date?: string; attendees?: string }
+): Promise<{ ok: boolean; sessionId?: string; message?: string }> => {
+  try {
+    const res = await fetch("/api/prep-brief/save", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(data),
+    });
+    return await res.json();
+  } catch (e: any) {
+    return { ok: false, message: `저장 실패: ${e?.message || e}` };
   }
 };
 

@@ -6,6 +6,7 @@ import {
 import { motion, AnimatePresence } from "motion/react";
 import {
   createRealtimeWS, backendAvailable, createBackendRealtimeWS, mirrorServerSession,
+  getCostRates, type CostRates,
 } from "../lib/api";
 import { MODE_PRESETS, type RealtimeSegment } from "../lib/types";
 
@@ -33,12 +34,19 @@ export default function Recorder({ onComplete }: { onComplete: (id: string) => v
   const [volume, setVolume] = useState(0);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [wsStatus, setWsStatus] = useState<string>("");
+  // WebSocket 실시간 전사가 안 돼 HTTP 청크 방식으로 자동 전환됐는지 여부.
+  // (에러가 아니라 정상 폴백이므로 사용자에게 안내로만 노출한다.)
+  const [httpFallback, setHttpFallback] = useState(false);
   // 백엔드 모드 — 서버가 STT/실시간 vault 검색/회의록 생성 수행 (API 키 미노출)
   const [relatedNotes, setRelatedNotes] = useState<RelatedNote[]>([]);
+  const [costRates, setCostRates] = useState<CostRates | null>(null);
   const backendModeRef = useRef(false);
   const provisionalIdxRef = useRef<Record<string, number>>({});
   const completionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const serverSessionIdRef = useRef<string | null>(null);
+  // 백엔드 모드에서 오디오 캡처를 한 번만 시작하도록 가드(WS→HTTP 폴백 시 ready·fallback_http
+  // 이벤트가 연달아 와도 캡처를 중복 시작하지 않게 함 — 같은 스트림을 서버가 이어서 읽는다).
+  const captureStartedRef = useRef(false);
 
   const transcriptEndRef = useRef<HTMLDivElement>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -74,6 +82,9 @@ export default function Recorder({ onComplete }: { onComplete: (id: string) => v
       stopAll();
     };
   }, []);
+
+  // 실시간 비용 요율 로드(백엔드 모드) — 러닝 비용 추정용
+  useEffect(() => { getCostRates().then((r) => r && setCostRates(r)); }, []);
 
   const transcriptRef = useRef<RealtimeSegment[]>([]);
   useEffect(() => {
@@ -181,6 +192,7 @@ export default function Recorder({ onComplete }: { onComplete: (id: string) => v
     wsRef.current = ws;
     provisionalIdxRef.current = {};
     serverSessionIdRef.current = null;
+    captureStartedRef.current = false;
 
     ws.onopen = () => {
       ws.send(JSON.stringify({
@@ -206,13 +218,16 @@ export default function Recorder({ onComplete }: { onComplete: (id: string) => v
           break;
 
         case "ready":
-          setWsStatus(`Streaming (server STT: ${msg.model})`);
-          startAudioCapture();
+          setWsStatus(`실시간 전사 중 (${msg.model})`);
+          if (!captureStartedRef.current) { captureStartedRef.current = true; startAudioCapture(); }
           break;
 
         case "fallback_http":
-          setWsStatus(`Streaming (server HTTP STT: ${msg.model})`);
-          startAudioCapture();
+          // WS 실시간이 안 되면 서버가 같은 오디오 스트림을 HTTP 청크로 전사(자동 폴백).
+          // ready 후 캡처가 이미 시작됐다면 다시 시작하지 않는다(중복 캡처 방지).
+          setHttpFallback(true);
+          setWsStatus(`전사 중 (HTTP 청크 방식: ${msg.model})`);
+          if (!captureStartedRef.current) { captureStartedRef.current = true; startAudioCapture(); }
           break;
 
         case "delta": {
@@ -325,6 +340,7 @@ export default function Recorder({ onComplete }: { onComplete: (id: string) => v
       setLiveTranscript([]);
       setRelatedNotes([]);
       setDuration(0);
+      setHttpFallback(false);
       try {
         await KeepAwake.keepAwake();
         await Haptics.impact({ style: ImpactStyle.Heavy });
@@ -681,6 +697,12 @@ export default function Recorder({ onComplete }: { onComplete: (id: string) => v
                   <Activity className="w-4 h-4" />
                   <span>{wsStatus || (isRecording ? "OpenAI로 스트리밍 중..." : "마이크 준비됨")}</span>
                 </div>
+                {httpFallback && (
+                  <div className="mt-2 text-xs text-amber-300/90 bg-amber-500/10 border border-amber-500/20 rounded-lg px-3 py-2 max-w-md">
+                    실시간(WebSocket) 전사를 사용할 수 없어 <b>HTTP 청크 방식</b>으로 전환했습니다.
+                    전사는 정상 진행되며, 말한 내용이 몇 초 뒤에 표시될 수 있습니다(안정적·저비용 방식).
+                  </div>
+                )}
               </div>
             </div>
 
@@ -696,6 +718,14 @@ export default function Recorder({ onComplete }: { onComplete: (id: string) => v
                   />
                 </div>
               </div>
+              {costRates && (isRecording || status === "generating" || status === "completed") && (
+                <span className="text-[11px] text-zinc-400 mt-1 font-mono tabular-nums" title="STT+번역 실시간 추정 + (완료 시) 회의록 생성비. 대략치입니다.">
+                  💵 ~${(
+                    (duration / 60) * (costRates.stt_per_min + (preset.translate ? costRates.translate_per_min : 0))
+                    + ((status === "generating" || status === "completed") ? costRates.minutes_flat : 0)
+                  ).toFixed(3)}
+                </span>
+              )}
             </div>
           </div>
         </div>

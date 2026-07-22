@@ -1,18 +1,20 @@
-import React, { useState, useEffect } from "react";
-import { Mic, FileAudio, List, Settings, FileText, MessageCircleQuestion, ClipboardList, HelpCircle, Network, CalendarClock } from "lucide-react";
+import React, { useState, useEffect, lazy, Suspense } from "react";
+import { Mic, FileAudio, List, Settings, FileText, MessageCircleQuestion, ClipboardList, HelpCircle, Network, CalendarClock, Loader2 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import Dashboard from "./components/Dashboard";
-import Recorder from "./components/Recorder";
-import SessionDetail from "./components/SessionDetail";
-import FileUpload from "./components/FileUpload";
-import TextInput from "./components/TextInput";
-import WikiAsk from "./components/WikiAsk";
-import PrepBrief from "./components/PrepBrief";
-import Help from "./components/Help";
-import SettingsView from "./components/Settings";
-import GraphExplorer from "./components/GraphExplorer";
-import Assistant from "./components/Assistant";
-import { getApiKey, getConfig } from "./lib/api";
+import Onboarding from "./components/Onboarding";
+// 초기 로딩 번들을 줄이기 위해 대시보드(기본 화면)·온보딩 외 뷰는 지연 로드(code splitting).
+const Recorder = lazy(() => import("./components/Recorder"));
+const SessionDetail = lazy(() => import("./components/SessionDetail"));
+const FileUpload = lazy(() => import("./components/FileUpload"));
+const TextInput = lazy(() => import("./components/TextInput"));
+const WikiAsk = lazy(() => import("./components/WikiAsk"));
+const PrepBrief = lazy(() => import("./components/PrepBrief"));
+const Help = lazy(() => import("./components/Help"));
+const SettingsView = lazy(() => import("./components/Settings"));
+const GraphExplorer = lazy(() => import("./components/GraphExplorer"));
+const Assistant = lazy(() => import("./components/Assistant"));
+import { getApiKey, getConfig, isPackagedMode } from "./lib/api";
 
 type View = "dashboard" | "recorder" | "upload" | "text" | "wiki" | "prep" | "assistant" | "graph" | "help" | "detail" | "settings";
 
@@ -20,6 +22,7 @@ export default function App() {
   const [viewState, setViewState] = useState<View>("dashboard");
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [ffmpegMissing, setFfmpegMissing] = useState(false);
+  const [showOnboarding, setShowOnboarding] = useState(false);
 
   const view = viewState;
   const setView = (v: View) => {
@@ -44,14 +47,26 @@ export default function App() {
       } catch { /* 백엔드 없음(모바일) — 무시 */ }
 
       try {
+        const packaged = await isPackagedMode();
         const cfg = await getConfig();
         const hasKey = !!(cfg?.api?.openai_api_key) || !!getApiKey();
-        const hasVault = !!(cfg?.obsidian?.vault_path);
-        if (!hasKey || !hasVault) setView("settings");
+        const dismissed = localStorage.getItem("ONBOARDING_DISMISSED") === "1";
+        // 패키지(exe) 모드 + OpenAI 키 미설정 + 아직 마법사를 닫지 않았으면 온보딩 표시.
+        if (packaged && !hasKey && !dismissed) {
+          setShowOnboarding(true);
+        } else if (!hasKey) {
+          // 그 외(키 없음)엔 최소한 설정 화면으로 유도.
+          setView("settings");
+        }
       } catch {
         if (!getApiKey()) setView("settings");
       }
     })();
+
+    // [설정]의 '설정 마법사 다시 열기' 버튼에서 발생시키는 이벤트.
+    const openHandler = () => setShowOnboarding(true);
+    window.addEventListener("mm:open-onboarding", openHandler);
+    return () => window.removeEventListener("mm:open-onboarding", openHandler);
   }, []);
 
   const navigateToDetail = (id: string) => {
@@ -61,7 +76,10 @@ export default function App() {
 
   return (
     <div className="min-h-[100dvh] bg-brand-50 text-brand-950 font-sans selection:bg-emerald-100 flex flex-col md:flex-row pb-[calc(env(safe-area-inset-bottom,0px)+4rem)] md:pb-0">
-      
+
+      {/* 첫 실행 설정 마법사 */}
+      {showOnboarding && <Onboarding onClose={() => { setShowOnboarding(false); setView("settings"); }} />}
+
       {/* Sidebar (iPad / Desktop) */}
       <nav className="hidden md:flex fixed left-0 top-0 bottom-0 w-64 bg-white border-r border-brand-200 flex-col z-50 pt-[env(safe-area-inset-top,0px)] shadow-xl shadow-brand-900/5">
         <div className="p-8">
@@ -117,19 +135,21 @@ export default function App() {
             transition={{ duration: 0.2 }}
             className="h-full"
           >
-            {view === "dashboard" && <Dashboard onSelectSession={navigateToDetail} onNewUpload={() => setView("upload")} onNewRecord={() => setView("recorder")} />}
-            {view === "recorder" && <Recorder onComplete={navigateToDetail} />}
-            {view === "upload" && <FileUpload onComplete={navigateToDetail} />}
-            {view === "text" && <TextInput onComplete={navigateToDetail} />}
-            {view === "wiki" && <WikiAsk />}
-            {view === "prep" && <PrepBrief />}
-            {view === "assistant" && <Assistant />}
-            {view === "graph" && <GraphExplorer />}
-            {view === "help" && <Help />}
-            {view === "settings" && <SettingsView />}
-            {view === "detail" && selectedSessionId && (
-              <SessionDetail id={selectedSessionId} onBack={() => setView("dashboard")} />
-            )}
+            <Suspense fallback={<div className="flex items-center justify-center py-32"><Loader2 className="animate-spin text-brand-400" size={32} /></div>}>
+              {view === "dashboard" && <Dashboard onSelectSession={navigateToDetail} onNewUpload={() => setView("upload")} onNewRecord={() => setView("recorder")} />}
+              {view === "recorder" && <Recorder onComplete={navigateToDetail} />}
+              {view === "upload" && <FileUpload onComplete={navigateToDetail} />}
+              {view === "text" && <TextInput onComplete={navigateToDetail} />}
+              {view === "wiki" && <WikiAsk />}
+              {view === "prep" && <PrepBrief onSaved={navigateToDetail} />}
+              {view === "assistant" && <Assistant />}
+              {view === "graph" && <GraphExplorer />}
+              {view === "help" && <Help />}
+              {view === "settings" && <SettingsView />}
+              {view === "detail" && selectedSessionId && (
+                <SessionDetail id={selectedSessionId} onBack={() => setView("dashboard")} />
+              )}
+            </Suspense>
           </motion.div>
         </AnimatePresence>
       </main>

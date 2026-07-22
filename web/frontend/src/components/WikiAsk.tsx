@@ -1,6 +1,6 @@
-import React, { useState } from "react";
-import { MessageCircleQuestion, Loader2, Send, AlertTriangle, HelpCircle, FileText } from "lucide-react";
-import { askWiki, backendAvailable, type WikiAskResult } from "../lib/api";
+import React, { useState, useEffect } from "react";
+import { MessageCircleQuestion, Loader2, Send, AlertTriangle, HelpCircle, FileText, FolderOpen } from "lucide-react";
+import { askWiki, backendAvailable, getConfig, type WikiAskResult } from "../lib/api";
 
 interface HistoryItem {
   question: string;
@@ -13,6 +13,19 @@ export default function WikiAsk() {
   const [asking, setAsking] = useState(false);
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [backendChecked, setBackendChecked] = useState<boolean | null>(null);
+  // Obsidian 볼트 연결 여부 — 이 기능은 볼트(.md 폴더)가 연결돼 있어야 동작한다.
+  const [vaultConnected, setVaultConnected] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    (async () => {
+      try {
+        const cfg = await getConfig();
+        setVaultConnected(!!(cfg?.obsidian?.vault_path || cfg?.indexing?.vault_path));
+      } catch {
+        setVaultConnected(false);
+      }
+    })();
+  }, []);
 
   const checkBackend = async () => {
     if (backendChecked !== null) return backendChecked;
@@ -56,22 +69,34 @@ export default function WikiAsk() {
       <h2 className="text-2xl font-bold tracking-tight mb-1">볼트 위키 질문</h2>
       <p className="text-brand-500 mb-6 md:mb-10 text-sm md:text-base">
         Obsidian Vault에 쌓인 회의·세미나 기록을 근거로 질문에 답합니다.
+        <br className="hidden md:block" />
+        <span className="text-brand-400 text-xs md:text-sm">이 기능은 <b>Obsidian 볼트 연결이 필요</b>합니다. [설정] → “Obsidian 볼트 폴더”를 지정하세요.</span>
       </p>
 
-      <div className="bg-white border border-brand-100 md:border-zinc-200 rounded-2xl md:rounded-3xl shadow-sm md:shadow-xl p-5 md:p-8">
+      {vaultConnected === false && (
+        <div className="mb-6 flex items-start gap-3 bg-amber-50 border border-amber-200 rounded-2xl p-5 text-sm text-amber-800">
+          <FolderOpen size={18} className="mt-0.5 shrink-0" />
+          <div>
+            <p className="font-bold mb-1">Obsidian 볼트가 연결되지 않았습니다.</p>
+            <p className="text-amber-700">이 기능을 쓰려면 먼저 [설정] → <b>Obsidian 볼트 폴더</b>를 지정하고 [검색 인덱스 재빌드]를 눌러 노트를 색인하세요. 볼트가 연결되면 질문 입력이 활성화됩니다.</p>
+          </div>
+        </div>
+      )}
+
+      <div className={`bg-white border border-brand-100 md:border-zinc-200 rounded-2xl md:rounded-3xl shadow-sm md:shadow-xl p-5 md:p-8 ${vaultConnected === false ? "opacity-60" : ""}`}>
         <div className="flex gap-3">
           <textarea
             value={question}
             onChange={(e) => setQuestion(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="예: 지난 세미나에서 발표하신 교수님이 누구야?"
-            className="flex-1 px-4 md:px-5 py-3 md:py-4 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-zinc-900 outline-none font-medium text-sm md:text-base resize-none min-h-[56px]"
+            placeholder={vaultConnected === false ? "Obsidian 볼트를 먼저 연결하세요 ([설정])" : "예: 지난 세미나에서 발표하신 교수님이 누구야?"}
+            className="flex-1 px-4 md:px-5 py-3 md:py-4 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-zinc-900 outline-none font-medium text-sm md:text-base resize-none min-h-[56px] disabled:cursor-not-allowed"
             rows={2}
-            disabled={asking}
+            disabled={asking || vaultConnected === false}
           />
           <button
             onClick={handleAsk}
-            disabled={!question.trim() || asking}
+            disabled={!question.trim() || asking || vaultConnected === false}
             className="shrink-0 flex items-center justify-center gap-2 px-5 md:px-6 py-3 md:py-4 bg-zinc-900 text-white rounded-xl font-bold hover:bg-zinc-800 transition-all shadow-lg disabled:opacity-50 disabled:cursor-not-allowed active:scale-[0.98]"
           >
             {asking ? <Loader2 className="animate-spin" size={18} /> : <Send size={18} />}

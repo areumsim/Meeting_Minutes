@@ -1,14 +1,15 @@
 import React, { useState, useEffect } from "react";
 import {
   Settings, Plus, Trash2, CheckCircle, XCircle, Save, Loader2, Plug,
+  Eye, EyeOff, FolderOpen, ChevronDown, ChevronRight, Wand2, AlertTriangle,
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import {
   getConfig, updateConfig, getConfigSchema, isPackagedMode,
-  testOpenAIKey, testAnthropicKey, testObsidianPath, reindexVault, shutdownApp,
+  testOpenAIKey, testAnthropicKey, testObsidianPath, testEmail, testSlack, testTeams, reindexVault, shutdownApp,
   getProfiles, createProfile, deleteProfile, clearSessions,
   getApiKey, setApiKey, getAnthropicKey, setAnthropicKey,
-  getWatcherStatus, startWatcher, stopWatcher, obsidianDiagnose,
+  getWatcherStatus, startWatcher, stopWatcher, obsidianDiagnose, pickFolder,
 } from "../lib/api";
 import type { Profile } from "../lib/types";
 import type { WatcherStatus, DiagnoseResult } from "../lib/api";
@@ -24,12 +25,15 @@ interface Field {
   sensitive?: boolean;
   mirror?: [string, string][];
   placeholder?: string;
-  scalar?: boolean;  // 최상위 스칼라 키(예: output_dir) — section 자체가 값
+  scalar?: boolean;   // 최상위 스칼라 키(예: output_dir) — section 자체가 값
+  picker?: boolean;   // 폴더 선택 '찾아보기' 버튼 표시
+  required?: boolean; // 필수값 — 라벨에 * 표시, 미입력 시 저장 전 경고
 }
 interface Group {
   id: string;
   label: string;
   desc?: string;
+  advanced?: boolean; // true 면 기본 접힘('고급 설정')
   fields: Field[];
 }
 
@@ -39,7 +43,7 @@ const CLIENT_FALLBACK_SCHEMA: Group[] = [
     id: "api", label: "API 키",
     desc: "이 기기에만 저장됩니다.",
     fields: [
-      { section: "api", key: "openai_api_key", label: "OpenAI API 키 (필수)", type: "password", sensitive: true, placeholder: "sk-proj-..." },
+      { section: "api", key: "openai_api_key", label: "OpenAI API 키 (필수)", type: "password", sensitive: true, required: true, placeholder: "sk-proj-..." },
       { section: "api", key: "anthropic_api_key", label: "Anthropic API 키 (선택)", type: "password", sensitive: true, placeholder: "sk-ant-..." },
     ],
   },
@@ -61,10 +65,12 @@ export default function SettingsView() {
   const [packaged, setPackaged] = useState(false);
   const [values, setValues] = useState<Record<string, any>>({});
   const [dirty, setDirty] = useState<Record<string, boolean>>({});
+  const [open, setOpen] = useState<Record<string, boolean>>({}); // 그룹 펼침 상태
 
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState("");
+  const [warn, setWarn] = useState<string[]>([]);
 
   const [testing, setTesting] = useState<string>("");
   const [testMsg, setTestMsg] = useState<Record<string, { ok: boolean; message: string }>>({});
@@ -90,7 +96,8 @@ export default function SettingsView() {
     const v: Record<string, any> = {};
     for (const group of sch) {
       for (const f of group.fields) {
-        const raw = f.key ? cfg?.[f.section]?.[f.key] : cfg?.[f.section]; // scalar: section 자체
+        // scalar: section 자체가 값 / key 에 점이 있으면 중첩 경로(예: slack.webhook_url)
+        const raw = f.key ? getNested(cfg?.[f.section], f.key) : cfg?.[f.section];
         v[pathOf(f)] = raw ?? f.default ?? (f.type === "bool" ? false : "");
       }
     }
@@ -101,6 +108,8 @@ export default function SettingsView() {
     }
     setValues(v);
     setDirty({});
+    // 그룹 펼침 초기화: 필수는 펼침, 고급은 접힘
+    setOpen(Object.fromEntries(sch.map((g) => [g.id, !g.advanced])));
     setProfiles(await getProfiles());
   };
 
@@ -111,14 +120,52 @@ export default function SettingsView() {
     setDirty((prev) => ({ ...prev, [path]: true }));
   };
 
-  const handleSave = async () => {
-    if (!schema) return;
+  // 저장 전 가벼운 형식 검증. errors 는 저장 차단, warnings 는 경고 후 진행.
+  const validateBeforeSave = (): { errors: string[]; warnings: string[] } => {
+    const errors: string[] = [];
+    const warnings: string[] = [];
+    if (!schema) return { errors, warnings };
+    const val = (p: string) => (values[p] ?? "").toString().trim();
+
+    for (const g of schema) {
+      for (const f of g.fields) {
+        if (f.required && !val(pathOf(f))) warnings.push(`'${f.label}' 이(가) 비어 있습니다. 이 값이 없으면 정상 동작하지 않을 수 있어요.`);
+      }
+    }
+    const emailRe = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
+    for (const p of ["email.sender", "email.recipient"]) {
+      const v = val(p);
+      if (v && !emailRe.test(v)) errors.push(`이메일 형식이 올바르지 않습니다: ${v}`);
+    }
+    const port = val("email.smtp_port");
+    if (port) {
+      if (!/^\d+$/.test(port)) errors.push("SMTP 포트는 숫자여야 합니다.");
+      else {
+        const n = Number(port);
+        if (n !== 0 && (n < 1 || n > 65535)) errors.push("SMTP 포트는 1~65535 범위여야 합니다.");
+      }
+    }
+    const key = val("api.openai_api_key");
+    if (key && !key.includes("...") && !key.startsWith("sk-")) {
+      warnings.push("OpenAI 키는 보통 'sk-' 로 시작합니다. 올바른 키인지 확인하세요.");
+    }
+    return { errors, warnings };
+  };
+
+  const handleSave = async (): Promise<boolean> => {
+    if (!schema) return false;
+    const { errors, warnings } = validateBeforeSave();
+    setWarn(warnings);
+    if (errors.length) {
+      setError(errors.join(" "));
+      return false;
+    }
     setSaving(true);
     setError("");
     try {
       const bySection: Record<string, any> = {};
       const put = (section: string, key: string, val: any) => {
-        if (key) { (bySection[section] ||= {})[key] = val; }
+        if (key) { setNested((bySection[section] ||= {}), key, val); }
         else { bySection[section] = val; }  // 최상위 스칼라(output_dir 등)
       };
       for (const group of schema) {
@@ -151,20 +198,26 @@ export default function SettingsView() {
       setTimeout(() => setSaved(false), 2000);
       // 저장 후 서버 마스킹 값 재로드
       if (packaged) await load();
+      return true;
     } catch (e: any) {
       setError(e?.message || "저장에 실패했습니다.");
+      return false;
+    } finally {
+      setSaving(false);
     }
-    setSaving(false);
   };
 
-  const runTest = async (kind: "openai" | "anthropic" | "obsidian") => {
+  const runTest = async (kind: "openai" | "anthropic" | "obsidian" | "email" | "slack" | "teams") => {
     setTesting(kind);
     // 연결 테스트는 저장된 config.json 을 읽는다. 입력만 하고 [설정 저장]을 안 누른
     // 경우 '설정되지 않음'이 나오므로, 아직 저장 안 된 입력이 있으면 먼저 저장한다.
-    if (Object.values(dirty).some(Boolean)) await handleSave();
+    if (Object.values(dirty).some(Boolean)) { if (!(await handleSave())) { setTesting(""); return; } }
     const res =
       kind === "openai" ? await testOpenAIKey() :
       kind === "anthropic" ? await testAnthropicKey() :
+      kind === "email" ? await testEmail() :
+      kind === "slack" ? await testSlack() :
+      kind === "teams" ? await testTeams() :
       await testObsidianPath();
     setTestMsg((prev) => ({ ...prev, [kind]: res }));
     setTesting("");
@@ -172,7 +225,7 @@ export default function SettingsView() {
 
   const handleReindex = async () => {
     setTesting("reindex");
-    if (Object.values(dirty).some(Boolean)) await handleSave();
+    if (Object.values(dirty).some(Boolean)) { if (!(await handleSave())) { setTesting(""); return; } }
     const res = await reindexVault();
     setTestMsg((prev) => ({ ...prev, reindex: res }));
     setTesting("");
@@ -180,9 +233,14 @@ export default function SettingsView() {
 
   const handleDiagnose = async () => {
     setTesting("diagnose");
-    if (Object.values(dirty).some(Boolean)) await handleSave();
+    if (Object.values(dirty).some(Boolean)) { if (!(await handleSave())) { setTesting(""); return; } }
     setDiag(await obsidianDiagnose());
     setTesting("");
+  };
+
+  const openWizard = () => {
+    localStorage.removeItem("ONBOARDING_DISMISSED");
+    window.dispatchEvent(new CustomEvent("mm:open-onboarding"));
   };
 
   const toggleRaw = async () => {
@@ -232,62 +290,120 @@ export default function SettingsView() {
 
   if (!schema) return null;
 
+  const essential = schema.filter((g) => !g.advanced);
+  const advanced = schema.filter((g) => g.advanced);
+
+  const renderGroup = (group: Group) => {
+    const isOpen = open[group.id] ?? !group.advanced;
+    return (
+      <section key={group.id} className="bg-white border border-brand-200 rounded-2xl mb-3 shadow-sm overflow-hidden">
+        <button
+          onClick={() => setOpen((p) => ({ ...p, [group.id]: !isOpen }))}
+          className="w-full flex items-center gap-2 px-4 md:px-5 py-4 text-left hover:bg-brand-50/50 transition-colors"
+        >
+          {isOpen ? <ChevronDown size={18} className="text-brand-400 shrink-0" /> : <ChevronRight size={18} className="text-brand-400 shrink-0" />}
+          <Settings size={16} className="text-brand-500 shrink-0" />
+          <span className="text-base font-bold text-brand-900">{group.label}</span>
+        </button>
+
+        {isOpen && (
+          <div className="px-4 md:px-5 pb-5">
+            {group.desc && <p className="text-xs text-brand-500 mb-3 -mt-1">{group.desc}</p>}
+            <div className="space-y-3">
+              {group.fields.map((f) => (
+                <FieldRow key={pathOf(f)} field={f} value={values[pathOf(f)]} packaged={packaged} onChange={(v) => setField(pathOf(f), v)} />
+              ))}
+            </div>
+
+            {/* 연결 테스트 버튼 (패키지 모드) */}
+            {packaged && group.id === "api" && (
+              <>
+                <TestRow label="OpenAI 연결 테스트" busy={testing === "openai"} result={testMsg.openai} onClick={() => runTest("openai")} />
+                <TestRow label="Claude 연결 테스트" busy={testing === "anthropic"} result={testMsg.anthropic} onClick={() => runTest("anthropic")} />
+              </>
+            )}
+            {packaged && group.id === "email" && (
+              <>
+                <TestRow label="메일 연결 테스트 (테스트 메일 발송)" busy={testing === "email"} result={testMsg.email} onClick={() => runTest("email")} />
+                <p className="text-xs text-brand-400 mt-1">받는 주소로 테스트 메일 1통을 보내 설정을 확인합니다. 받은 편지함(스팸함 포함)을 확인하세요.</p>
+              </>
+            )}
+            {packaged && group.id === "notify" && (
+              <>
+                <TestRow label="Slack 테스트 메시지 보내기" busy={testing === "slack"} result={testMsg.slack} onClick={() => runTest("slack")} />
+                <TestRow label="Teams 테스트 메시지 보내기" busy={testing === "teams"} result={testMsg.teams} onClick={() => runTest("teams")} />
+                <p className="text-xs text-brand-400 mt-1">각 Webhook URL을 입력·저장한 뒤 눌러 채널에 메시지가 도착하는지 확인하세요.</p>
+              </>
+            )}
+            {packaged && group.id === "obsidian" && (
+              <>
+                <TestRow label="Obsidian 경로 확인" busy={testing === "obsidian"} result={testMsg.obsidian} onClick={() => runTest("obsidian")} />
+                <TestRow label="검색 인덱스 재빌드" busy={testing === "reindex"} result={testMsg.reindex} onClick={handleReindex} />
+                <p className="text-xs text-brand-400 mt-1">볼트(.md 폴더)를 바꾸거나 노트를 추가한 뒤 눌러 검색·위키를 최신화하세요.</p>
+                <div className="mt-5">
+                  <button onClick={handleDiagnose} disabled={testing === "diagnose"} className="flex items-center gap-2 px-5 py-2.5 bg-brand-50 text-brand-700 rounded-xl text-sm font-semibold hover:bg-brand-100 transition-all w-fit">
+                    {testing === "diagnose" ? <Loader2 size={16} className="animate-spin" /> : <Plug size={16} />} Obsidian 전체 진단
+                  </button>
+                  {diag && (
+                    <div className="mt-3 space-y-1.5">
+                      {diag.checks.map((ch) => (
+                        <div key={ch.name} className="flex items-start gap-2 text-sm">
+                          {ch.ok ? <CheckCircle size={16} className="text-emerald-600 mt-0.5 shrink-0" /> : <XCircle size={16} className="text-red-600 mt-0.5 shrink-0" />}
+                          <span><b className="text-brand-900">{ch.name}</b> — <span className="text-brand-500">{ch.detail}</span></span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </>
+            )}
+          </div>
+        )}
+      </section>
+    );
+  };
+
   return (
     <div className="max-w-3xl mx-auto px-1 md:px-0">
-      <h2 className="text-2xl font-bold tracking-tight mb-1">설정</h2>
+      <div className="flex items-start justify-between gap-3 mb-1">
+        <h2 className="text-2xl font-bold tracking-tight">설정</h2>
+        {packaged && (
+          <button onClick={openWizard} className="flex items-center gap-1.5 px-3 py-1.5 bg-brand-50 text-brand-700 rounded-lg text-xs font-semibold hover:bg-brand-100 transition-all shrink-0">
+            <Wand2 size={14} /> 설정 마법사 다시 열기
+          </button>
+        )}
+      </div>
       <p className="text-sm text-brand-500 mb-4">
         {packaged
-          ? "모든 설정은 이 PC의 config.json 에 저장됩니다."
+          ? "모든 설정은 이 PC의 config.json 에 저장됩니다. 잘 모르는 항목은 그대로 두세요."
           : "설정은 이 기기(브라우저)에만 저장됩니다."}
       </p>
 
-      {schema.map((group) => (
-        <section key={group.id} className="bg-white border border-brand-200 rounded-2xl p-4 md:p-5 mb-3 shadow-sm">
-          <h3 className="text-base font-bold mb-1 flex items-center gap-2 text-brand-900">
-            <Settings size={16} /> {group.label}
-          </h3>
-          {group.desc && <p className="text-xs text-brand-500 mb-3">{group.desc}</p>}
+      {/* 필수 그룹 */}
+      {essential.map(renderGroup)}
 
-          <div className="space-y-3">
-            {group.fields.map((f) => (
-              <FieldRow key={pathOf(f)} field={f} value={values[pathOf(f)]} onChange={(v) => setField(pathOf(f), v)} />
-            ))}
+      {/* 고급 그룹 */}
+      {advanced.length > 0 && (
+        <>
+          <div className="flex items-center gap-3 mt-6 mb-3">
+            <div className="h-px flex-1 bg-brand-200" />
+            <span className="text-xs font-bold text-brand-400 uppercase tracking-widest">고급 설정</span>
+            <div className="h-px flex-1 bg-brand-200" />
           </div>
-
-          {/* 연결 테스트 버튼 (패키지 모드) */}
-          {packaged && group.id === "api" && (
-            <>
-              <TestRow label="OpenAI 연결 테스트" busy={testing === "openai"} result={testMsg.openai} onClick={() => runTest("openai")} />
-              <TestRow label="Claude 연결 테스트" busy={testing === "anthropic"} result={testMsg.anthropic} onClick={() => runTest("anthropic")} />
-            </>
-          )}
-          {packaged && group.id === "obsidian" && (
-            <>
-              <TestRow label="Obsidian 경로 확인" busy={testing === "obsidian"} result={testMsg.obsidian} onClick={() => runTest("obsidian")} />
-              <TestRow label="검색 인덱스 재빌드" busy={testing === "reindex"} result={testMsg.reindex} onClick={handleReindex} />
-              <p className="text-xs text-brand-400 mt-1">볼트(.md 폴더)를 바꾸거나 노트를 추가한 뒤 눌러 검색·위키를 최신화하세요.</p>
-              <div className="mt-5">
-                <button onClick={handleDiagnose} disabled={testing === "diagnose"} className="flex items-center gap-2 px-5 py-2.5 bg-brand-50 text-brand-700 rounded-xl text-sm font-semibold hover:bg-brand-100 transition-all w-fit">
-                  {testing === "diagnose" ? <Loader2 size={16} className="animate-spin" /> : <Plug size={16} />} Obsidian 전체 진단
-                </button>
-                {diag && (
-                  <div className="mt-3 space-y-1.5">
-                    {diag.checks.map((ch) => (
-                      <div key={ch.name} className="flex items-start gap-2 text-sm">
-                        {ch.ok ? <CheckCircle size={16} className="text-emerald-600 mt-0.5 shrink-0" /> : <XCircle size={16} className="text-red-600 mt-0.5 shrink-0" />}
-                        <span><b className="text-brand-900">{ch.name}</b> — <span className="text-brand-500">{ch.detail}</span></span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            </>
-          )}
-        </section>
-      ))}
+          {advanced.map(renderGroup)}
+        </>
+      )}
 
       {error && (
-        <div className="mb-4 rounded-xl border border-red-200 bg-red-50 text-red-600 px-4 py-3 text-sm">{error}</div>
+        <div className="mb-3 rounded-xl border border-red-200 bg-red-50 text-red-600 px-4 py-3 text-sm flex items-start gap-2">
+          <XCircle size={16} className="mt-0.5 shrink-0" /> <span>{error}</span>
+        </div>
+      )}
+      {warn.length > 0 && (
+        <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 text-amber-700 px-4 py-3 text-sm">
+          <div className="flex items-center gap-2 font-semibold mb-1"><AlertTriangle size={16} /> 확인이 필요합니다(저장은 되었습니다)</div>
+          <ul className="list-disc ml-6 space-y-0.5">{warn.map((w, i) => <li key={i}>{w}</li>)}</ul>
+        </div>
       )}
 
       {/* 항상 보이는 하단 고정 저장 바 — 어느 섹션에서든 바로 저장 */}
@@ -315,7 +431,7 @@ export default function SettingsView() {
           </button>
           {showRaw && (
             <div className="mt-3 space-y-2">
-              <p className="text-xs text-brand-400">위 폼에 없는 항목(도메인 매핑·카테고리·별칭·Webhook 등)까지 config.json 전체를 직접 편집합니다. 키는 마스킹되어 보이며 그대로 두면 유지됩니다.</p>
+              <p className="text-xs text-brand-400">위 폼에 없는 항목(도메인 매핑·카테고리·별칭 등)까지 config.json 전체를 직접 편집합니다. 키는 마스킹되어 보이며 그대로 두면 유지됩니다.</p>
               <textarea
                 value={rawText}
                 onChange={(e) => setRawText(e.target.value)}
@@ -458,6 +574,38 @@ function WatcherCard() {
     setBusy(false);
   };
 
+  const onAddFolder = async () => {
+    setBusy(true); setMsg("");
+    const r = await pickFolder();
+    if (!r.ok || !r.path) {
+      if (r.message && !r.cancelled) setMsg(r.message);
+      setBusy(false);
+      return;
+    }
+    const next = Array.from(new Set([...(status?.folders || []), r.path]));
+    try {
+      await updateConfig({ vault_watcher: { watch_folders: next } });
+      setMsg(running ? "감시 폴더가 추가되었습니다. 반영하려면 '감시 중지' 후 다시 시작하세요." : "감시 폴더가 추가되었습니다.");
+    } catch (e: any) {
+      setMsg(`추가 실패: ${e?.message || e}`);
+    }
+    await refresh();
+    setBusy(false);
+  };
+
+  const onRemoveFolder = async (folder: string) => {
+    setBusy(true); setMsg("");
+    const next = (status?.folders || []).filter((f) => f !== folder);
+    try {
+      await updateConfig({ vault_watcher: { watch_folders: next } });
+      setMsg("감시 폴더가 제거되었습니다.");
+    } catch (e: any) {
+      setMsg(`제거 실패: ${e?.message || e}`);
+    }
+    await refresh();
+    setBusy(false);
+  };
+
   const running = !!status?.running;
   const c = status?.counts;
 
@@ -470,20 +618,32 @@ function WatcherCard() {
         </span>
       </h3>
       <p className="text-xs text-brand-500 mb-3">
-        지정한 폴더에 새 녹음 파일이 생기면 자동으로 회의록을 생성합니다. 감시 폴더는
-        위 <b>'고급: 전체 설정(JSON)'</b>에서 <code>vault_watcher.watch_folders</code> 에 추가하세요.
+        지정한 폴더에 새 녹음 파일이 생기면 자동으로 회의록을 생성합니다. 아래에서 감시할 폴더를 추가하세요.
       </p>
 
-      {status?.folders && status.folders.length > 0 ? (
-        <div className="mb-3 text-xs text-brand-600">
-          <span className="font-bold">감시 폴더:</span>
-          <ul className="list-disc ml-5 mt-1 space-y-0.5 font-mono">
-            {status.folders.map((f) => <li key={f}>{f}</li>)}
-          </ul>
+      {/* 감시 폴더 목록 + 추가/삭제 */}
+      <div className="mb-3">
+        <div className="flex items-center justify-between mb-1.5">
+          <span className="text-xs font-bold text-brand-600">감시 폴더</span>
+          <button onClick={onAddFolder} disabled={busy} className="flex items-center gap-1.5 px-3 py-1.5 bg-brand-50 text-brand-700 rounded-lg text-xs font-semibold hover:bg-brand-100 transition-all">
+            {busy ? <Loader2 size={13} className="animate-spin" /> : <FolderOpen size={13} />} 폴더 추가
+          </button>
         </div>
-      ) : (
-        <div className="mb-3 text-xs text-amber-600">감시 폴더가 설정되지 않았습니다.</div>
-      )}
+        {status?.folders && status.folders.length > 0 ? (
+          <ul className="space-y-1">
+            {status.folders.map((f) => (
+              <li key={f} className="flex items-center justify-between gap-2 bg-zinc-50 border border-zinc-100 rounded-lg px-3 py-2 text-xs">
+                <span className="font-mono text-brand-700 truncate">{f}</span>
+                <button onClick={() => onRemoveFolder(f)} disabled={busy} className="p-1 text-brand-400 hover:text-red-500 hover:bg-red-50 rounded transition-colors shrink-0">
+                  <Trash2 size={14} />
+                </button>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <div className="text-xs text-amber-600 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2">감시 폴더가 없습니다. '폴더 추가'로 녹음 파일이 쌓이는 폴더를 지정하세요.</div>
+        )}
+      </div>
 
       {c && (
         <div className="mb-3 flex flex-wrap gap-2 text-xs">
@@ -539,7 +699,10 @@ function Stat({ label, value, tone }: { label: string; value: number; tone: stri
   );
 }
 
-function FieldRow({ field, value, onChange }: { field: Field; value: any; onChange: (v: any) => void }) {
+function FieldRow({ field, value, onChange, packaged }: { field: Field; value: any; onChange: (v: any) => void; packaged: boolean }) {
+  const [reveal, setReveal] = useState(false);
+  const [picking, setPicking] = useState(false);
+
   if (field.type === "bool") {
     return (
       <label className="flex items-start justify-between gap-4 cursor-pointer">
@@ -552,9 +715,20 @@ function FieldRow({ field, value, onChange }: { field: Field; value: any; onChan
     );
   }
 
+  const showPicker = field.picker && packaged;
+  const doPick = async () => {
+    setPicking(true);
+    const r = await pickFolder(typeof value === "string" ? value : "");
+    if (r.ok && r.path) onChange(r.path);
+    setPicking(false);
+  };
+
   return (
     <div className="space-y-2">
-      <label className="text-xs font-bold text-zinc-400 uppercase tracking-widest">{field.label}</label>
+      <label className="text-sm font-medium text-brand-900">
+        {field.label}
+        {field.required && <span className="text-red-500 ml-0.5">*</span>}
+      </label>
       {field.type === "select" ? (
         <select value={value ?? ""} onChange={(e) => onChange(e.target.value)} className="w-full px-3 py-2 bg-zinc-50 border border-zinc-200 rounded-lg outline-none focus:ring-2 focus:ring-brand-500 text-sm">
           {(field.options || []).map((o) => {
@@ -564,13 +738,32 @@ function FieldRow({ field, value, onChange }: { field: Field; value: any; onChan
           })}
         </select>
       ) : (
-        <input
-          type={field.type === "password" ? "password" : field.type === "number" ? "number" : "text"}
-          value={value ?? ""}
-          onChange={(e) => onChange(e.target.value)}
-          placeholder={field.placeholder || ""}
-          className="w-full px-3 py-2 bg-zinc-50 border border-zinc-200 rounded-lg outline-none focus:ring-2 focus:ring-brand-500 text-sm font-mono tracking-wide"
-        />
+        <div className="flex items-stretch gap-2">
+          <div className="relative flex-1">
+            <input
+              type={field.type === "password" && !reveal ? "password" : field.type === "number" ? "number" : "text"}
+              value={value ?? ""}
+              onChange={(e) => onChange(e.target.value)}
+              placeholder={field.placeholder || ""}
+              className={`w-full px-3 py-2 bg-zinc-50 border border-zinc-200 rounded-lg outline-none focus:ring-2 focus:ring-brand-500 text-sm font-mono tracking-wide ${field.type === "password" ? "pr-10" : ""}`}
+            />
+            {field.type === "password" && (
+              <button type="button" onClick={() => setReveal((s) => !s)} tabIndex={-1}
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-brand-400 hover:text-brand-700 p-1"
+                title={reveal ? "숨기기" : "표시"}>
+                {reveal ? <EyeOff size={16} /> : <Eye size={16} />}
+              </button>
+            )}
+          </div>
+          {showPicker && (
+            <button type="button" onClick={doPick} disabled={picking}
+              className="flex items-center gap-1.5 px-3 bg-brand-50 text-brand-700 rounded-lg text-sm font-semibold hover:bg-brand-100 transition-all shrink-0"
+              title="폴더 찾아보기">
+              {picking ? <Loader2 size={16} className="animate-spin" /> : <FolderOpen size={16} />}
+              <span className="hidden md:inline">찾아보기</span>
+            </button>
+          )}
+        </div>
       )}
       {field.desc && <p className="text-xs text-brand-400">{field.desc}</p>}
     </div>
@@ -590,4 +783,21 @@ function TestRow({ label, busy, result, onClick }: { label: string; busy: boolea
       )}
     </div>
   );
+}
+
+// ── 중첩 키(점 표기) 헬퍼 — notify."slack.webhook_url" 같은 필드용 ──────────
+function getNested(obj: any, dotted: string): any {
+  if (obj == null) return undefined;
+  if (!dotted.includes(".")) return obj[dotted];
+  return dotted.split(".").reduce((acc, p) => (acc == null ? undefined : acc[p]), obj);
+}
+function setNested(obj: any, dotted: string, val: any): void {
+  if (!dotted.includes(".")) { obj[dotted] = val; return; }
+  const parts = dotted.split(".");
+  let node = obj;
+  for (const p of parts.slice(0, -1)) {
+    if (typeof node[p] !== "object" || node[p] == null) node[p] = {};
+    node = node[p];
+  }
+  node[parts[parts.length - 1]] = val;
 }

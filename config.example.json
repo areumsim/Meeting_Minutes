@@ -10,9 +10,9 @@
   "config_version": 1,
 
   "api": {
-    "_comment": "API 키 — 환경변수(OPENAI_API_KEY 등)가 있으면 환경변수 우선",
-    "openai_api_key":    "sk-proj-...",
-    "anthropic_api_key": "sk-ant-..."
+    "_comment": "API 키 — 비워 두세요(웹 [설정]에서 입력). 예시 형식은 sk-proj-.../sk-ant-... · 환경변수(OPENAI_API_KEY 등)가 있으면 환경변수 우선",
+    "openai_api_key":    "",
+    "anthropic_api_key": ""
   },
 
   "ssl": {
@@ -112,9 +112,9 @@
       "  → 회사 비밀번호 또는 앱 비밀번호 사용. 테넌트가 SMTP AUTH 차단 시 IT에 허용 요청.",
       "smtp_host 가 비어있으면 발신자 도메인으로 자동 추정(gmail/naver/outlook 인식)."
     ],
-    "sender":    "sender@naver.com",
+    "sender":    "",
     "password":  "",
-    "recipient": "recipient@company.com",
+    "recipient": "",
     "_markdown_attachment_comment": "메일에서 .md 한글이 깨지는 클라이언트가 많아 기본은 UTF-8 .txt로 변환 첨부. markdown으로 두면 text/markdown 유지.",
     "markdown_attachment": "txt",
     "smtp_host": "",

@@ -162,6 +162,23 @@ def migrate() -> bool:
 
     changed = False
 
+    # 0) 알려진 예시 플레이스홀더 값 정리.
+    #    과거 config.example.json 이 가짜 키(sk-proj-... 등)를 시드해서, 첫 실행 시
+    #    그 값이 config.json 에 그대로 저장됐다. 그 상태로 연결 테스트하면 OpenAI 가
+    #    401(키 무효)로 응답한다. 정확히 일치하는 플레이스홀더만 비워 실제 키 입력을 유도.
+    _PLACEHOLDERS = {
+        "api.openai_api_key": ("sk-proj-...",),
+        "api.anthropic_api_key": ("sk-ant-...",),
+        "email.sender": ("sender@naver.com",),
+        "email.recipient": ("recipient@company.com",),
+    }
+    for _path, _bad in _PLACEHOLDERS.items():
+        _sec, _, _k = _path.partition(".")
+        _node = user_cfg.get(_sec)
+        if isinstance(_node, dict) and _node.get(_k) in _bad:
+            _node[_k] = ""
+            changed = True
+
     # 1) config.example.json 의 전체 기본값에서 누락 키 주입
     try:
         example_path = app_paths.get_example_config_path()

@@ -126,6 +126,7 @@ hiddenimports = [
     'web.backend.api.wiki',
     'web.backend.api.tools',
     'web.backend.api.watcher',
+    'web.backend.api.assistant',
 
     # 폴더 자동 감시(vault_watcher) — watchdog FS 이벤트 모드 + 감시/처리 모듈
     'watchdog',
@@ -156,6 +157,13 @@ hiddenimports = [
     'meeting_minutes_app.meeting_pipeline.ingestion_pipeline',
     'meeting_minutes_app.meeting_pipeline.profiles',
     'meeting_minutes_app.meeting_pipeline.speaker_cache',
+    # 회의 비서(계획비서/자동화/vault-audio) 웹 기능이 지연 import 하는 모듈
+    'meeting_minutes_app.meeting_pipeline.plan_schedule',
+    'meeting_minutes_app.meeting_pipeline.vault_audio',
+    'meeting_minutes_app.meeting_pipeline.plan_watcher',
+    'meeting_minutes_app.meeting_pipeline.plan_research',
+    'meeting_minutes_app.meeting_pipeline.publish',
+    'meeting_minutes_app.meeting_pipeline.people',
     # 주의: ws_transcriber / realtime_transcription 은 numpy·sounddevice 의존(CLI 실시간 전용)이며
     # 웹 서버 런타임에서 import되지 않으므로 hiddenimports 에 넣지 않는다(넣으면 dead weight).
 

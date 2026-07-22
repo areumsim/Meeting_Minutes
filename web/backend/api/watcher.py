@@ -152,3 +152,131 @@ def watcher_start():
 @router.post("/stop")
 def watcher_stop():
     return _manager.stop()
+
+
+# ── 계획 자동화 (plan-watcher/auto-process 통합) ──────────────────
+# 볼트의 planned 노트에 사전 리서치를 자동 작성하고, 노트에 첨부된 새 녹음을
+# 자동으로 회의록화한다(plan_watcher 의 처리 블록 재사용). auto-process 의 임베드
+# 오디오 처리는 여기 _audio_pass 에 포섭된다.
+class _PlanAutomationManager:
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._thread = None
+        self._stop = threading.Event()
+        self._error = ""
+        self.notes = 0
+        self.audio = 0
+
+    def is_running(self):
+        return self._thread is not None and self._thread.is_alive()
+
+    def start(self, interval: float = 15.0):
+        with self._lock:
+            if self.is_running():
+                return {"ok": True, "running": True, "message": "이미 실행 중입니다."}
+            from meeting_minutes_app.common import config_loader as cfg
+            vault = (cfg.get("obsidian.vault_path", "") or cfg.get("indexing.vault_path", "") or "").strip()
+            if not vault or not Path(vault).is_dir():
+                return {"ok": False, "running": False,
+                        "message": "Obsidian 볼트 폴더가 설정/존재하지 않습니다. [설정]에서 지정하세요."}
+            notes_subdir = cfg.get("obsidian.notes_subdir", "00_Meetings") or "00_Meetings"
+            self._stop.clear()
+            self._error = ""
+            self.notes = 0
+            self.audio = 0
+
+            def _run():
+                try:
+                    from meeting_minutes_app.meeting_pipeline import plan_watcher as pw
+                    root = Path(vault)
+                    watch_root = root / notes_subdir
+                    if not watch_root.is_dir():
+                        watch_root = root
+                    llm, obs = pw._build_clients()
+                    if llm is None:
+                        self._error = "LLM 초기화 실패 — [설정]에서 API 키를 확인하세요. 자동화 중지."
+                        return
+                    seen = {}
+                    for f in pw._scan(watch_root):
+                        if self._stop.is_set():
+                            break
+                        if pw._process_file(f, llm, obs):
+                            self.notes += 1
+                        try:
+                            seen[str(f)] = f.stat().st_mtime
+                        except OSError:
+                            pass
+                    try:
+                        self.audio += pw._audio_pass(root, notes_subdir)
+                    except Exception as e:
+                        print(f"[plan-auto] 오디오 패스 오류: {e}")
+                    while not self._stop.is_set():
+                        self._stop.wait(interval)
+                        if self._stop.is_set():
+                            break
+                        for f in pw._scan(watch_root):
+                            try:
+                                mt = f.stat().st_mtime
+                            except OSError:
+                                continue
+                            if seen.get(str(f)) == mt:
+                                continue
+                            seen[str(f)] = mt
+                            if pw._process_file(f, llm, obs):
+                                self.notes += 1
+                        try:
+                            self.audio += pw._audio_pass(root, notes_subdir)
+                        except Exception as e:
+                            print(f"[plan-auto] 오디오 패스 오류: {e}")
+                    if obs:
+                        obs.close()
+                except Exception as e:  # pragma: no cover
+                    self._error = f"자동화 스레드 오류: {e}"
+
+            t = threading.Thread(target=_run, name="plan-automation", daemon=True)
+            t.start()
+            self._thread = t
+            return {"ok": True, "running": True,
+                    "message": "계획 자동화를 시작했습니다(planned 노트 사전 리서치 + 첨부 녹음 자동 처리)."}
+
+    def stop(self):
+        self._stop.set()
+        t = self._thread
+        if t is not None:
+            t.join(timeout=5.0)
+        with self._lock:
+            still = self.is_running()
+            if not still:
+                self._thread = None
+            return {"ok": not still, "running": still,
+                    "message": "자동화를 중지했습니다." if not still
+                    else "중지 요청됨 — 현재 처리 중인 작업이 끝나면 종료됩니다."}
+
+    def status(self):
+        from meeting_minutes_app.common import config_loader as cfg
+        vault = (cfg.get("obsidian.vault_path", "") or cfg.get("indexing.vault_path", "") or "").strip()
+        return {
+            "running": self.is_running(),
+            "vault": vault,
+            "notes_researched": self.notes,
+            "audio_processed": self.audio,
+            "error": self._error,
+        }
+
+
+_plan = _PlanAutomationManager()
+
+
+@router.get("/plan/status")
+def plan_status():
+    return _plan.status()
+
+
+@router.post("/plan/start")
+def plan_start():
+    return _plan.start()
+
+
+@router.post("/plan/stop")
+def plan_stop():
+    return _plan.stop()

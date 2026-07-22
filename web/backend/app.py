@@ -90,6 +90,7 @@ from web.backend.api.graph import router as graph_router
 from web.backend.api.wiki import router as wiki_router
 from web.backend.api.tools import router as tools_router
 from web.backend.api.watcher import router as watcher_router
+from web.backend.api.assistant import router as assistant_router
 
 app.include_router(sessions_router, prefix="/api")
 app.include_router(batch_router, prefix="/api")
@@ -100,6 +101,7 @@ app.include_router(graph_router, prefix="/api")
 app.include_router(wiki_router, prefix="/api")
 app.include_router(tools_router, prefix="/api")
 app.include_router(watcher_router, prefix="/api")
+app.include_router(assistant_router, prefix="/api")
 
 
 @app.post("/api/shutdown")

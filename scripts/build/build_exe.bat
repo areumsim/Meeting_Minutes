@@ -33,8 +33,29 @@ if errorlevel 1 (
 :: 3. EXE 빌드
 echo  [3/5] Building EXE...
 echo.
+
+:: (중요) 재빌드가 dist\MeetingMinutes 를 통째로 새로 만들면서 그 안의
+:: MeetingMinutesData(사용자 설정·API키·회의록)까지 지워지는 것을 방지 —
+:: 빌드 전에 옆으로 옮겨두고 빌드 후 복원한다.
+set "MM_DATA_BAK=%TEMP%\MM_DATA_BAK_%RANDOM%"
+if exist "dist\MeetingMinutes\MeetingMinutesData" (
+    echo  기존 설정/데이터 백업: "%MM_DATA_BAK%"
+    move "dist\MeetingMinutes\MeetingMinutesData" "%MM_DATA_BAK%" >nul
+)
+
 python -m PyInstaller scripts\build\build_exe.spec --noconfirm --clean
 echo.
+
+:: 사용자 데이터 복원 (빌드 성공/실패와 무관하게 되돌린다)
+if exist "%MM_DATA_BAK%" (
+    if exist "dist\MeetingMinutes" (
+        echo  설정/데이터 복원 중...
+        if exist "dist\MeetingMinutes\MeetingMinutesData" rmdir /s /q "dist\MeetingMinutes\MeetingMinutesData"
+        move "%MM_DATA_BAK%" "dist\MeetingMinutes\MeetingMinutesData" >nul
+    ) else (
+        rmdir /s /q "%MM_DATA_BAK%"
+    )
+)
 
 if not exist "dist\MeetingMinutes\MeetingMinutes.exe" (
     echo  [ERROR] Build failed. Check output above.
@@ -50,10 +71,19 @@ if exist "scripts\build\사용법.txt" (
     echo  [WARN] scripts\build\사용법.txt not found - skipping.
 )
 
-:: 5. 배포 zip 생성
-echo  [5/5] Creating distribution zip...
+:: 5. 배포 zip 생성 (사용자 데이터/시크릿 제외)
+:: (중요) dist\MeetingMinutes\MeetingMinutesData 에는 개발 PC의 실제 API 키·이메일
+:: 앱 비밀번호·회의록이 들어 있다. 이걸 그대로 zip 하면 배포본에 시크릿이 유출된다.
+:: → 임시 스테이징으로 복사한 뒤 MeetingMinutesData 를 제거하고 zip 한다.
+::   (첫 실행 시 config.example.json 에서 깨끗한 config.json 이 자동 생성됨)
+echo  [5/5] Creating distribution zip (excluding user data/secrets)...
 if exist "dist\MeetingMinutes.zip" del /q "dist\MeetingMinutes.zip"
-powershell -NoProfile -Command "Compress-Archive -Path 'dist\MeetingMinutes\*' -DestinationPath 'dist\MeetingMinutes.zip' -Force"
+powershell -NoProfile -Command "$ErrorActionPreference='Stop'; $stage = Join-Path $env:TEMP ('MM_STAGE_' + [System.IO.Path]::GetRandomFileName()); Copy-Item 'dist\MeetingMinutes' $stage -Recurse -Force; $data = Join-Path $stage 'MeetingMinutesData'; if (Test-Path $data) { Remove-Item $data -Recurse -Force }; Compress-Archive -Path (Join-Path $stage '*') -DestinationPath 'dist\MeetingMinutes.zip' -Force; Remove-Item $stage -Recurse -Force"
+if not exist "dist\MeetingMinutes.zip" (
+    echo  [ERROR] Zip creation failed.
+    pause
+    exit /b 1
+)
 
 echo.
 echo  ============================================

@@ -9,7 +9,7 @@ PyInstaller spec — Meeting Minutes Web UI (run_ui.exe)
 import os
 from pathlib import Path
 
-from PyInstaller.utils.hooks import collect_data_files, copy_metadata
+from PyInstaller.utils.hooks import collect_data_files, copy_metadata, collect_submodules
 
 block_cipher = None
 ROOT = os.path.abspath('.')
@@ -101,10 +101,11 @@ hiddenimports = [
     'wsproto',
     'websockets',
 
-    # OpenAI
+    # OpenAI — GA Realtime는 client.realtime 를 lazy attribute로 접근하므로
+    # PyInstaller가 정적으로 못 잡는다. realtime 리소스/타입을 명시 포함한다.
     'openai',
-    'openai.beta',
-    'openai.beta.realtime',
+    'openai.resources.realtime',
+    'openai.resources.realtime.realtime',
 
     # Anthropic (폴백)
     'anthropic',
@@ -177,6 +178,9 @@ hiddenimports = [
     'email.mime.multipart',
     'email.mime.base',
 ]
+
+# GA Realtime 전사 세션 param/이벤트 타입은 lazy 참조라 정적 감지가 어렵다 — 서브모듈 전체 포함.
+hiddenimports += collect_submodules('openai.types.realtime')
 
 a = Analysis(
     [os.path.join(APP, 'meeting_pipeline', 'run_ui_exe.py')],

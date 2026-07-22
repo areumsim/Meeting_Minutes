@@ -1,5 +1,6 @@
 # Required
-openai>=1.30.0
+# GA Realtime API(client.realtime, session.type='transcription')는 openai>=1.107 필요.
+openai>=1.107.1
 httpx>=0.27.0
 
 # WebSocket streaming (--mode ws, lower latency ~1s)

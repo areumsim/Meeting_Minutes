@@ -95,15 +95,19 @@ CLI와 동일한 기능을 브라우저에서 사용할 수 있는 웹 인터페
 
 ### 시작
 
+`run_meeting.bat`(더블클릭)은 **통합 런처 터미널 메뉴**를 엽니다 — 웹은 그 메뉴에서 선택하거나, 아래처럼 직접 실행합니다. (비개발자 배포는 웹이 바로 열리는 **EXE 패키지**를 쓰세요 → `docs/USER_GUIDE.md`)
+
 ```bash
-# Windows — 더블클릭
+# 통합 런처 메뉴 (Windows, 더블클릭) — 메뉴에서 '웹 UI' 선택
 run_meeting.bat
 
-# 또는 직접 실행
-python run_meeting.py web                    # 프로덕션 모드 (http://localhost:8501)
+# 웹을 직접 실행
+python run_meeting.py web                    # 프로덕션 모드 (기본 http://localhost:8501)
 python run_meeting.py web --dev              # 개발 모드 (Vite + FastAPI)
 python run_meeting.py web --port 9000        # 포트 변경
 ```
+
+> EXE 패키지는 8501이 사용 중이면 자동으로 다른 빈 포트를 선택하므로, 주소가 8501이 아닐 수 있습니다(브라우저는 자동으로 열립니다).
 
 > 최초 실행 시 `fastapi`, `uvicorn`, `python-multipart` 및 프론트엔드 의존성이 자동 설치됩니다.
 
@@ -476,15 +480,15 @@ cp   config.example.json config.json   # Mac/Linux
     "anthropic_api_key": "sk-ant-..."     // 선택 (Claude 폴백 사용 시)
   },
   "ssl": {
-    "verify": false    // 회사/학교 SSL 오류 시 false
+    "verify": true     // 기본 true(권장). 회사/학교망 SSL 오류 시에만 false (MITM 위험)
   },
   "models": {
-    "stt":             "gpt-4o-transcribe-diarize",  // 배치 파일 STT 예시(화자 분리)
-    "llm":             "gpt",                // gpt | claude
-    "gpt_model":       "gpt-4o",
+    "stt":             "gpt-4o-mini-transcribe",     // 기본값. 화자 분리는 "gpt-4o-transcribe-diarize"
+    "llm":             "gpt",                // 기본 gpt(OpenAI 키만 필요) | claude(Anthropic 키 별도)
+    "gpt_model":       "gpt-4o-mini",
     "minutes_model":   "gpt-4o",             // 회의록 생성 모델 (기본: gpt-4o)
     "summary_model":   "gpt-4o",             // 요약본 생성 모델 (기본: gpt-4o)
-    "claude_model":    "claude-sonnet-4-6",  // Claude 폴백 모델 ( claude-opus-4-6 ) 
+    "claude_model":    "claude-opus-4-8",    // llm=claude 일 때 사용 (opus-4-8 / sonnet-5 / haiku-4-5)
     "translate_model": "gpt-4o-mini"
   },
   "realtime": {
@@ -503,7 +507,7 @@ cp   config.example.json config.json   # Mac/Linux
     "markdown_attachment": "txt"
   },
   "notify": {
-    "on_finish": "email",
+    "on_finish": "none",   // 기본 none(끔). 알림을 쓰려면 email/slack/teams + 해당 설정
     "slack": { "webhook_url": "https://hooks.slack.com/services/..." },
     "teams": { "webhook_url": "https://...webhook.office.com/..." }
   },

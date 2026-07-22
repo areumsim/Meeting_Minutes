@@ -159,6 +159,9 @@ export default function SettingsView() {
 
   const runTest = async (kind: "openai" | "anthropic" | "obsidian") => {
     setTesting(kind);
+    // 연결 테스트는 저장된 config.json 을 읽는다. 입력만 하고 [설정 저장]을 안 누른
+    // 경우 '설정되지 않음'이 나오므로, 아직 저장 안 된 입력이 있으면 먼저 저장한다.
+    if (Object.values(dirty).some(Boolean)) await handleSave();
     const res =
       kind === "openai" ? await testOpenAIKey() :
       kind === "anthropic" ? await testAnthropicKey() :
@@ -169,6 +172,7 @@ export default function SettingsView() {
 
   const handleReindex = async () => {
     setTesting("reindex");
+    if (Object.values(dirty).some(Boolean)) await handleSave();
     const res = await reindexVault();
     setTestMsg((prev) => ({ ...prev, reindex: res }));
     setTesting("");
@@ -176,6 +180,7 @@ export default function SettingsView() {
 
   const handleDiagnose = async () => {
     setTesting("diagnose");
+    if (Object.values(dirty).some(Boolean)) await handleSave();
     setDiag(await obsidianDiagnose());
     setTesting("");
   };
@@ -285,14 +290,22 @@ export default function SettingsView() {
         <div className="mb-4 rounded-xl border border-red-200 bg-red-50 text-red-600 px-4 py-3 text-sm">{error}</div>
       )}
 
-      <button
-        onClick={handleSave}
-        disabled={saving}
-        className="mb-8 w-full md:w-auto flex items-center justify-center gap-2 px-8 py-3.5 bg-brand-950 text-white rounded-xl font-bold hover:bg-brand-900 transition-all shadow-xl active:scale-95"
-      >
-        {saving ? <Loader2 size={18} className="animate-spin" /> : saved ? <CheckCircle size={18} /> : <Save size={18} />}
-        {saved ? "저장되었습니다!" : "설정 저장"}
-      </button>
+      {/* 항상 보이는 하단 고정 저장 바 — 어느 섹션에서든 바로 저장 */}
+      <div className="sticky bottom-3 z-20 mb-8">
+        <div className="flex flex-col md:flex-row md:items-center gap-2 bg-white/85 backdrop-blur border border-brand-200 rounded-2xl p-3 shadow-2xl shadow-brand-900/10">
+          <button
+            onClick={handleSave}
+            disabled={saving}
+            className="w-full md:w-auto flex items-center justify-center gap-2 px-8 py-3 bg-brand-950 text-white rounded-xl font-bold hover:bg-brand-900 transition-all active:scale-95"
+          >
+            {saving ? <Loader2 size={18} className="animate-spin" /> : saved ? <CheckCircle size={18} /> : <Save size={18} />}
+            {saved ? "저장되었습니다!" : "설정 저장"}
+          </button>
+          <p className="text-xs text-brand-400 md:ml-1">
+            변경 후 꼭 저장하세요. (연결 테스트·진단·재빌드는 자동으로 먼저 저장합니다.)
+          </p>
+        </div>
+      </div>
 
       {/* 고급: 전체 설정(JSON) 직접 편집 */}
       {packaged && (

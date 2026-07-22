@@ -50,11 +50,11 @@ SCHEMA: List[Dict[str, Any]] = [
     {
         "id": "storage",
         "label": "저장 위치",
-        "desc": "결과물이 저장되는 폴더입니다. output_dir 는 앱 데이터 폴더(MeetingMinutesData) 기준 상대경로이거나 절대경로입니다.",
+        "desc": "만들어진 회의록 파일이 어디에 저장될지 정합니다. Obsidian 볼트를 연결했다면 회의록은 볼트에도 저장되며, 아래 폴더에는 항상 사본이 남습니다. 잘 모르겠으면 그대로 두세요.",
         "fields": [
-            {"section": "output_dir", "key": "", "label": "결과 저장 폴더(output)", "type": "text", "default": "./output", "scalar": True, "desc": "회의록/요약/전사 파일이 저장되는 폴더. 예: ./output 또는 D:\\Minutes\\output"},
-            {"section": "analysis", "key": "templates_dir", "label": "프롬프트 템플릿 폴더", "type": "text", "default": "prompts", "desc": "분석 프롬프트(.md) 폴더."},
-            {"section": "analysis", "key": "default_type", "label": "기본 문서 유형", "type": "select", "default": "meeting", "options": ["meeting", "seminar", "lecture", "memo"]},
+            {"section": "output_dir", "key": "", "label": "결과물 저장 폴더", "type": "text", "default": "./output", "scalar": True, "desc": "회의록·요약·전사(.md/.txt) 결과 파일이 저장되는 폴더입니다. 기본값 ./output 은 프로그램 옆 MeetingMinutesData\\output 폴더를 뜻합니다. 특정 위치에 모으려면 절대경로를 넣으세요(예: D:\\Minutes)."},
+            {"section": "analysis", "key": "templates_dir", "label": "AI 프롬프트 폴더 (고급)", "type": "text", "default": "prompts", "desc": "회의록을 만들 때 쓰는 AI 지시문(.md) 폴더입니다. 문구를 직접 바꾸고 싶은 게 아니면 기본값(prompts) 그대로 두세요."},
+            {"section": "analysis", "key": "default_type", "label": "기본 문서 유형", "type": "select", "default": "meeting", "options": ["meeting", "seminar", "lecture", "memo"], "desc": "유형을 따로 고르지 않았을 때 적용되는 기본값입니다(회의/세미나/강의/메모)."},
         ],
     },
     {
@@ -148,15 +148,15 @@ SCHEMA: List[Dict[str, Any]] = [
     },
     {
         "id": "email",
-        "label": "이메일 (선택)",
-        "desc": "회의록 이메일 발송 설정. smtp_host 비우면 발신 도메인으로 자동 추정.",
+        "label": "이메일 자동 발송 (선택)",
+        "desc": "회의록이 완성되면 자동으로 메일로 보내는 기능입니다. 안 쓰면 비워 두세요. 쓰려면 '보내는 메일'과 그 메일의 '앱 비밀번호'가 필요합니다.",
         "fields": [
-            {"section": "email", "key": "sender", "label": "보내는 메일", "type": "text", "default": ""},
-            {"section": "email", "key": "password", "label": "메일 앱 비밀번호", "type": "password", "sensitive": True, "default": ""},
-            {"section": "email", "key": "recipient", "label": "받는 메일", "type": "text", "default": ""},
-            {"section": "email", "key": "smtp_host", "label": "SMTP 호스트(선택)", "type": "text", "default": "", "placeholder": "smtp.office365.com"},
-            {"section": "email", "key": "smtp_port", "label": "SMTP 포트(선택)", "type": "number", "default": 0, "placeholder": "587"},
-            {"section": "email", "key": "markdown_attachment", "label": "첨부 형식", "type": "select", "default": "txt", "options": [{"value": "txt", "label": "txt — UTF-8 텍스트(한글 안전)"}, {"value": "markdown", "label": "markdown — .md 유지"}]},
+            {"section": "email", "key": "sender", "label": "보내는 메일 주소", "type": "text", "default": "", "placeholder": "myid@gmail.com", "desc": "회의록을 보낼 내 메일 계정(Gmail/네이버/아웃룩 등)."},
+            {"section": "email", "key": "password", "label": "메일 앱 비밀번호", "type": "password", "sensitive": True, "default": "", "desc": "주의: 평소 로그인 비밀번호가 아닙니다. 메일 서비스 보안설정에서 '앱 비밀번호'를 따로 발급해 넣으세요. (Gmail: Google 계정→보안→2단계 인증 켠 뒤 '앱 비밀번호' / 네이버: 메일 환경설정→POP3·SMTP→'앱 비밀번호 설정' / 아웃룩: 계정 보안→앱 암호) 보통 공백 없는 16자리입니다."},
+            {"section": "email", "key": "recipient", "label": "받는 메일 주소", "type": "text", "default": "", "placeholder": "team@company.com", "desc": "회의록을 받을 주소. 비우면 보내는 주소로 자기 자신에게 보냅니다."},
+            {"section": "email", "key": "smtp_host", "label": "SMTP 서버 (보통 비워둠)", "type": "text", "default": "", "placeholder": "자동 감지", "desc": "비워 두면 보내는 메일 도메인으로 자동 설정됩니다(gmail/naver/outlook 인식). 회사 자체 메일서버면 여기에 주소를 넣으세요(예: smtp.office365.com)."},
+            {"section": "email", "key": "smtp_port", "label": "SMTP 포트 (보통 비워둠)", "type": "number", "default": 0, "placeholder": "자동(587)", "desc": "비워 두거나 0이면 자동(대개 587). 회사 서버가 다른 포트를 쓰면 지정."},
+            {"section": "email", "key": "markdown_attachment", "label": "첨부 파일 형식", "type": "select", "default": "txt", "options": [{"value": "txt", "label": "txt — 텍스트(한글 안전, 추천)"}, {"value": "markdown", "label": "markdown — .md 원본 유지"}], "desc": "회의록을 어떤 파일로 첨부할지. 대부분 txt 권장."},
         ],
     },
     {

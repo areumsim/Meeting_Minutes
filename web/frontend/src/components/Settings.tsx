@@ -8,10 +8,10 @@ import {
   testOpenAIKey, testAnthropicKey, testObsidianPath, reindexVault, shutdownApp,
   getProfiles, createProfile, deleteProfile, clearSessions,
   getApiKey, setApiKey, getAnthropicKey, setAnthropicKey,
-  getWatcherStatus, startWatcher, stopWatcher,
+  getWatcherStatus, startWatcher, stopWatcher, obsidianDiagnose,
 } from "../lib/api";
 import type { Profile } from "../lib/types";
-import type { WatcherStatus } from "../lib/api";
+import type { WatcherStatus, DiagnoseResult } from "../lib/api";
 
 interface Field {
   section: string;
@@ -68,6 +68,7 @@ export default function SettingsView() {
 
   const [testing, setTesting] = useState<string>("");
   const [testMsg, setTestMsg] = useState<Record<string, { ok: boolean; message: string }>>({});
+  const [diag, setDiag] = useState<DiagnoseResult | null>(null);
 
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [showNewProfile, setShowNewProfile] = useState(false);
@@ -173,6 +174,12 @@ export default function SettingsView() {
     setTesting("");
   };
 
+  const handleDiagnose = async () => {
+    setTesting("diagnose");
+    setDiag(await obsidianDiagnose());
+    setTesting("");
+  };
+
   const toggleRaw = async () => {
     if (!showRaw) {
       const cfg = await getConfig();
@@ -254,6 +261,21 @@ export default function SettingsView() {
               <TestRow label="Obsidian 경로 확인" busy={testing === "obsidian"} result={testMsg.obsidian} onClick={() => runTest("obsidian")} />
               <TestRow label="검색 인덱스 재빌드" busy={testing === "reindex"} result={testMsg.reindex} onClick={handleReindex} />
               <p className="text-xs text-brand-400 mt-1">볼트(.md 폴더)를 바꾸거나 노트를 추가한 뒤 눌러 검색·위키를 최신화하세요.</p>
+              <div className="mt-5">
+                <button onClick={handleDiagnose} disabled={testing === "diagnose"} className="flex items-center gap-2 px-5 py-2.5 bg-brand-50 text-brand-700 rounded-xl text-sm font-semibold hover:bg-brand-100 transition-all w-fit">
+                  {testing === "diagnose" ? <Loader2 size={16} className="animate-spin" /> : <Plug size={16} />} Obsidian 전체 진단
+                </button>
+                {diag && (
+                  <div className="mt-3 space-y-1.5">
+                    {diag.checks.map((ch) => (
+                      <div key={ch.name} className="flex items-start gap-2 text-sm">
+                        {ch.ok ? <CheckCircle size={16} className="text-emerald-600 mt-0.5 shrink-0" /> : <XCircle size={16} className="text-red-600 mt-0.5 shrink-0" />}
+                        <span><b className="text-brand-900">{ch.name}</b> — <span className="text-brand-500">{ch.detail}</span></span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
             </>
           )}
         </section>

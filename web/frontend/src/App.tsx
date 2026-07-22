@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { Mic, FileAudio, List, Settings, FileText, MessageCircleQuestion, ClipboardList, HelpCircle, Network } from "lucide-react";
+import { Mic, FileAudio, List, Settings, FileText, MessageCircleQuestion, ClipboardList, HelpCircle, Network, CalendarClock } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import Dashboard from "./components/Dashboard";
 import Recorder from "./components/Recorder";
@@ -11,9 +11,10 @@ import PrepBrief from "./components/PrepBrief";
 import Help from "./components/Help";
 import SettingsView from "./components/Settings";
 import GraphExplorer from "./components/GraphExplorer";
+import Assistant from "./components/Assistant";
 import { getApiKey, getConfig } from "./lib/api";
 
-type View = "dashboard" | "recorder" | "upload" | "text" | "wiki" | "prep" | "graph" | "help" | "detail" | "settings";
+type View = "dashboard" | "recorder" | "upload" | "text" | "wiki" | "prep" | "assistant" | "graph" | "help" | "detail" | "settings";
 
 export default function App() {
   const [viewState, setViewState] = useState<View>("dashboard");
@@ -78,6 +79,7 @@ export default function App() {
             <NavItem icon={<FileText size={18} />} label="텍스트 분석" active={view === "text"} onClick={() => setView("text")} />
             <NavItem icon={<MessageCircleQuestion size={18} />} label="위키 질문" active={view === "wiki"} onClick={() => setView("wiki")} />
             <NavItem icon={<ClipboardList size={18} />} label="회의 준비" active={view === "prep"} onClick={() => setView("prep")} />
+            <NavItem icon={<CalendarClock size={18} />} label="회의 비서" active={view === "assistant"} onClick={() => setView("assistant")} />
             <NavItem icon={<Network size={18} />} label="지식그래프" active={view === "graph"} onClick={() => setView("graph")} />
             <NavItem icon={<HelpCircle size={18} />} label="도움말" active={view === "help"} onClick={() => setView("help")} />
           </div>
@@ -121,6 +123,7 @@ export default function App() {
             {view === "text" && <TextInput onComplete={navigateToDetail} />}
             {view === "wiki" && <WikiAsk />}
             {view === "prep" && <PrepBrief />}
+            {view === "assistant" && <Assistant />}
             {view === "graph" && <GraphExplorer />}
             {view === "help" && <Help />}
             {view === "settings" && <SettingsView />}

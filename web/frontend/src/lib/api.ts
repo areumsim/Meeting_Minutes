@@ -165,6 +165,78 @@ export const stopWatcher = async (): Promise<{ ok: boolean; running: boolean; me
   }
 };
 
+// ── 회의 비서 & Obsidian 진단 (assistant API) ─────────────────
+export interface DiagnoseResult { ok: boolean; checks: { name: string; ok: boolean; detail: string }[] }
+export const obsidianDiagnose = async (): Promise<DiagnoseResult> => {
+  try {
+    const res = await fetch("/api/assistant/obsidian-diagnose");
+    return await res.json();
+  } catch (e: any) {
+    return { ok: false, checks: [{ name: "연결", ok: false, detail: `진단 실패: ${e?.message || e}` }] };
+  }
+};
+
+export interface AssistantSummary {
+  ok: boolean; message?: string; summary?: string;
+  counts?: { meetings: number; conflicts: number; warnings: number; pending_merges: number };
+  dashboard_path?: string;
+}
+export const assistantStatus = async (days = 7): Promise<AssistantSummary> => {
+  try { return await (await fetch(`/api/assistant/status?days=${days}`)).json(); }
+  catch (e: any) { return { ok: false, message: `현황 조회 실패: ${e?.message || e}` }; }
+};
+export const assistantSchedule = async (days = 14, writeDashboard = true): Promise<AssistantSummary> => {
+  try {
+    const res = await fetch("/api/assistant/schedule", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ days, write_dashboard: writeDashboard }),
+    });
+    return await res.json();
+  } catch (e: any) { return { ok: false, message: `일정 갱신 실패: ${e?.message || e}` }; }
+};
+
+export interface PendingMerge { recording_title: string; recording_path: string; plan_title: string; matched_plan: string }
+export const getMerges = async (): Promise<{ ok: boolean; message?: string; pending?: PendingMerge[] }> => {
+  try { return await (await fetch("/api/assistant/merges")).json(); }
+  catch (e: any) { return { ok: false, message: `병합 대기 조회 실패: ${e?.message || e}` }; }
+};
+export const doMerge = async (recordingPath: string, deleteRecording = false): Promise<{ ok: boolean; message: string }> => {
+  try {
+    const res = await fetch("/api/assistant/merge", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ recording_path: recordingPath, delete_recording: deleteRecording }),
+    });
+    return await res.json();
+  } catch (e: any) { return { ok: false, message: `병합 실패: ${e?.message || e}` }; }
+};
+
+export const vaultAudio = async (dryRun: boolean): Promise<{ ok: boolean; running?: boolean; count?: number; message: string }> => {
+  try {
+    const res = await fetch("/api/assistant/vault-audio", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ dry_run: dryRun }),
+    });
+    return await res.json();
+  } catch (e: any) { return { ok: false, message: `처리 실패: ${e?.message || e}` }; }
+};
+export const vaultAudioStatus = async (): Promise<{ running: boolean; done: number; message: string }> => {
+  try { return await (await fetch("/api/assistant/vault-audio/status")).json(); }
+  catch { return { running: false, done: 0, message: "" }; }
+};
+
+export interface PlanAutoStatus { running: boolean; vault: string; notes_researched: number; audio_processed: number; error?: string }
+export const planStatus = async (): Promise<PlanAutoStatus | null> => {
+  try { return await (await fetch("/api/watcher/plan/status")).json(); } catch { return null; }
+};
+export const planStart = async (): Promise<{ ok: boolean; running: boolean; message: string }> => {
+  try { return await (await fetch("/api/watcher/plan/start", { method: "POST" })).json(); }
+  catch (e: any) { return { ok: false, running: false, message: `시작 실패: ${e?.message || e}` }; }
+};
+export const planStop = async (): Promise<{ ok: boolean; running: boolean; message: string }> => {
+  try { return await (await fetch("/api/watcher/plan/stop", { method: "POST" })).json(); }
+  catch (e: any) { return { ok: false, running: true, message: `중지 실패: ${e?.message || e}` }; }
+};
+
 // 회의 준비 브리핑 생성.
 export const prepBrief = async (title: string, topic: string): Promise<{ ok: boolean; brief?: string; message?: string }> => {
   try {

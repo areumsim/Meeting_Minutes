@@ -136,13 +136,68 @@ def reindex():
 
 
 # ── 4) 회의 준비 브리핑 ───────────────────────────
+@router.get("/cost/rates")
+def cost_rates():
+    """현재 설정 기준 실시간 비용 요율(USD) — 녹음 중 러닝 비용 추정용."""
+    try:
+        from meeting_minutes_app.common import config_loader as cfg
+        from meeting_minutes_app.common import pricing
+        stt_model = cfg.get("models.stt", "gpt-4o-mini-transcribe") or "gpt-4o-mini-transcribe"
+        llm = cfg.get("models.llm", "gpt") or "gpt"
+        if str(llm).lower().startswith("claude"):
+            minutes_model = cfg.get("models.claude_model", None)
+        else:
+            minutes_model = cfg.get("models.minutes_model", None) or cfg.get("models.gpt_model", None)
+        return {
+            "stt_model": stt_model,
+            "stt_per_min": pricing.stt_rate_per_min(stt_model),
+            "translate_per_min": pricing.TRANSLATE_COST_PER_MIN,
+            # 회의록 생성 요율은 실제 LLM(gpt/claude) 모델 단가를 반영 (과거 항상 gpt-4o 기준이었음)
+            "minutes_flat": pricing.minutes_cost(llm, minutes_model),
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"요율 로드 실패: {e}")
+
+
+def _note_ref(n) -> dict:
+    """검색 결과 노트를 {title, path, score} 로 정규화(형태가 dict/obj 어느 쪽이든)."""
+    def g(k, *alts):
+        if isinstance(n, dict):
+            for kk in (k, *alts):
+                if n.get(kk) not in (None, ""):
+                    return n.get(kk)
+            return ""
+        for kk in (k, *alts):
+            v = getattr(n, kk, None)
+            if v not in (None, ""):
+                return v
+        return ""
+    path = g("path", "filename", "file")
+    title = g("title", "name") or (str(path).replace("\\", "/").split("/")[-1].replace(".md", "") if path else "")
+    return {"title": title, "path": str(path), "score": g("score")}
+
+
 @router.post("/prep-brief")
 def prep_brief(payload: dict):
-    """제목/주제로 볼트·레지스트리를 검색해 준비 브리핑 마크다운을 생성."""
+    """제목/주제(+참석자·추가노트)로 볼트·레지스트리를 검색해 준비 브리핑 생성.
+
+    반환에 related(찾은 관련 노트 목록)·vault_connected 를 포함해, 저장 전에
+    '무엇이 연결됐는지' 화면에서 확인·추천할 수 있게 한다.
+    """
     title = (payload.get("title") or "").strip()
     if not title:
         raise HTTPException(status_code=422, detail="제목을 입력하세요.")
     topic = payload.get("topic") or ""
+    attendees = (payload.get("attendees") or "").strip()
+    notes = (payload.get("notes") or "").strip()
+    # 참석자·추가노트를 검색 힌트로 반영(관련 노트 매칭 향상) + 브리핑 memo 로 전달
+    search_topic = " ".join(x for x in (topic, attendees, notes) if x).strip() or topic
+    memo_parts = []
+    if attendees:
+        memo_parts.append(f"참석자: {attendees}")
+    if notes:
+        memo_parts.append(notes)
+    memo = "\n".join(memo_parts)
     try:
         from meeting_minutes_app.wiki_core import wiki_knowledge as wk
         from meeting_minutes_app.wiki_core import vault_retrieval as vr
@@ -152,20 +207,62 @@ def prep_brief(payload: dict):
             obs = vr.load_obsidian_client()
         except Exception:
             obs = None
+        vault_connected = bool(indexer or obs)
 
-        regular, papers = wk._get_brief_related_notes(title, topic, indexer, obs, limit=5, memo="")
+        regular, papers = wk._get_brief_related_notes(
+            title, search_topic, indexer, obs, limit=5, memo=memo)
         action_reg = wk.load_action_registry(wk.DATA_DIR / "action_registry.json")
         decision_reg = wk.load_decision_registry(wk.DATA_DIR / "decision_registry.json")
-        # 필터 함수는 registry dict가 아니라 내부 리스트를 받고, 2번째 인자는 topic 문자열.
-        open_actions = wk._filter_actions_by_topic(action_reg.get("actions", []), topic, limit=10)
-        recent_decisions = wk._filter_decisions_by_topic(decision_reg.get("decisions", []), topic, limit=10)
+        open_actions = wk._filter_actions_by_topic(action_reg.get("actions", []), search_topic, limit=10)
+        recent_decisions = wk._filter_decisions_by_topic(decision_reg.get("decisions", []), search_topic, limit=10)
 
         now = datetime.now()
         brief = wk.build_prep_brief(
             title, topic, now.strftime("%y%m%d"), now.strftime("%Y-%m-%d"),
             regular, papers, open_actions, recent_decisions,
         )
-        return {"ok": True, "brief": brief}
+        related = [_note_ref(n) for n in (list(regular or []) + list(papers or []))]
+        return {
+            "ok": True,
+            "brief": brief,
+            "vault_connected": vault_connected,
+            "related": related,
+            "related_count": len(related),
+            "open_actions": len(open_actions or []),
+            "recent_decisions": len(recent_decisions or []),
+        }
     except Exception as e:
         traceback.print_exc()
         return {"ok": False, "message": f"브리핑 생성 실패: {e}"}
+
+
+@router.post("/prep-brief/save")
+def prep_brief_save(payload: dict):
+    """생성된 회의 준비 브리핑을 세션으로 저장 → 대시보드에 표시.
+
+    payload: { title, brief, topic?, date?, attendees? }
+    """
+    title = (payload.get("title") or "").strip()
+    brief = payload.get("brief") or ""
+    if not title or not brief:
+        raise HTTPException(status_code=422, detail="제목과 브리핑 내용이 필요합니다.")
+    try:
+        from web.backend import database as db
+        sid = db.create_session(
+            title=title,
+            topic=payload.get("topic") or "",
+            doc_type="prep",
+            speakers=payload.get("attendees") or "",
+            source="web",
+            mode="prep_brief",
+        )
+        db.upsert_document(sid, "minutes", brief, fmt="markdown")
+        kw = {}
+        d = (payload.get("date") or "").strip()
+        if d:
+            kw["date"] = d
+        db.update_session_status(sid, "completed", **kw)
+        return {"ok": True, "sessionId": sid}
+    except Exception as e:
+        traceback.print_exc()
+        return {"ok": False, "message": f"저장 실패: {e}"}

@@ -393,7 +393,7 @@ class VaultIndexer:
             return None
         try:
             from openai import OpenAI
-            if not bool(_c("ssl.verify", False)):  # meeting_minutes.SSL_VERIFY와 동일 키/기본값
+            if not bool(_c("ssl.verify", True)):  # meeting_minutes.SSL_VERIFY와 동일 키/기본값(안전 기본 True)
                 try:
                     import httpx
                     import warnings

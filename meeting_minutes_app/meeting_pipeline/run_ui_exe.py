@@ -111,7 +111,11 @@ def main():
         try:
             logdir = Path(data_base) / "data" / "logs"
             logdir.mkdir(parents=True, exist_ok=True)
-            logf = open(logdir / "web_exe.log", "a", encoding="utf-8", errors="replace")
+            # buffering=1 → 라인 버퍼링. 콘솔이 없는 windowed 빌드에서 stdout 이
+            # 블록 버퍼(~8KB)에 쌓여 오류가 로그에 늦게(또는 크래시 시 아예 안) 남던
+            # 문제 방지 — 사용자 문제 신고 시 로그 근거 확보를 위해 줄 단위 flush.
+            logf = open(logdir / "web_exe.log", "a", encoding="utf-8",
+                        errors="replace", buffering=1)
             sys.stdout = logf
             sys.stderr = logf
         except Exception:

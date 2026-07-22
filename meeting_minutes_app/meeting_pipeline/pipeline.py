@@ -40,11 +40,23 @@ def process_single(
     file_prefix: str = "",
     memo: Optional[str] = None,
     debug_dir: Optional[str] = None,
+    progress_cb=None,
 ) -> Tuple[str, Optional[str]]:
     """
     단일 파일 처리 파이프라인.
     Returns: summary 텍스트 (알림 본문용)
+
+    progress_cb: 선택. progress_cb(percent:int, stage:str) 형태로 단계 진행을 보고.
+                 지정하지 않으면(CLI 등) 아무 동작도 하지 않는다.
     """
+    def _p(pct: int, stage: str):
+        if progress_cb:
+            try:
+                progress_cb(pct, stage)
+            except Exception:
+                pass
+
+    _p(3, "오디오 준비 중")
     labels = TYPE_LABELS[args.type]
     pfx    = file_prefix
     seg_path = os.path.join(output_dir, f"{pfx}segments.json")
@@ -75,6 +87,7 @@ def process_single(
         audio_path = prepare_audio(input_path, work_dir)
 
         # 2. STT
+        _p(10, "음성 인식(STT) 중 — 가장 오래 걸리는 단계입니다")
         speaker_names = (
             [n.strip() for n in args.speakers.split(",") if n.strip()]
             if getattr(args, "speakers", None) else None
@@ -144,6 +157,8 @@ def process_single(
         except Exception as e:
             warn(f"화자 이름 추론 실패 ({e}) → 원본 레이블 유지")
 
+    _p(55, "전사 완료 · 후처리 중")
+
     # 4. 번역
     segments_for_doc = segments
     if getattr(args, "translate", False):
@@ -167,6 +182,7 @@ def process_single(
         save(script_ko, os.path.join(output_dir, f"{pfx}script_ko.md"), "스크립트 (한국어)")
 
     # 5b. STT 교정 — 회의록 생성 전에 실행하여 교정본을 입력으로 사용
+    _p(65, "STT 교정 중")
     topic_str = getattr(args, 'topic', '') or ""
     refined_text: Optional[str] = None
     try:
@@ -211,6 +227,8 @@ def process_single(
     full_memo = memo or ""
     if getattr(args, "custom_prompt", None):
         full_memo = (full_memo + f"\n\n[추가 지시]: {args.custom_prompt}").strip()
+
+    _p(80, "회의록·요약 생성 중")
 
     from meeting_minutes_app.meeting_pipeline import finalize as fz
 

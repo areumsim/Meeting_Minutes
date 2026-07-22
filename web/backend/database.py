@@ -78,6 +78,10 @@ def init_db():
             CREATE INDEX IF NOT EXISTS idx_documents_session ON documents(session_id);
             CREATE INDEX IF NOT EXISTS idx_sessions_created ON sessions(created_at DESC);
         """)
+        # 서버가 (재)시작되는 시점엔 실제로 처리 중인 작업이 있을 수 없다.
+        # 이전 실행이 비정상 종료(크래시·강제종료·키 누락 등)돼 'processing'
+        # 상태로 고착된 세션을 error 로 정리해 대시보드가 지저분해지는 것을 막는다.
+        c.execute("UPDATE sessions SET status='error' WHERE status='processing'")
         c.commit()
 
 
@@ -200,6 +204,14 @@ def add_segments_bulk(session_id: str, segments: List[Dict]):
                  seg.get("end", seg.get("end_time", 0))),
             )
         c.commit()
+
+
+def replace_segments(session_id: str, segments: List[Dict]):
+    """세션의 기존 세그먼트를 전부 지우고 새 세그먼트로 교체 (화자분리 후처리용)."""
+    with _conn() as c:
+        c.execute("DELETE FROM segments WHERE session_id = ?", (session_id,))
+        c.commit()
+    add_segments_bulk(session_id, segments)
 
 
 # ── Documents ─────────────────────────────────────

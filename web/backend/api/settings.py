@@ -4,9 +4,11 @@ api/settings.py — 설정 읽기/쓰기 API
 
 import json
 import copy
+import sys
+import subprocess
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 
 from web.backend.paths import EXE_DIR
 
@@ -103,6 +105,27 @@ def _sensitive_paths() -> list:
         ]
 
 
+def _dget(container: dict, dotted: str):
+    """'a.b.c' 점 경로로 중첩 값 조회(없으면 None). 단일 키도 처리."""
+    node = container
+    for p in dotted.split("."):
+        if not isinstance(node, dict):
+            return None
+        node = node.get(p)
+    return node
+
+
+def _dset(container: dict, dotted: str, val) -> None:
+    """'a.b.c' 점 경로로 중첩 값 설정(중간 dict 자동 생성). 단일 키도 처리."""
+    parts = dotted.split(".")
+    node = container
+    for p in parts[:-1]:
+        if not isinstance(node.get(p), dict):
+            node[p] = {}
+        node = node[p]
+    node[parts[-1]] = val
+
+
 @router.get("/config")
 def get_config():
     if not CONFIG_PATH.exists():
@@ -112,12 +135,12 @@ def get_config():
 
     safe = copy.deepcopy(cfg)
 
-    # 스키마가 지정한 모든 비밀 값 마스킹(키/비밀번호가 브라우저로 평문 전송되지 않도록)
+    # 스키마가 지정한 모든 비밀 값 마스킹(키/비밀번호가 브라우저로 평문 전송되지 않도록).
+    # 경로는 점 표기(중첩) 지원: 예) notify.slack.webhook_url
     for path in _sensitive_paths():
-        section, _, key = path.partition(".")
-        node = safe.get(section)
-        if isinstance(node, dict) and isinstance(node.get(key), str) and node[key]:
-            node[key] = _mask_key(node[key])
+        v = _dget(safe, path)
+        if isinstance(v, str) and v:
+            _dset(safe, path, _mask_key(v))
 
     # 방어적: api.* 안의 'key' 포함 필드 + email.password 는 스키마와 무관하게 항상 마스킹
     if isinstance(safe.get("api"), dict):
@@ -197,7 +220,8 @@ def update_config(data: dict):
                     v = _coerce_value(field, v)
                 except ValueError as e:
                     raise HTTPException(status_code=422, detail=str(e))
-            cfg[section][k] = v
+            # k 에 점이 있으면 중첩 경로(예: notify."slack.webhook_url" → notify.slack.webhook_url)
+            _dset(cfg[section], k, v)
             # 서버측 mirror: obsidian.vault_path → indexing.vault_path 등 동시 반영.
             for mt in (field.get("mirror") if field else None) or []:
                 if isinstance(mt, (list, tuple)) and len(mt) == 2:
@@ -276,6 +300,98 @@ def test_anthropic():
         return {"ok": False, "message": f"연결 실패: {e}"}
 
 
+@router.post("/config/test/email")
+def test_email():
+    """저장된 이메일 설정으로 SMTP 로그인 후 테스트 메일을 1통 보낸다.
+
+    notifier.Notifier.add_email() 을 재사용해 SMTP 호스트 자동감지(gmail/naver/outlook)를
+    실제 발송과 동일하게 적용한다. 비밀번호는 응답에 포함하지 않는다.
+    """
+    try:
+        from meeting_minutes_app.common.notifier import Notifier
+    except Exception as e:
+        return {"ok": False, "message": f"메일 모듈 로드 실패: {e}"}
+
+    try:
+        n = Notifier()
+        n.add_email()  # config.json/환경변수에서 sender·password·host·port 로드 + 자동감지
+        ch = n._channels[0] if n._channels else {}
+    except Exception as e:
+        return {"ok": False, "message": f"메일 설정 로드 실패: {e}"}
+
+    sender = ch.get("sender", "")
+    password = ch.get("password", "")
+    host = ch.get("smtp_host", "")
+    port = int(ch.get("smtp_port", 0) or 0)
+    recipients = ch.get("recipients") or ([sender] if sender else [])
+
+    if not sender:
+        return {"ok": False, "message": "보내는 메일 주소가 설정되지 않았습니다."}
+    if not password:
+        return {"ok": False, "message": "메일 앱 비밀번호가 설정되지 않았습니다. (로그인 비밀번호가 아니라 '앱 비밀번호'여야 합니다.)"}
+    if not recipients:
+        return {"ok": False, "message": "받는 메일 주소가 없습니다."}
+
+    import smtplib
+    from email.mime.text import MIMEText
+
+    msg = MIMEText("Meeting Minutes 메일 연결 테스트입니다. 이 메일이 보이면 설정이 정상입니다.", "plain", "utf-8")
+    msg["From"] = sender
+    msg["To"] = ", ".join(recipients)
+    msg["Subject"] = "[회의록] 메일 연결 테스트"
+
+    try:
+        with smtplib.SMTP(host, port, timeout=20) as server:
+            server.ehlo()
+            server.starttls()
+            server.login(sender, password)
+            server.sendmail(sender, recipients, msg.as_string())
+        return {"ok": True, "message": f"테스트 메일을 보냈습니다 → {', '.join(recipients)} (받은 편지함을 확인하세요. 서버 {host}:{port})"}
+    except smtplib.SMTPAuthenticationError:
+        return {"ok": False, "message": "로그인 실패 — 보내는 주소나 '앱 비밀번호'가 올바른지 확인하세요. (평소 로그인 비밀번호가 아니라 메일 보안설정에서 발급한 앱 비밀번호여야 합니다.)"}
+    except (OSError, smtplib.SMTPException) as e:
+        return {"ok": False, "message": f"SMTP 연결/발송 실패 ({host}:{port}): {e}"}
+    except Exception as e:
+        return {"ok": False, "message": f"메일 테스트 실패: {e}"}
+
+
+def _webhook_test(kind: str, cfg_key: str, env_var: str, payload: dict):
+    """Slack/Teams Incoming Webhook 으로 테스트 메시지 발송."""
+    try:
+        from meeting_minutes_app.common import config_loader
+        import os as _os
+        url = _os.environ.get(env_var, "") or config_loader.get(cfg_key, "")
+    except Exception as e:
+        return {"ok": False, "message": f"설정 로드 실패: {e}"}
+
+    if not url:
+        return {"ok": False, "message": f"{kind} Webhook URL이 설정되지 않았습니다."}
+    try:
+        import httpx
+        resp = httpx.post(url, json=payload, timeout=10.0)
+        if 200 <= resp.status_code < 300:
+            return {"ok": True, "message": f"{kind} 테스트 메시지를 보냈습니다. 채널을 확인하세요."}
+        return {"ok": False, "message": f"{kind} 응답 오류 ({resp.status_code}). Webhook URL을 확인하세요."}
+    except Exception as e:
+        return {"ok": False, "message": f"{kind} 연결 실패: {e}"}
+
+
+@router.post("/config/test/slack")
+def test_slack():
+    return _webhook_test(
+        "Slack", "notify.slack.webhook_url", "SLACK_WEBHOOK_URL",
+        {"text": "✅ Meeting Minutes 연결 테스트 메시지입니다. 이 메시지가 보이면 설정이 정상입니다."},
+    )
+
+
+@router.post("/config/test/teams")
+def test_teams():
+    return _webhook_test(
+        "Teams", "notify.teams.webhook_url", "TEAMS_WEBHOOK_URL",
+        {"text": "✅ Meeting Minutes 연결 테스트 메시지입니다. 이 메시지가 보이면 설정이 정상입니다."},
+    )
+
+
 @router.post("/config/test/obsidian")
 def test_obsidian():
     """Obsidian 볼트 경로 존재/디렉터리 여부 확인."""
@@ -294,3 +410,67 @@ def test_obsidian():
     if not p.is_dir():
         return {"ok": False, "message": f"폴더가 아닙니다: {vault}"}
     return {"ok": True, "message": f"볼트 폴더 확인됨: {vault}"}
+
+
+# 폴더 선택 다이얼로그를 띄우는 PowerShell 스크립트.
+# tkinter 는 exe 빌드에서 제외되므로 Windows 기본 .NET FolderBrowserDialog 를 사용한다.
+# 선택 경로만 stdout 으로 출력, 취소 시 아무것도 출력하지 않는다.
+_PICK_FOLDER_PS = (
+    "Add-Type -AssemblyName System.Windows.Forms | Out-Null; "
+    "$f = New-Object System.Windows.Forms.FolderBrowserDialog; "
+    "$f.Description = '폴더를 선택하세요'; "
+    "$f.ShowNewFolderButton = $true; "
+    "if ($env:MM_PICK_INIT) { $f.SelectedPath = $env:MM_PICK_INIT }; "
+    "$top = New-Object System.Windows.Forms.Form; "
+    "$top.TopMost = $true; "
+    "if ($f.ShowDialog($top) -eq [System.Windows.Forms.DialogResult]::OK) "
+    "{ [Console]::Out.Write($f.SelectedPath) }"
+)
+
+
+def _is_loopback(host: str | None) -> bool:
+    return host in ("127.0.0.1", "::1", "localhost", "testclient")
+
+
+@router.post("/system/pick-folder")
+async def pick_folder(request: Request, body: dict | None = None):
+    """네이티브 폴더 선택 다이얼로그를 서버(=이 PC)에서 띄우고 선택 경로를 반환.
+
+    exe 는 로컬(localhost)에서 브라우저로 접속하므로 다이얼로그가 사용자 화면에 뜬다.
+    원격 접속 시 서버 머신에 창이 떠 버리는 것을 막기 위해 loopback 접속만 허용한다.
+    실패/취소/비Windows 는 {ok:false} 로 안전하게 폴백(프론트는 텍스트 입력을 유지).
+    """
+    host = request.client.host if request.client else None
+    if not _is_loopback(host):
+        return {"ok": False, "message": "폴더 선택은 이 PC(로컬)에서만 사용할 수 있습니다. 경로를 직접 입력하세요."}
+    if sys.platform != "win32":
+        return {"ok": False, "message": "이 환경에서는 폴더 선택 창을 열 수 없습니다. 경로를 직접 입력하세요."}
+
+    import os
+    env = dict(os.environ)
+    initial = (body or {}).get("initial") if isinstance(body, dict) else None
+    if isinstance(initial, str) and initial.strip():
+        env["MM_PICK_INIT"] = initial.strip()
+
+    import asyncio
+
+    def _run_dialog():
+        # 타임아웃 120초로 단축 — 사용자가 창을 방치해도 5분이 아닌 2분 뒤 해제.
+        return subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-STA", "-Command", _PICK_FOLDER_PS],
+            capture_output=True, text=True, timeout=120, env=env,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+
+    try:
+        # 동기 subprocess를 스레드로 넘겨 이벤트 루프(다른 API 요청)를 막지 않는다.
+        proc = await asyncio.to_thread(_run_dialog)
+    except subprocess.TimeoutExpired:
+        return {"ok": False, "message": "폴더 선택 시간이 초과되었습니다(2분). 다시 시도하거나 경로를 직접 입력하세요."}
+    except Exception as e:
+        return {"ok": False, "message": f"폴더 선택 창을 열지 못했습니다: {e}"}
+
+    path = (proc.stdout or "").strip()
+    if not path:
+        return {"ok": False, "message": "선택이 취소되었습니다.", "cancelled": True}
+    return {"ok": True, "path": path}

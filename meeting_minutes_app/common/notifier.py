@@ -112,6 +112,9 @@ class Notifier:
             r.strip() for r in os.getenv("EMAIL_RECIPIENTS", recip_str).split(",")
             if r.strip()
         ]
+        # 받는 주소가 비어 있으면 보내는 주소로 자기 자신에게 발송(스키마 설명과 일치).
+        if not recipients and sender:
+            recipients = [sender]
         # SMTP 서버: 인자 > config(email.smtp_host) > 발신자 도메인 자동추정
         smtp_host = smtp_host or os.getenv("EMAIL_SMTP_HOST", "") or _c("email.smtp_host", "")
         smtp_port = smtp_port or int(os.getenv("EMAIL_SMTP_PORT", "") or _c("email.smtp_port", 0) or 0)
@@ -624,11 +627,15 @@ class Notifier:
     def _email_from_env_and_config() -> dict:
         sender = os.getenv("EMAIL_SENDER", "") or _c("email.sender")
         recip = _c("email.recipient", "")
+        recipients = [r.strip() for r in
+                      os.getenv("EMAIL_RECIPIENTS", recip).split(",") if r.strip()]
+        # 받는 주소가 비면 보내는 주소로 자기 자신에게 발송.
+        if not recipients and sender:
+            recipients = [sender]
         return {
             "sender": sender,
             "password": os.getenv("EMAIL_PASSWORD", "") or _c("email.password"),
-            "recipients": [r.strip() for r in
-                           os.getenv("EMAIL_RECIPIENTS", recip).split(",") if r.strip()],
+            "recipients": recipients,
         }
 
     @staticmethod

@@ -31,7 +31,7 @@ GPT_MODEL = _c("models.gpt_model", "gpt-4o") or "gpt-4o"
 CLAUDE_MODEL = _c("models.claude_model", "claude-opus-4-6") or "claude-opus-4-6"
 OPENAI_API_KEY = _c("api.openai_api_key", "") or ""
 ANTHROPIC_API_KEY = _c("api.anthropic_api_key", "") or ""
-SSL_VERIFY = _c("ssl.verify", False)
+SSL_VERIFY = _c("ssl.verify", True)  # 안전 기본값: 키 누락 시 검증 켜짐
 
 logger = logging.getLogger("meeting_minutes")
 

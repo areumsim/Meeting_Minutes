@@ -3,6 +3,7 @@ api/batch.py — 파일 업로드 + 배치 처리 API
 """
 
 import os
+import time
 import argparse
 import tempfile
 import traceback
@@ -19,6 +20,23 @@ router = APIRouter(tags=["batch"])
 
 UPLOADS_DIR = Path(EXE_DIR) / "web" / "uploads"
 UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
+
+# 세션별 처리 진행 상태(in-memory). BackgroundTasks가 같은 프로세스에서 돌아 공유된다.
+# {session_id: {"percent": int, "stage": str, "started": float}}
+_PROGRESS: dict = {}
+
+# 취소 요청된 세션 id 집합. 진행 콜백(_progress)이 단계 경계마다 확인해 협조적으로 중단한다.
+# (STT 등 개별 단계가 실행되는 도중에는 그 단계가 끝나야 취소가 반영된다.)
+_CANCELLED: set = set()
+
+
+class _BatchCancelled(BaseException):
+    """사용자가 처리를 취소했을 때 파이프라인을 중단시키는 신호.
+
+    Exception이 아닌 BaseException을 상속한다 — pipeline._p()가 progress_cb 예외를
+    `except Exception: pass`로 삼키므로, Exception 하위였다면 취소 신호가 전파되지
+    못하고 조용히 무시됐다. BaseException은 그 필터를 통과해 최상위까지 올라간다.
+    """
 
 
 def _build_args(
@@ -84,6 +102,14 @@ def _run_batch_processing(session_id: str, file_path: str, args: argparse.Namesp
         os.makedirs(output_dir, exist_ok=True)
 
         db.update_session_status(session_id, "processing", output_dir=output_dir)
+        _PROGRESS[session_id] = {"percent": 0, "stage": "처리 준비 중", "started": time.time()}
+
+        def _progress(pct: int, stage: str):
+            # 단계 경계마다 취소 요청을 확인해 협조적으로 중단한다.
+            if session_id in _CANCELLED:
+                raise _BatchCancelled()
+            prev = _PROGRESS.get(session_id, {})
+            _PROGRESS[session_id] = {**prev, "percent": pct, "stage": stage}
 
         with tempfile.TemporaryDirectory() as work_dir:
             pipeline.process_single(
@@ -93,10 +119,13 @@ def _run_batch_processing(session_id: str, file_path: str, args: argparse.Namesp
                 output_dir=output_dir,
                 title=title or "Upload",
                 work_dir=work_dir,
+                progress_cb=_progress,
             )
 
+        _progress(95, "결과 저장 중")
         db.import_output_files(session_id, output_dir)
         db.update_session_status(session_id, "completed")
+        _progress(100, "완료")
 
         # Wiki Knowledge Graph 동기화 (best-effort — 실패해도 배치 처리 결과에 영향 없음)
         try:
@@ -116,9 +145,66 @@ def _run_batch_processing(session_id: str, file_path: str, args: argparse.Namesp
         except Exception:
             pass
 
+        # 처리 완료 알림 (email/slack/teams) — 웹 업로드도 CLI/실시간과 동일하게 발송.
+        # (기존엔 이 경로에 알림 호출이 없어 업로드 완료 후 메일이 가지 않았다.)
+        try:
+            from meeting_minutes_app.common import config_loader as _cfg
+            channel = (_cfg.get("notify.on_finish", "none") or "none").lower()
+            if channel and channel != "none":
+                from meeting_minutes_app.meeting_pipeline.publish import (
+                    _send_notification, _collect_notification_artifacts,
+                )
+                files = _collect_notification_artifacts(output_dir, "", title or "Upload")
+                summary_path = os.path.join(output_dir, "summary.md")
+                if not os.path.isfile(summary_path):
+                    summary_path = ""
+                _send_notification(channel, title or "Upload", summary_path, files, doc_type=args.type)
+        except Exception:
+            traceback.print_exc()
+
+    except _BatchCancelled:
+        # 사용자가 취소 — 세션과 진행상태를 정리한다(대시보드에 잔여물 남기지 않음).
+        print(f"[batch] 세션 {session_id} 처리 취소됨")
+        try:
+            db.delete_session(session_id)
+        except Exception:
+            db.update_session_status(session_id, "error")
+        _PROGRESS.pop(session_id, None)
     except Exception:
         traceback.print_exc()
         db.update_session_status(session_id, "error")
+        _PROGRESS[session_id] = {**_PROGRESS.get(session_id, {}), "stage": "오류로 중단됨"}
+    finally:
+        _CANCELLED.discard(session_id)
+
+
+@router.get("/upload/progress/{session_id}")
+def upload_progress(session_id: str):
+    """업로드 처리 진행 상태(단계·퍼센트·경과초). 처리 중 폴링용."""
+    p = _PROGRESS.get(session_id)
+    if not p:
+        return {"found": False}
+    elapsed = int(time.time() - p.get("started", time.time()))
+    return {
+        "found": True,
+        "percent": int(p.get("percent", 0)),
+        "stage": p.get("stage", ""),
+        "elapsed": elapsed,
+    }
+
+
+@router.post("/upload/cancel/{session_id}")
+def cancel_upload(session_id: str):
+    """진행 중인 업로드 처리를 취소 요청한다.
+
+    실제 중단은 파이프라인이 다음 단계 경계에 도달할 때 일어난다(협조적 취소).
+    STT 등 오래 걸리는 단계 실행 중이면 그 단계가 끝난 뒤 반영된다.
+    """
+    if session_id not in _PROGRESS:
+        return {"ok": False, "message": "진행 중인 처리가 없습니다(이미 완료·취소되었을 수 있음)."}
+    _CANCELLED.add(session_id)
+    _PROGRESS[session_id] = {**_PROGRESS.get(session_id, {}), "stage": "취소 요청됨 — 현재 단계 완료 후 중단"}
+    return {"ok": True, "message": "취소 요청됨. 현재 단계가 끝나면 중단됩니다."}
 
 
 @router.post("/upload")

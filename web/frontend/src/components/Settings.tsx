@@ -38,7 +38,8 @@ interface Group {
   id: string;
   label: string;
   desc?: string;
-  advanced?: boolean; // true 면 기본 접힘('고급 설정')
+  advanced?: boolean; // true 면 기본 접힘('고급')
+  tier?: "core" | "common" | "advanced"; // 화면 배치 단계(꼭 확인/자주 쓰는 선택/고급)
   fields: Field[];
 }
 
@@ -389,8 +390,11 @@ export default function SettingsView() {
 
   if (!schema) return null;
 
-  const essential = schema.filter((g) => !g.advanced);
-  const advanced = schema.filter((g) => g.advanced);
+  // 화면 배치: 스키마 tier(core/common/advanced)로 3단 분리. tier가 없으면 advanced 여부로 폴백.
+  const tierOf = (g: Group): "core" | "common" | "advanced" => g.tier || (g.advanced ? "advanced" : "core");
+  const core = schema.filter((g) => tierOf(g) === "core");
+  const common = schema.filter((g) => tierOf(g) === "common");
+  const advanced = schema.filter((g) => tierOf(g) === "advanced");
 
   const renderGroup = (group: Group) => {
     const isOpen = open[group.id] ?? !group.advanced;
@@ -482,17 +486,26 @@ export default function SettingsView() {
           서버 모드 ↔ 단독 모드 전환을 즉시 반영한다. */}
       {IS_NATIVE && <BackendConnectionCard onChanged={load} />}
 
-      {/* 필수 그룹 */}
-      {essential.map(renderGroup)}
+      {/* 1단 — 꼭 확인 (펼침) */}
+      {core.length > 0 && (
+        <>
+          <SectionHeader label="꼭 확인" hint="시작에 반드시 확인하세요" first />
+          {core.map(renderGroup)}
+        </>
+      )}
 
-      {/* 고급 그룹 */}
+      {/* 2단 — 자주 쓰는 선택 (펼침) */}
+      {common.length > 0 && (
+        <>
+          <SectionHeader label="자주 쓰는 선택" hint="필요하면 채우세요 — 없어도 회의록 생성엔 지장 없음" />
+          {common.map(renderGroup)}
+        </>
+      )}
+
+      {/* 3단 — 고급 (기본 접힘) */}
       {advanced.length > 0 && (
         <>
-          <div className="flex items-center gap-3 mt-6 mb-3">
-            <div className="h-px flex-1 bg-brand-200" />
-            <span className="text-xs font-bold text-brand-400 uppercase tracking-widest">고급 설정</span>
-            <div className="h-px flex-1 bg-brand-200" />
-          </div>
+          <SectionHeader label="고급" hint="안 써도 됩니다 — 기본값 그대로 둬도 잘 동작해요" />
           {advanced.map(renderGroup)}
         </>
       )}
@@ -947,6 +960,17 @@ function FieldRow({ field, value, onChange, packaged }: { field: Field; value: a
       )}
       {revealNote && <p className="text-xs text-amber-600">{revealNote}</p>}
       {field.desc && <p className="text-xs text-brand-400">{field.desc}</p>}
+    </div>
+  );
+}
+
+// 설정 3단(꼭 확인 / 자주 쓰는 선택 / 고급) 구분 헤더.
+function SectionHeader({ label, hint, first }: { label: string; hint?: string; first?: boolean }) {
+  return (
+    <div className={`flex items-baseline gap-3 mb-3 ${first ? "mt-1" : "mt-7"}`}>
+      <span className="text-xs font-bold text-brand-600 uppercase tracking-widest whitespace-nowrap">{label}</span>
+      {hint && <span className="text-[11px] text-brand-400 whitespace-nowrap hidden sm:inline">{hint}</span>}
+      <div className="h-px flex-1 bg-brand-200 self-center" />
     </div>
   );
 }

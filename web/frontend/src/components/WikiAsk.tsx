@@ -13,7 +13,7 @@ export default function WikiAsk() {
   const [asking, setAsking] = useState(false);
   const [history, setHistory] = useState<HistoryItem[]>([]);
   const [backendChecked, setBackendChecked] = useState<boolean | null>(null);
-  // Obsidian 볼트 연결 여부 — 이 기능은 볼트(.md 폴더)가 연결돼 있어야 동작한다.
+  // 노트 폴더 연결 여부 — 이 기능은 .md 노트 폴더가 연결돼 있어야 동작한다.
   const [vaultConnected, setVaultConnected] = useState<boolean | null>(null);
 
   useEffect(() => {
@@ -77,8 +77,8 @@ export default function WikiAsk() {
         <div className="mb-6 flex items-start gap-3 bg-amber-50 border border-amber-200 rounded-2xl p-5 text-sm text-amber-800">
           <FolderOpen size={18} className="mt-0.5 shrink-0" />
           <div>
-            <p className="font-bold mb-1">Obsidian 볼트가 연결되지 않았습니다.</p>
-            <p className="text-amber-700">이 기능을 쓰려면 먼저 [설정] → <b>Obsidian 볼트 폴더</b>를 지정하고 [검색 인덱스 재빌드]를 눌러 노트를 색인하세요. 볼트가 연결되면 질문 입력이 활성화됩니다.</p>
+            <p className="font-bold mb-1">노트 폴더가 연결되지 않았습니다.</p>
+            <p className="text-amber-700">이 기능을 쓰려면 먼저 [설정] → <b>노트 폴더(.md)</b>를 지정하세요. 지정 후 검색 인덱스는 자동 생성되며, 바로 안 되면 [검색 인덱스·그래프 재빌드]를 한 번 누르세요. (Obsidian 앱은 필요 없습니다.) 폴더가 연결되면 질문 입력이 활성화됩니다.</p>
           </div>
         </div>
       )}
@@ -89,7 +89,7 @@ export default function WikiAsk() {
             value={question}
             onChange={(e) => setQuestion(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder={vaultConnected === false ? "Obsidian 볼트를 먼저 연결하세요 ([설정])" : "예: 지난 세미나에서 발표하신 교수님이 누구야?"}
+            placeholder={vaultConnected === false ? "노트 폴더를 먼저 연결하세요 ([설정])" : "예: 지난 세미나에서 발표하신 교수님이 누구야?"}
             className="flex-1 px-4 md:px-5 py-3 md:py-4 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-zinc-900 outline-none font-medium text-sm md:text-base resize-none min-h-[56px] disabled:cursor-not-allowed"
             rows={2}
             disabled={asking || vaultConnected === false}
@@ -109,13 +109,13 @@ export default function WikiAsk() {
         {history.length === 0 && !asking && (
           <div className="text-center py-16 text-brand-400">
             <MessageCircleQuestion size={40} className="mx-auto mb-3 opacity-50" />
-            <p className="text-sm">아직 질문이 없습니다. Vault 지식을 기반으로 무엇이든 물어보세요.</p>
+            <p className="text-sm">아직 질문이 없습니다. 노트 폴더에 쌓인 기록을 기반으로 무엇이든 물어보세요.</p>
           </div>
         )}
 
         {asking && (
           <div className="flex items-center gap-2 text-brand-500 text-sm px-2">
-            <Loader2 className="animate-spin" size={16} /> Vault 검색 + 답변 생성 중...
+            <Loader2 className="animate-spin" size={16} /> 노트 검색 + 답변 생성 중...
           </div>
         )}
 

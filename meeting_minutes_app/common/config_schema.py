@@ -12,10 +12,15 @@ config_schema.py — 설정 스키마 단일 소스
   1) config.example.json 에 기본값을 추가(마이그레이션·시드용 전체 기본값 소스).
   2) 여기 해당 그룹의 fields 에 한 줄 추가(웹 노출용 UI 메타).
 
-field 키: section, key, label, type(text|password|bool|select|number|list),
+field 키: section, key, label, type(text|password|bool|select|number|list|textarea),
   default, desc, options([str|{value,label}]), sensitive, mirror, placeholder,
   picker(bool: 폴더 선택 '찾아보기' 버튼 표시), required(bool: 필수값 * 표시/경고)
-그룹 키: id, label, desc, advanced(bool: 웹에서 기본 접힘 '고급 설정')
+그룹 키: id, label, desc, tier(core|common|advanced), advanced(bool: 웹에서 기본 접힘)
+
+화면 배치(tier) — 스키마 배열 순서 = 화면 표시 순서(위→아래, 중요도 내림차순):
+  core    "꼭 확인"       : 시작에 반드시 확인/입력 (API 키·모델·저장 위치)
+  common  "자주 쓰는 선택" : 자주 쓰지만 선택 (이메일·노트 폴더)
+  advanced"고급"          : 필요할 때만. 기본 접힘.
 
 key 에 점(.)이 있으면 중첩 경로로 해석된다(예: "slack.webhook_url" → notify.slack.webhook_url).
 ============================================================
@@ -27,8 +32,10 @@ CONFIG_VERSION = 1
 
 
 SCHEMA: List[Dict[str, Any]] = [
+    # ═══════════ core — 꼭 확인 ═══════════
     {
         "id": "api",
+        "tier": "core",
         "label": "API 키",
         "desc": "키는 이 PC의 config.json 에만 저장되며 화면에는 마스킹되어 표시됩니다.",
         "fields": [
@@ -39,31 +46,50 @@ SCHEMA: List[Dict[str, Any]] = [
     },
     {
         "id": "models",
+        "tier": "core",
         "label": "모델",
         "desc": "회의록/요약 생성 AI와 음성 인식 모델. 비용은 100만 토큰당 대략치(입력/출력)이며 변동될 수 있습니다.",
         "fields": [
             {"section": "models", "key": "llm", "label": "회의록 생성 AI", "type": "select", "default": "gpt", "options": [{"value": "gpt", "label": "GPT (OpenAI)"}, {"value": "claude", "label": "Claude (Anthropic)"}], "desc": "기본 GPT(OpenAI 키만 필요). Claude 선택 시 Anthropic 키 별도 필요."},
             {"section": "models", "key": "stt", "label": "음성 인식(STT) 모델", "type": "select", "default": "gpt-4o-mini-transcribe", "options": [{"value": "gpt-4o-mini-transcribe", "label": "gpt-4o-mini-transcribe — 저렴·빠름 ($0.003/분)"}, {"value": "gpt-4o-transcribe", "label": "gpt-4o-transcribe — 고정확 ($0.006/분)"}, {"value": "gpt-4o-transcribe-diarize", "label": "gpt-4o-transcribe-diarize — 화자분리(배치 전용)"}, {"value": "whisper-1", "label": "whisper-1 — 구형·안정"}], "desc": "실시간 화면에 먼저 뜨는 전사와 배치 처리가 이 모델을 씁니다. 2단계 보정이 켜져 있으면 확정본은 '보정 전사 모델'(기본 gpt-4o-transcribe)이 다시 만듭니다. 실시간 인식 정확도가 아쉬우면 gpt-4o-transcribe로 올리세요."},
             {"section": "models", "key": "claude_model", "label": "Claude 모델", "type": "select", "default": "claude-opus-4-8", "options": [{"value": "claude-opus-4-8", "label": "Opus 4.8 — 최고 성능 (약 $5/$25)"}, {"value": "claude-sonnet-5", "label": "Sonnet 5 — 균형·빠름 (약 $3/$15)"}, {"value": "claude-haiku-4-5", "label": "Haiku 4.5 — 저렴·빠름 (약 $1/$5)"}, {"value": "claude-opus-4-7", "label": "Opus 4.7 — 구버전"}, {"value": "claude-opus-4-6", "label": "Opus 4.6 — 구버전"}]},
-            {"section": "models", "key": "gpt_model", "label": "GPT 모델", "type": "select", "default": "gpt-4o-mini", "options": [{"value": "gpt-4o-mini", "label": "gpt-4o-mini — 저렴·빠름 (추천)"}, {"value": "gpt-4o", "label": "gpt-4o — 고품질·비쌈"}, {"value": "o1", "label": "o1 — 추론(느림·고비용)"}, {"value": "o3-mini", "label": "o3-mini — 추론(경량)"}]},
+            {"section": "models", "key": "gpt_model", "label": "GPT 모델", "type": "select", "default": "gpt-4o-mini", "options": [{"value": "gpt-5.6-terra", "label": "gpt-5.6-terra — 균형 (권장, 약 $2.5/$15)"}, {"value": "gpt-5.6-luna", "label": "gpt-5.6-luna — 저렴·빠름 (약 $1/$6)"}, {"value": "gpt-5.6-sol", "label": "gpt-5.6-sol — 최고 성능 (약 $5/$30)"}, {"value": "gpt-4o-mini", "label": "gpt-4o-mini — 저렴 (구세대)"}, {"value": "gpt-4o", "label": "gpt-4o — 구세대"}], "desc": "gpt-5.6 계열이 최신입니다. 계정에 5.6 접근 권한이 없으면 gpt-4o 계열(구세대)을 쓰세요. 기본값은 안전하게 gpt-4o-mini."},
             {"section": "models", "key": "minutes_model", "label": "회의록 생성 모델(GPT, 선택)", "type": "text", "default": "gpt-4o", "desc": "미설정 시 GPT 모델 사용. 상세 기록이라 고성능 권장."},
             {"section": "models", "key": "summary_model", "label": "요약 생성 모델(GPT, 선택)", "type": "text", "default": "gpt-4o", "desc": "미설정 시 GPT 모델 사용."},
-            {"section": "models", "key": "translate_model", "label": "번역 모델", "type": "select", "default": "gpt-4o-mini", "options": [{"value": "gpt-4o-mini", "label": "gpt-4o-mini — 저렴·빠름 (추천)"}, {"value": "gpt-4o", "label": "gpt-4o — 고품질"}]},
+            {"section": "models", "key": "translate_model", "label": "번역 모델", "type": "select", "default": "gpt-4o-mini", "options": [{"value": "gpt-4o-mini", "label": "gpt-4o-mini — 저렴·빠름 (추천)"}, {"value": "gpt-5.6-luna", "label": "gpt-5.6-luna — 최신·저렴"}, {"value": "gpt-4o", "label": "gpt-4o — 고품질"}]},
         ],
     },
     {
         "id": "storage",
-        "label": "저장 위치",
-        "desc": "만들어진 회의록 파일이 어디에 저장될지 정합니다. Obsidian 볼트를 연결했다면 회의록은 볼트에도 저장되며, 아래 폴더에는 항상 사본이 남습니다. 잘 모르겠으면 그대로 두세요.",
+        "tier": "core",
+        "label": "저장 위치 · 회의록 형식",
+        "desc": "만들어진 회의록 파일이 어디에 저장될지, 어떤 형식으로 만들지 정합니다. 노트 폴더를 연결했다면 회의록은 그 폴더에도 저장되며, 아래 폴더에는 항상 사본이 남습니다. 잘 모르겠으면 그대로 두세요.",
         "fields": [
             {"section": "output_dir", "key": "", "label": "결과물 저장 폴더", "type": "text", "default": "./output", "scalar": True, "picker": True, "desc": "회의록·요약·전사(.md/.txt) 결과 파일이 저장되는 폴더입니다. 기본값 ./output 은 프로그램 옆 MeetingMinutesData\\output 폴더를 뜻합니다. 특정 위치에 모으려면 절대경로를 넣으세요(예: D:\\Minutes)."},
-            {"section": "analysis", "key": "templates_dir", "label": "AI 프롬프트 폴더 (고급)", "type": "text", "default": "prompts", "desc": "회의록을 만들 때 쓰는 AI 지시문(.md) 폴더입니다. 문구를 직접 바꾸고 싶은 게 아니면 기본값(prompts) 그대로 두세요."},
-            {"section": "analysis", "key": "default_type", "label": "기본 문서 유형", "type": "select", "default": "meeting", "options": ["meeting", "seminar", "lecture", "memo"], "desc": "유형을 따로 고르지 않았을 때 적용되는 기본값입니다(회의/세미나/강의/메모)."},
             {"section": "analysis", "key": "custom_minutes_instructions", "label": "회의록 맞춤 지시 (선택)", "type": "textarea", "default": "", "placeholder": "예: 회의록 맨 위에 '핵심 3줄 요약'을 넣어줘. 액션 아이템은 반드시 표로 정리하고, 각 결정에는 담당자를 표시해줘.", "desc": "원하는 회의록 형식·내용·강조점을 자유롭게 적으면 회의록 생성 AI가 이를 우선 반영합니다. 비우면 기본 형식을 사용합니다. (메일로 받는 회의록도 이 형식이 적용됩니다.)"},
+            {"section": "analysis", "key": "default_type", "label": "기본 문서 유형", "type": "select", "default": "meeting", "options": ["meeting", "seminar", "lecture", "memo"], "desc": "유형을 따로 고르지 않았을 때 적용되는 기본값입니다(회의/세미나/강의/메모)."},
+            {"section": "analysis", "key": "templates_dir", "label": "AI 프롬프트 폴더 (고급)", "type": "text", "default": "prompts", "desc": "회의록을 만들 때 쓰는 AI 지시문(.md) 폴더입니다. 문구를 직접 바꾸고 싶은 게 아니면 기본값(prompts) 그대로 두세요."},
+        ],
+    },
+
+    # ═══════════ common — 자주 쓰는 선택 ═══════════
+    {
+        "id": "email",
+        "tier": "common",
+        "label": "이메일 자동 발송 (선택)",
+        "desc": "회의록이 완성되면 자동으로 메일로 보내는 기능입니다. 안 쓰면 비워 두세요. 쓰려면 '보내는 메일'과 그 메일의 '앱 비밀번호'가 필요합니다.",
+        "fields": [
+            {"section": "email", "key": "sender", "label": "보내는 메일 주소", "type": "text", "default": "", "placeholder": "myid@gmail.com", "desc": "회의록을 보낼 내 메일 계정(Gmail/네이버/아웃룩 등)."},
+            {"section": "email", "key": "password", "label": "메일 앱 비밀번호", "type": "password", "sensitive": True, "default": "", "desc": "주의: 평소 로그인 비밀번호가 아닙니다. 메일 서비스 보안설정에서 '앱 비밀번호'를 따로 발급해 넣으세요. (Gmail: Google 계정→보안→2단계 인증 켠 뒤 '앱 비밀번호' / 네이버: 메일 환경설정→POP3·SMTP→'앱 비밀번호 설정' / 아웃룩: 계정 보안→앱 암호) 보통 공백 없는 16자리입니다."},
+            {"section": "email", "key": "recipient", "label": "받는 메일 주소", "type": "text", "default": "", "placeholder": "team@company.com", "desc": "회의록을 받을 주소. 비우면 보내는 주소로 자기 자신에게 보냅니다."},
+            {"section": "email", "key": "smtp_host", "label": "SMTP 서버 (보통 비워둠)", "type": "text", "default": "", "placeholder": "자동 감지", "desc": "비워 두면 보내는 메일 도메인으로 자동 설정됩니다(gmail/naver/outlook 인식). 회사 자체 메일서버면 여기에 주소를 넣으세요(예: smtp.office365.com)."},
+            {"section": "email", "key": "smtp_port", "label": "SMTP 포트 (보통 비워둠)", "type": "number", "default": 0, "placeholder": "자동(587)", "desc": "비워 두거나 0이면 자동(대개 587). 회사 서버가 다른 포트를 쓰면 지정."},
+            {"section": "email", "key": "markdown_attachment", "label": "첨부 파일 형식", "type": "select", "default": "txt", "options": [{"value": "txt", "label": "txt — 텍스트(한글 안전, 추천)"}, {"value": "markdown", "label": "markdown — .md 원본 유지"}], "desc": "회의록을 어떤 파일로 첨부할지. 대부분 txt 권장."},
         ],
     },
     {
         "id": "obsidian",
+        "tier": "common",
         "label": "노트 폴더 (내부 위키) · Obsidian 연동",
         "desc": "회의록·검색·지식 그래프의 바탕이 되는 .md 노트 폴더입니다. Obsidian 앱이 없어도 폴더만 지정하면 됩니다 — 회의록이 그 폴더에 .md로 저장되고, 위키 검색·지식 그래프가 그 폴더의 노트([[위키링크]] 포함)에서 자동으로 만들어집니다. 아래 REST API 항목은 Obsidian 앱에 실시간 반영이 필요할 때만 켜세요.",
         "fields": [
@@ -85,8 +111,11 @@ SCHEMA: List[Dict[str, Any]] = [
             {"section": "obsidian", "key": "auto_register_categories", "label": "새 카테고리 자동 등록", "type": "bool", "default": True},
         ],
     },
+
+    # ═══════════ advanced — 고급 (기본 접힘) ═══════════
     {
         "id": "realtime",
+        "tier": "advanced",
         "advanced": True,
         "label": "실시간 녹취",
         "desc": "실시간 녹음/전사 기본값입니다.",
@@ -110,16 +139,8 @@ SCHEMA: List[Dict[str, Any]] = [
         ],
     },
     {
-        "id": "server",
-        "advanced": True,
-        "label": "서버/네트워크",
-        "desc": "아이폰·태블릿 앱에서 이 PC에 접속하려면 'LAN 접속 허용'을 켜세요. 켜면 같은 WiFi의 다른 기기가 이 PC의 회의록 서버에 연결할 수 있습니다.",
-        "fields": [
-            {"section": "server", "key": "lan_access", "label": "LAN 접속 허용 (모바일 앱 연결용)", "type": "bool", "default": False, "desc": "끄면 이 PC에서만(localhost) 접속 가능(기본, 안전). 켜면 0.0.0.0으로 바인딩해 같은 WiFi의 기기가 접속할 수 있습니다 — 신뢰된 네트워크(집·사무실)에서만 켜세요. 변경 후 앱을 재시작해야 적용됩니다."},
-        ],
-    },
-    {
         "id": "features",
+        "tier": "advanced",
         "advanced": True,
         "label": "기능 토글",
         "desc": "부가 기능을 켜고 끕니다.",
@@ -142,7 +163,43 @@ SCHEMA: List[Dict[str, Any]] = [
         ],
     },
     {
+        "id": "server",
+        "tier": "advanced",
+        "advanced": True,
+        "label": "서버/네트워크",
+        "desc": "아이폰·태블릿 앱에서 이 PC에 접속하려면 'LAN 접속 허용'을 켜세요. 켜면 같은 WiFi의 다른 기기가 이 PC의 회의록 서버에 연결할 수 있습니다.",
+        "fields": [
+            {"section": "server", "key": "lan_access", "label": "LAN 접속 허용 (모바일 앱 연결용)", "type": "bool", "default": False, "desc": "끄면 이 PC에서만(localhost) 접속 가능(기본, 안전). 켜면 0.0.0.0으로 바인딩해 같은 WiFi의 기기가 접속할 수 있습니다 — 신뢰된 네트워크(집·사무실)에서만 켜세요. 변경 후 앱을 재시작해야 적용됩니다."},
+        ],
+    },
+    {
+        "id": "notify",
+        "tier": "advanced",
+        "advanced": True,
+        "label": "알림 (선택)",
+        "desc": "처리 완료 시 알림 채널.",
+        "fields": [
+            {"section": "notify", "key": "on_finish", "label": "완료 알림 채널", "type": "select", "default": "none", "options": [{"value": "none", "label": "none — 끔"}, {"value": "email", "label": "email"}, {"value": "slack", "label": "slack"}, {"value": "teams", "label": "teams"}], "desc": "기본 꺼짐. 이메일/Slack/Teams는 해당 설정을 채운 뒤 선택."},
+            {"section": "notify", "key": "slack.webhook_url", "label": "Slack Webhook URL", "type": "password", "sensitive": True, "default": "", "placeholder": "https://hooks.slack.com/services/...", "desc": "알림 채널을 slack 으로 쓸 때 필요. Slack 채널 → 앱 → Incoming Webhooks 에서 발급."},
+            {"section": "notify", "key": "teams.webhook_url", "label": "Teams Webhook URL", "type": "password", "sensitive": True, "default": "", "placeholder": "https://outlook.office.com/webhook/...", "desc": "알림 채널을 teams 로 쓸 때 필요. Teams 채널 → 커넥터 → Incoming Webhook 에서 발급."},
+        ],
+    },
+    {
+        "id": "indexing",
+        "tier": "advanced",
+        "advanced": True,
+        "label": "검색 인덱스",
+        "desc": "볼트 .md 키워드 인덱스 설정.",
+        "fields": [
+            {"section": "indexing", "key": "enabled", "label": "인덱싱 사용", "type": "bool", "default": True},
+            {"section": "indexing", "key": "index_path", "label": "인덱스 파일 경로", "type": "text", "default": "data/vault_index.json"},
+            {"section": "indexing", "key": "auto_reindex_on_start", "label": "시작 시 자동 재빌드", "type": "bool", "default": False},
+            {"section": "indexing", "key": "auto_reindex_after_write", "label": "저장 직후 자동 재빌드", "type": "bool", "default": False},
+        ],
+    },
+    {
         "id": "wiki_detail",
+        "tier": "advanced",
         "advanced": True,
         "label": "위키/검증 세부",
         "desc": "위키 Q&A·사실검증 세부 설정.",
@@ -160,43 +217,8 @@ SCHEMA: List[Dict[str, Any]] = [
         ],
     },
     {
-        "id": "indexing",
-        "advanced": True,
-        "label": "검색 인덱스",
-        "desc": "볼트 .md 키워드 인덱스 설정.",
-        "fields": [
-            {"section": "indexing", "key": "enabled", "label": "인덱싱 사용", "type": "bool", "default": True},
-            {"section": "indexing", "key": "index_path", "label": "인덱스 파일 경로", "type": "text", "default": "data/vault_index.json"},
-            {"section": "indexing", "key": "auto_reindex_on_start", "label": "시작 시 자동 재빌드", "type": "bool", "default": False},
-            {"section": "indexing", "key": "auto_reindex_after_write", "label": "저장 직후 자동 재빌드", "type": "bool", "default": False},
-        ],
-    },
-    {
-        "id": "email",
-        "label": "이메일 자동 발송 (선택)",
-        "desc": "회의록이 완성되면 자동으로 메일로 보내는 기능입니다. 안 쓰면 비워 두세요. 쓰려면 '보내는 메일'과 그 메일의 '앱 비밀번호'가 필요합니다.",
-        "fields": [
-            {"section": "email", "key": "sender", "label": "보내는 메일 주소", "type": "text", "default": "", "placeholder": "myid@gmail.com", "desc": "회의록을 보낼 내 메일 계정(Gmail/네이버/아웃룩 등)."},
-            {"section": "email", "key": "password", "label": "메일 앱 비밀번호", "type": "password", "sensitive": True, "default": "", "desc": "주의: 평소 로그인 비밀번호가 아닙니다. 메일 서비스 보안설정에서 '앱 비밀번호'를 따로 발급해 넣으세요. (Gmail: Google 계정→보안→2단계 인증 켠 뒤 '앱 비밀번호' / 네이버: 메일 환경설정→POP3·SMTP→'앱 비밀번호 설정' / 아웃룩: 계정 보안→앱 암호) 보통 공백 없는 16자리입니다."},
-            {"section": "email", "key": "recipient", "label": "받는 메일 주소", "type": "text", "default": "", "placeholder": "team@company.com", "desc": "회의록을 받을 주소. 비우면 보내는 주소로 자기 자신에게 보냅니다."},
-            {"section": "email", "key": "smtp_host", "label": "SMTP 서버 (보통 비워둠)", "type": "text", "default": "", "placeholder": "자동 감지", "desc": "비워 두면 보내는 메일 도메인으로 자동 설정됩니다(gmail/naver/outlook 인식). 회사 자체 메일서버면 여기에 주소를 넣으세요(예: smtp.office365.com)."},
-            {"section": "email", "key": "smtp_port", "label": "SMTP 포트 (보통 비워둠)", "type": "number", "default": 0, "placeholder": "자동(587)", "desc": "비워 두거나 0이면 자동(대개 587). 회사 서버가 다른 포트를 쓰면 지정."},
-            {"section": "email", "key": "markdown_attachment", "label": "첨부 파일 형식", "type": "select", "default": "txt", "options": [{"value": "txt", "label": "txt — 텍스트(한글 안전, 추천)"}, {"value": "markdown", "label": "markdown — .md 원본 유지"}], "desc": "회의록을 어떤 파일로 첨부할지. 대부분 txt 권장."},
-        ],
-    },
-    {
-        "id": "notify",
-        "advanced": True,
-        "label": "알림 (선택)",
-        "desc": "처리 완료 시 알림 채널.",
-        "fields": [
-            {"section": "notify", "key": "on_finish", "label": "완료 알림 채널", "type": "select", "default": "none", "options": [{"value": "none", "label": "none — 끔"}, {"value": "email", "label": "email"}, {"value": "slack", "label": "slack"}, {"value": "teams", "label": "teams"}], "desc": "기본 꺼짐. 이메일/Slack/Teams는 해당 설정을 채운 뒤 선택."},
-            {"section": "notify", "key": "slack.webhook_url", "label": "Slack Webhook URL", "type": "password", "sensitive": True, "default": "", "placeholder": "https://hooks.slack.com/services/...", "desc": "알림 채널을 slack 으로 쓸 때 필요. Slack 채널 → 앱 → Incoming Webhooks 에서 발급."},
-            {"section": "notify", "key": "teams.webhook_url", "label": "Teams Webhook URL", "type": "password", "sensitive": True, "default": "", "placeholder": "https://outlook.office.com/webhook/...", "desc": "알림 채널을 teams 로 쓸 때 필요. Teams 채널 → 커넥터 → Incoming Webhook 에서 발급."},
-        ],
-    },
-    {
         "id": "supermemory",
+        "tier": "advanced",
         "advanced": True,
         "label": "Supermemory (선택)",
         "desc": "Supermemory 연동을 켠 경우에만 필요.",

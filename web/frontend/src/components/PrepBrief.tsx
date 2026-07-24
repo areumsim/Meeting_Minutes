@@ -51,7 +51,7 @@ export default function PrepBrief({ onSaved }: { onSaved?: (id: string) => void 
   return (
     <div className="max-w-4xl mx-auto px-1 md:px-0">
       <h2 className="text-2xl font-bold tracking-tight mb-1">회의 준비 브리핑</h2>
-      <p className="text-brand-500 mb-4 text-sm">제목/주제로 볼트의 관련 노트·이전 결정·미완료 액션을 모아 준비 자료를 만듭니다. 저장하면 대시보드에서 다시 볼 수 있습니다.</p>
+      <p className="text-brand-500 mb-4 text-sm">제목/주제로 노트 폴더의 관련 노트·이전 결정·미완료 액션을 모아 준비 자료를 만듭니다. 저장하면 대시보드에서 다시 볼 수 있습니다.</p>
 
       <div className="bg-white border border-zinc-200 rounded-2xl shadow-sm p-4 md:p-5 space-y-3">
         <div className="space-y-1.5">
@@ -124,15 +124,15 @@ export default function PrepBrief({ onSaved }: { onSaved?: (id: string) => void 
         <div className="mt-4 bg-white border border-zinc-200 rounded-2xl shadow-sm p-4 md:p-5">
           <div className="flex items-center gap-2 mb-2">
             <Link2 size={16} className="text-brand-500" />
-            <span className="text-sm font-bold text-brand-900">연결된 볼트 노트</span>
+            <span className="text-sm font-bold text-brand-900">연결된 노트</span>
             <span className="text-xs text-brand-400">
-              {meta.vault_connected === false ? "· 볼트 미연결" : `· ${meta.related_count ?? 0}개 · 미완료 액션 ${meta.open_actions ?? 0} · 최근 결정 ${meta.recent_decisions ?? 0}`}
+              {meta.vault_connected === false ? "· 노트 폴더 미연결" : `· ${meta.related_count ?? 0}개 · 미완료 액션 ${meta.open_actions ?? 0} · 최근 결정 ${meta.recent_decisions ?? 0}`}
             </span>
           </div>
           {meta.vault_connected === false ? (
             <div className="flex items-start gap-2 text-xs text-amber-700 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2">
               <AlertTriangle size={14} className="mt-0.5 shrink-0" />
-              <span>Obsidian 볼트가 연결되지 않아 관련 노트를 찾지 못했습니다. [설정] → Obsidian 볼트 폴더를 지정하면 관련 기록을 근거로 브리핑이 풍부해집니다.</span>
+              <span>노트 폴더가 연결되지 않아 관련 노트를 찾지 못했습니다. [설정] → 노트 폴더(.md)를 지정하면 관련 기록을 근거로 브리핑이 풍부해집니다. (Obsidian 앱은 필요 없습니다.)</span>
             </div>
           ) : (meta.related && meta.related.length > 0) ? (
             <ul className="space-y-1">

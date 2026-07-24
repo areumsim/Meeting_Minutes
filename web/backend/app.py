@@ -94,6 +94,32 @@ async def lifespan(app: FastAPI):
             threading.Thread(target=_reindex_bg, name="auto-reindex", daemon=True).start()
     except Exception as e:
         print(f"[startup] 자동 재인덱스 확인 경고: {e}")
+    # 폴더-only 위키(검색 인덱스): 노트 폴더가 있는데 검색 인덱스(vault_index.json)가 아직
+    # 없으면 백그라운드로 1회 자동 빌드한다 — Obsidian 앱/REST 없이 .md 폴더만 연결한 사용자가
+    # [검색 인덱스 재빌드] 버튼을 누르지 않아도 '위키 질문'·관련 노트 검색이 바로 동작하게 한다
+    # (지식 그래프 자동 백필과 동일 철학). auto_reindex_on_start가 켜져 있으면 위에서 이미
+    # 재빌드하므로 건너뛴다(중복 빌드 방지). load()가 False면 인덱스 없음/폴더 변경 → 재빌드 대상.
+    try:
+        from meeting_minutes_app.common import config_loader as _cfg
+        _idx_on = bool(_cfg.get("indexing.enabled", True))
+        _idx_auto = bool(_cfg.get("indexing.auto_reindex_on_start", False))
+        _idx_vault = _cfg.get("indexing.vault_path", "") or _cfg.get("obsidian.vault_path", "")
+        if _idx_on and _idx_vault and not _idx_auto:
+            from meeting_minutes_app.wiki_core.vault_indexer import VaultIndexer
+            _idx = VaultIndexer.from_config()
+            if _idx and not _idx.load():
+                import threading
+
+                def _auto_index_bg():
+                    try:
+                        n = _idx.build(verbose=False)
+                        print(f"[indexing] 폴더 자동 인덱스 생성 완료 — 노트 {n}개 (위키 질문 사용 가능)")
+                    except Exception as e:
+                        print(f"[indexing] 폴더 자동 인덱스 생성 실패(무시): {e}")
+
+                threading.Thread(target=_auto_index_bg, name="auto-index", daemon=True).start()
+    except Exception as e:
+        print(f"[startup] 폴더 자동 인덱스 확인 경고: {e}")
     # 폴더-only 위키: 노트 폴더가 지정돼 있고 지식 그래프가 아직 비어 있으면(최초 실행)
     # 배경 스레드로 1회 자동 백필한다 — 사용자가 scripts/graph_backfill.py를 수동 실행하지
     # 않아도 지식 그래프가 "그냥" 채워진다. 그래프가 이미 있으면 건너뛰고(멱등·중복 작업 방지),

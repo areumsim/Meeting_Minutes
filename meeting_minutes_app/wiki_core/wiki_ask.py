@@ -1,8 +1,9 @@
 ﻿"""
-wiki_ask.py — Obsidian Vault 기반 LLM Q&A (사실 검증 + 출처 인용 강제)
+wiki_ask.py — 노트 폴더(.md) 기반 LLM Q&A (사실 검증 + 출처 인용 강제)
 =========================================================================
-Vault 인덱스 + Obsidian full-text 검색으로 관련 노트를 수집한 뒤
-LLM이 그 컨텍스트만으로 답변하도록 강제한다.
+로컬 볼트 인덱스(.md 폴더)로 관련 노트를 수집한 뒤 LLM이 그 컨텍스트만으로
+답변하도록 강제한다. Obsidian 앱/REST는 선택 — 연결돼 있으면 full-text 검색 결과를
+추가로 병합하지만, 없어도 폴더 인덱스만으로 동작한다.
 
 - 출처 인용 강제: [출처: [[노트 제목]]] 형식
 - 근거 부족 시: "확인 불가" 마커 사용
@@ -130,8 +131,25 @@ class WikiQA:
         context_notes = self._gather_context(question, limit)
 
         if not context_notes:
+            # 노트 폴더는 연결됐지만 검색 인덱스가 아직 없으면(=폴더-only 사용자가
+            # 최초 실행 직후, 자동 인덱스 생성이 아직 안 끝났거나 실패한 경우) 무성의한
+            # "못 찾음" 대신 무엇을 하면 되는지 명확히 안내한다. Obsidian 앱/REST는 불필요.
+            vault_set = bool(_c("indexing.vault_path") or _c("obsidian.vault_path"))
+            if vault_set and self._indexer is None:
+                return {
+                    "answer": ("노트 폴더는 연결됐지만 검색 인덱스가 아직 준비되지 않았습니다.\n"
+                               "잠시 후(자동 생성 중일 수 있음) 다시 질문하거나, [설정] → "
+                               "**검색 인덱스·그래프 재빌드**를 한 번 눌러 인덱스를 만든 뒤 다시 시도하세요."),
+                    "sources": [],
+                    "has_conflict": False,
+                    "unverified": True,
+                }
+            msg = (f"{self._unverified}: 관련 노트를 찾지 못했습니다."
+                   if vault_set
+                   else f"{self._unverified}: 노트 폴더가 연결되지 않았습니다. "
+                        "[설정]에서 노트 폴더(.md)를 지정하면 그 기록을 근거로 답변합니다.")
             return {
-                "answer": f"{self._unverified}: 관련 노트를 찾지 못했습니다.",
+                "answer": msg,
                 "sources": [],
                 "has_conflict": False,
                 "unverified": True,

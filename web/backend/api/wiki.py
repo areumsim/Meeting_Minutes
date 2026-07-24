@@ -5,9 +5,10 @@ CLI의 `meeting-minutes ask`(meeting_minutes_app.wiki_core.wiki_ask.WikiQA)를
 그대로 재사용한다 — 별도 구현을 만들면 CLI/web이 서로 다른 로직으로 드리프트하기
 쉽다는 걸 이번 리뷰에서 여러 번 확인했다.
 
-Obsidian REST API + 로컬 Vault 인덱스 + LLM 호출이 모두 서버(이 프로세스)에서만
-가능하므로, 이 기능은 백엔드가 떠 있는 배포 모드에서만 쓸 수 있다(모바일 단독
-배포에는 대응 기능 없음 — 프론트엔드에서 backendAvailable() 체크 후 노출).
+노트 폴더(.md)의 로컬 검색 인덱스와 LLM 호출만 있으면 동작한다(Obsidian 앱/REST는
+선택 — 있으면 검색 결과에 병합, 없어도 폴더 인덱스만으로 답변). 인덱스·LLM 호출이
+서버(이 프로세스)에서만 가능하므로 백엔드가 떠 있는 배포 모드에서만 쓸 수 있다
+(모바일 단독 배포에는 대응 기능 없음 — 프론트엔드에서 backendAvailable() 체크 후 노출).
 """
 
 from fastapi import APIRouter, HTTPException

@@ -66,11 +66,11 @@ export default function WikiAsk() {
 
   return (
     <div className="max-w-4xl mx-auto px-1 md:px-0 pb-20 md:pb-0">
-      <h2 className="text-2xl font-bold tracking-tight mb-1">볼트 위키 질문</h2>
+      <h2 className="text-2xl font-bold tracking-tight mb-1">노트 위키 질문</h2>
       <p className="text-brand-500 mb-6 md:mb-10 text-sm md:text-base">
-        Obsidian Vault에 쌓인 회의·세미나 기록을 근거로 질문에 답합니다.
+        연결한 <b>노트 폴더(.md)</b>에 쌓인 회의·세미나 기록을 근거로 질문에 답합니다.
         <br className="hidden md:block" />
-        <span className="text-brand-400 text-xs md:text-sm">이 기능은 <b>Obsidian 볼트 연결이 필요</b>합니다. [설정] → “Obsidian 볼트 폴더”를 지정하세요.</span>
+        <span className="text-brand-400 text-xs md:text-sm">Obsidian 앱은 필요 없습니다 — [설정] → “노트 폴더(.md)”만 지정하면 됩니다. (지정 후 검색 인덱스는 자동 생성되며, 바로 안 되면 [설정]에서 “검색 인덱스·그래프 재빌드”를 한 번 눌러주세요.)</span>
       </p>
 
       {vaultConnected === false && (

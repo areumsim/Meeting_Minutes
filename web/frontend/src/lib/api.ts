@@ -520,8 +520,9 @@ export const getNodeNeighbors = async (
 };
 
 // Vault Wiki 질의응답 — web/backend/api/wiki.py (WikiQA 재사용, 서버 전용 기능).
-// Obsidian REST API + 로컬 Vault 인덱스 + 서버 LLM 키가 모두 필요해 브라우저
-// 단독(모바일) 배포에서는 대응 기능이 없다 — 호출 전 backendAvailable()로 확인.
+// 필요한 것: 노트 폴더(.md)의 로컬 검색 인덱스 + 서버 LLM 키. Obsidian 앱/REST는
+// 선택(있으면 검색 결과에 병합될 뿐, 없어도 폴더 인덱스만으로 동작). 서버 LLM 키가
+// 필요해 브라우저 단독(모바일) 배포에는 대응 기능이 없다 — 호출 전 backendAvailable()로 확인.
 export interface WikiAskResult {
   answer: string;
   sources: { title: string; path?: string; heading?: string; score?: number }[];

@@ -253,7 +253,10 @@ class BrowserRealtimeSession:
         # 기본값은 CLI(realtime_transcription.DEFAULT_STT_MODEL)·아래 HTTP 폴백 경로와
         # 동일하게 맞춘다(과거엔 여기만 "-mini"가 빠진 다른 기본값이라 config.json에
         # models.stt를 안 정하면 web WS 경로만 더 비싼 모델을 썼다).
-        stt_model_cfg = cfg.get("models.stt", "gpt-4o-mini-transcribe") or "gpt-4o-mini-transcribe"
+        # 녹음별 임시 모델 오버라이드: 프런트(녹음 화면)가 config에 stt_model을 실어 보내면
+        # config.json의 기본값 대신 이번 세션에만 그 모델을 쓴다(설정은 그대로 유지).
+        _stt_ov = str(self.config.get("stt_model") or "").strip()
+        stt_model_cfg = _stt_ov or (cfg.get("models.stt", "gpt-4o-mini-transcribe") or "gpt-4o-mini-transcribe")
         # WS 미지원 모델(diarize/mini)은 공용 규칙으로 자동 전환
         stt_model, _ws_reason = normalize_ws_model(stt_model_cfg)
         if _ws_reason:
@@ -703,7 +706,9 @@ class BrowserRealtimeSession:
         from meeting_minutes_app.common.realtime_ws_session import normalize_ws_model
         from meeting_minutes_app.meeting_pipeline import stt
 
-        raw_model = cfg.get("models.stt", "gpt-4o-mini-transcribe") or "gpt-4o-mini-transcribe"
+        # 녹음별 임시 모델 오버라이드(config에 stt_model이 실려오면 우선) — 설정 기본값은 유지
+        _stt_ov = str(self.config.get("stt_model") or "").strip()
+        raw_model = _stt_ov or (cfg.get("models.stt", "gpt-4o-mini-transcribe") or "gpt-4o-mini-transcribe")
         stt_model, _norm_reason = normalize_ws_model(raw_model)
         if _norm_reason:
             print(f"[http-stt] 모델 정규화: {raw_model} → {stt_model} ({_norm_reason})")

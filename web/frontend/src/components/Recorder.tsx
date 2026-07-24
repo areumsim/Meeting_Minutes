@@ -16,6 +16,15 @@ interface RelatedNote {
   score: number;
   snippet?: string;
 }
+
+// 음성 인식(STT) 모델 선택지 — config_schema의 models.stt 옵션과 동일하게 유지.
+// 녹음 화면에서 '이번 녹음만' 임시로 바꿀 수 있게 노출한다(설정 기본값은 그대로).
+const STT_OPTIONS: { value: string; label: string }[] = [
+  { value: "gpt-4o-mini-transcribe", label: "gpt-4o-mini-transcribe — 저렴·빠름" },
+  { value: "gpt-4o-transcribe", label: "gpt-4o-transcribe — 고정확" },
+  { value: "gpt-4o-transcribe-diarize", label: "gpt-4o-transcribe-diarize — 화자분리(실시간은 자동 전환)" },
+  { value: "whisper-1", label: "whisper-1 — 구형·안정" },
+];
 import ModeSelector from "./ModeSelector";
 import { KeepAwake } from '@capacitor-community/keep-awake';
 import { Haptics, ImpactStyle, NotificationType } from '@capacitor/haptics';
@@ -40,6 +49,8 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
   // 백엔드 모드 — 서버가 STT/실시간 vault 검색/회의록 생성 수행 (API 키 미노출)
   const [relatedNotes, setRelatedNotes] = useState<RelatedNote[]>([]);
   const [costRates, setCostRates] = useState<CostRates | null>(null);
+  // 이번 녹음에 쓸 STT 모델(설정 기본값이 자동 채워지며, 이 값만 바꿔도 설정은 안 바뀜)
+  const [sttModel, setSttModel] = useState<string>("");
   const backendModeRef = useRef(false);
   const provisionalIdxRef = useRef<Record<string, number>>({});
   const completionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -87,6 +98,11 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
 
   // 실시간 비용 요율 로드(백엔드 모드) — 러닝 비용 추정용
   useEffect(() => { getCostRates().then((r) => r && setCostRates(r)); }, []);
+
+  // 설정의 기본 STT 모델을 불러와 드롭다운 기본값으로 표시(수정 가능 — 이번 녹음에만 적용)
+  useEffect(() => {
+    getConfig().then((c) => { const m = c?.models?.stt; if (m) setSttModel(String(m)); }).catch(() => {});
+  }, []);
 
   const transcriptRef = useRef<RealtimeSegment[]>([]);
   const transcriptPanelRef = useRef<HTMLDivElement>(null);
@@ -227,6 +243,8 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
           language: preset.language,
           translate: preset.translate,
           type: preset.type,
+          // 이번 녹음 한정 STT 모델 오버라이드(비었으면 서버가 설정 기본값 사용)
+          ...(sttModel ? { stt_model: sttModel } : {}),
         },
       }));
       setWsStatus("서버 연결됨");
@@ -1022,6 +1040,29 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
                         disabled={isRecording}
                         className="w-full px-5 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-zinc-900 focus:border-transparent outline-none transition-all disabled:opacity-50 h-32 resize-none font-medium"
                       />
+                    </div>
+
+                    <div className="space-y-2">
+                      <label className="text-xs font-bold text-zinc-400 uppercase tracking-widest flex items-center gap-2">
+                        <Settings2 className="w-3 h-3" /> 음성 인식 모델 (이번 녹음만)
+                      </label>
+                      <select
+                        value={sttModel}
+                        onChange={(e) => setSttModel(e.target.value)}
+                        disabled={isRecording}
+                        className="w-full px-5 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-zinc-900 focus:border-transparent outline-none transition-all disabled:opacity-50 font-medium text-sm"
+                      >
+                        {/* 저장된 기본값이 목록에 없더라도 항상 선택돼 보이도록 보강 */}
+                        {sttModel && !STT_OPTIONS.some((o) => o.value === sttModel) && (
+                          <option value={sttModel}>{sttModel} (설정 기본값)</option>
+                        )}
+                        {STT_OPTIONS.map((o) => (
+                          <option key={o.value} value={o.value}>{o.label}</option>
+                        ))}
+                      </select>
+                      <p className="text-[11px] text-zinc-400 leading-relaxed">
+                        설정의 기본 모델이 자동 선택됩니다. 이번 녹음에만 다른 모델을 쓰려면 바꾸세요 — <b>설정 기본값은 그대로 유지</b>됩니다.
+                      </p>
                     </div>
                   </div>
 

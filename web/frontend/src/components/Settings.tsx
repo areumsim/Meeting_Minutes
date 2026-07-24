@@ -23,7 +23,7 @@ interface Field {
   section: string;
   key: string;
   label: string;
-  type: "text" | "password" | "bool" | "select" | "number" | "list";
+  type: "text" | "password" | "bool" | "select" | "number" | "list" | "textarea";
   default?: any;
   desc?: string;
   options?: (string | { value: string; label: string })[];
@@ -834,6 +834,27 @@ function FieldRow({ field, value, onChange, packaged }: { field: Field; value: a
         </span>
         <input type="checkbox" checked={!!value} onChange={(e) => onChange(e.target.checked)} className="mt-1 w-5 h-5 rounded border-brand-300 text-brand-900 focus:ring-brand-900 shrink-0" />
       </label>
+    );
+  }
+
+  if (field.type === "textarea") {
+    // 자유 입력 여러 줄 문자열(예: 회의록 맞춤 지시). "list"와 달리 배열로 만들지 않고
+    // 문자열 그대로 저장한다.
+    return (
+      <div className="space-y-2">
+        <label className="text-sm font-medium text-brand-900">
+          {field.label}
+          {field.required && <span className="text-red-500 ml-0.5">*</span>}
+        </label>
+        <textarea
+          value={value ?? ""}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder={field.placeholder || ""}
+          rows={5}
+          className="w-full px-3 py-2 bg-zinc-50 border border-zinc-200 rounded-lg outline-none focus:ring-2 focus:ring-brand-500 text-sm resize-y leading-relaxed"
+        />
+        {field.desc && <p className="text-xs text-brand-400">{field.desc}</p>}
+      </div>
     );
   }
 

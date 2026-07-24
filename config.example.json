@@ -53,6 +53,7 @@
       "claude-opus-4-8",
       "claude-sonnet-5",
       "claude-haiku-4-5",
+      "claude-opus-4-7",
       "claude-opus-4-6"
     ],
     "claude_model": "claude-opus-4-8",
@@ -355,6 +356,8 @@
       "memo"
     ],
     "default_type": "meeting",
+    "_custom_minutes_instructions_comment": "회의록 생성 AI에 추가로 전달할 사용자 맞춤 지시(형식/내용/강조점). 비우면 기본 형식 사용. 웹 [설정]→저장 위치에서 편집 가능. 메일 발송 회의록에도 동일 적용.",
+    "custom_minutes_instructions": "",
     "_entity_aliases_comment": [
       "STT가 자주 오인식하는 표기 → 정식 명칭 치환 맵 (부분일치, 대소문자 무시).",
       "enrichment 엔티티 정규화와 vault 검색 도메인 정규화 양쪽에 쓰임.",

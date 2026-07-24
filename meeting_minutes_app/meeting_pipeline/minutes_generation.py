@@ -639,16 +639,39 @@ class _SafeFormatDict(dict):
         return ""
 
 
+def _custom_minutes_block() -> str:
+    """config의 analysis.custom_minutes_instructions(사용자 맞춤 지시)를 회의록
+    시스템 프롬프트 끝에 우선순위 블록으로 덧붙인다. 비어 있으면 "".
+
+    비개발자가 웹 [설정]에서 원하는 회의록 형식·내용·강조점을 자유롭게 지정할 수
+    있게 하는 훅. 기본 템플릿의 형식은 유지하되, 충돌 시 사용자 지시를 우선한다.
+    """
+    try:
+        from meeting_minutes_app.common import config_loader as _cfg
+        instr = str(_cfg.get("analysis.custom_minutes_instructions", "") or "").strip()
+    except Exception:
+        instr = ""
+    if not instr:
+        return ""
+    return (
+        "\n\n## ⭐ 사용자 맞춤 지시 (최우선 — 아래 형식/내용 요구를 반드시 반영)\n"
+        "위의 기본 출력 형식을 따르되, 아래 사용자 요구가 기본 형식과 충돌하면 "
+        "아래 요구를 우선합니다. (단, '사실을 지어내지 말 것' 등 정확성 원칙은 항상 유지)\n\n"
+        f"{instr}\n"
+    )
+
+
 def _get_minutes_prompt(doc_type: str, topic: str = "", session_dt: str = "",
                         title: str = "") -> str:
     no_cut = _NO_CUT_MEETING if doc_type == "meeting" else _NO_CUT
+    custom = _custom_minutes_block()
 
     ext = _load_external_template(doc_type)
     if ext:
         head = (f"제목/발표자 힌트: {title}\n\n" if title else "") + no_cut
         # related_notes는 memo(배경 자료)로 별도 주입되므로 빈 값으로 채운다
         return head + ext.format_map(_SafeFormatDict(
-            topic=topic or "", session_dt=session_dt or "", related_notes=""))
+            topic=topic or "", session_dt=session_dt or "", related_notes="")) + custom
 
     tmpl = _MINUTES_TEMPLATES.get(doc_type, "")
     if not tmpl:
@@ -659,7 +682,7 @@ def _get_minutes_prompt(doc_type: str, topic: str = "", session_dt: str = "",
     if session_dt: prefix += f"일시: {session_dt}\n"
     if prefix:     prefix += "\n"
     prefix += no_cut
-    return tmpl.format(prefix=prefix)
+    return tmpl.format(prefix=prefix) + custom
 
 
 def _get_summary_prompt(doc_type: str, topic: str = "", session_dt: str = "") -> str:

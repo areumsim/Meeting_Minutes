@@ -1,6 +1,16 @@
 import { sessionsStore, segmentsStore, documentsStore } from './db';
 import type { Session, Segment, Document as Doc, SessionGraph, GraphNeighbors, GraphNode } from './types';
 
+// API 호출 base 해석기 — 상대경로("/api/...")를 백엔드로 보낸다.
+//  • exe가 프런트를 직접 서빙(PC 브라우저): getBackendUrl()="" → 상대경로 그대로(동일 오리진).
+//  • 모바일 앱 '단독 모드': "" → 앱 자신(대개 미사용 경로는 catch로 흡수).
+//  • 모바일 앱 'PC 연결 모드': getBackendUrl()="http://192.168.x.x:8501" → 그 PC로 전송.
+// 절대 URL(https://api.openai.com, ws://...)은 그대로 통과시킨다.
+function apiFetch(input: string, init?: RequestInit): Promise<Response> {
+  const url = input.startsWith("/") ? `${getBackendUrl()}${input}` : input;
+  return fetch(url, init);
+}
+
 // Authentication & Config Storage (localStorage for simple key/values)
 export const getApiKey = () => localStorage.getItem("OPENAI_API_KEY") || "";
 export const setApiKey = (key: string) => localStorage.setItem("OPENAI_API_KEY", key);
@@ -24,8 +34,9 @@ const DEFAULT_CONFIG = {
   }
 };
 
-// 패키지(exe) 모드 감지 — FastAPI 백엔드가 같은 오리진에 함께 떠 있으면 true.
-// 부팅 시 1회만 /api/health 로 확인해 캐시한다(모바일 단독 배포는 false).
+// 패키지(exe) 모드 감지 — FastAPI 백엔드가 같은 오리진에 함께 떠 있거나,
+// 모바일 앱에서 PC(exe) 주소를 지정해 연결돼 있으면 true.
+// 1회 확인 후 캐시한다. 모바일에서 서버 주소를 바꾸면 resetPackagedMode()로 무효화.
 let _packagedMode: boolean | null = null;
 export async function isPackagedMode(): Promise<boolean> {
   if (_packagedMode !== null) return _packagedMode;
@@ -33,11 +44,34 @@ export async function isPackagedMode(): Promise<boolean> {
   return _packagedMode;
 }
 
+// 서버 연결 상태 캐시 무효화 — 모바일 앱에서 PC 주소를 바꾸거나 해제할 때 호출.
+export function resetPackagedMode(): void {
+  _packagedMode = null;
+}
+
+// 임의 URL의 백엔드 헬스체크 — 모바일 '연결 테스트'용(현재 설정과 무관하게 확인).
+export async function testBackendUrl(url: string): Promise<{ ok: boolean; message: string }> {
+  const base = (url || "").trim().replace(/\/+$/, "");
+  if (!base) return { ok: false, message: "주소를 입력하세요." };
+  if (!/^https?:\/\//i.test(base)) return { ok: false, message: "http:// 또는 https:// 로 시작해야 합니다." };
+  try {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 4000);
+    const res = await fetch(`${base}/api/health`, { signal: ctrl.signal });
+    clearTimeout(t);
+    if (!res.ok) return { ok: false, message: `서버 응답 오류 (${res.status})` };
+    const d = await res.json().catch(() => ({}));
+    return { ok: true, message: `연결됨${d?.ffmpeg_available === false ? " (ffmpeg 없음 경고)" : ""}` };
+  } catch (e: any) {
+    return { ok: false, message: `연결 실패: PC가 켜져 있고 같은 WiFi인지, 주소·포트가 맞는지 확인하세요.` };
+  }
+}
+
 export const getConfig = async () => {
   // 패키지 모드: config.json 이 단일 진실. GET /api/config (키는 마스킹되어 옴).
   if (await isPackagedMode()) {
     try {
-      const res = await fetch("/api/config");
+      const res = await apiFetch("/api/config");
       if (res.ok) {
         const cfg = await res.json();
         if (cfg && !cfg.error) return cfg;
@@ -52,7 +86,7 @@ export const getConfig = async () => {
 export const updateConfig = async (data: any) => {
   // 패키지 모드: PUT /api/config 로 config.json 에 저장. 마스킹된(***) 값은 서버가 스킵.
   if (await isPackagedMode()) {
-    const res = await fetch("/api/config", {
+    const res = await apiFetch("/api/config", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(data),
@@ -72,7 +106,7 @@ export const updateConfig = async (data: any) => {
 export const getConfigSchema = async (): Promise<any[] | null> => {
   if (!(await isPackagedMode())) return null;
   try {
-    const res = await fetch("/api/config/schema");
+    const res = await apiFetch("/api/config/schema");
     if (res.ok) {
       const data = await res.json();
       return Array.isArray(data) ? data : (data?.groups ?? null);
@@ -84,7 +118,7 @@ export const getConfigSchema = async (): Promise<any[] | null> => {
 // 연결 테스트 — 백엔드 엔드포인트 호출. { ok, message } (한국어) 반환.
 export const testOpenAIKey = async (): Promise<{ ok: boolean; message: string }> => {
   try {
-    const res = await fetch("/api/config/test/openai", { method: "POST" });
+    const res = await apiFetch("/api/config/test/openai", { method: "POST" });
     return await res.json();
   } catch (e: any) {
     return { ok: false, message: `연결 테스트 실패: ${e?.message || e}` };
@@ -93,7 +127,7 @@ export const testOpenAIKey = async (): Promise<{ ok: boolean; message: string }>
 
 export const testAnthropicKey = async (): Promise<{ ok: boolean; message: string }> => {
   try {
-    const res = await fetch("/api/config/test/anthropic", { method: "POST" });
+    const res = await apiFetch("/api/config/test/anthropic", { method: "POST" });
     return await res.json();
   } catch (e: any) {
     return { ok: false, message: `연결 테스트 실패: ${e?.message || e}` };
@@ -102,7 +136,7 @@ export const testAnthropicKey = async (): Promise<{ ok: boolean; message: string
 
 export const testObsidianPath = async (): Promise<{ ok: boolean; message: string }> => {
   try {
-    const res = await fetch("/api/config/test/obsidian", { method: "POST" });
+    const res = await apiFetch("/api/config/test/obsidian", { method: "POST" });
     return await res.json();
   } catch (e: any) {
     return { ok: false, message: `연결 테스트 실패: ${e?.message || e}` };
@@ -112,7 +146,7 @@ export const testObsidianPath = async (): Promise<{ ok: boolean; message: string
 // 메일 연결 테스트 — SMTP 로그인 후 테스트 메일 1통 발송.
 export const testEmail = async (): Promise<{ ok: boolean; message: string }> => {
   try {
-    const res = await fetch("/api/config/test/email", { method: "POST" });
+    const res = await apiFetch("/api/config/test/email", { method: "POST" });
     return await res.json();
   } catch (e: any) {
     return { ok: false, message: `메일 테스트 실패: ${e?.message || e}` };
@@ -122,7 +156,7 @@ export const testEmail = async (): Promise<{ ok: boolean; message: string }> => 
 // Slack/Teams Webhook 연결 테스트 — 테스트 메시지 발송.
 export const testSlack = async (): Promise<{ ok: boolean; message: string }> => {
   try {
-    const res = await fetch("/api/config/test/slack", { method: "POST" });
+    const res = await apiFetch("/api/config/test/slack", { method: "POST" });
     return await res.json();
   } catch (e: any) {
     return { ok: false, message: `Slack 테스트 실패: ${e?.message || e}` };
@@ -130,7 +164,7 @@ export const testSlack = async (): Promise<{ ok: boolean; message: string }> => 
 };
 export const testTeams = async (): Promise<{ ok: boolean; message: string }> => {
   try {
-    const res = await fetch("/api/config/test/teams", { method: "POST" });
+    const res = await apiFetch("/api/config/test/teams", { method: "POST" });
     return await res.json();
   } catch (e: any) {
     return { ok: false, message: `Teams 테스트 실패: ${e?.message || e}` };
@@ -141,7 +175,7 @@ export const testTeams = async (): Promise<{ ok: boolean; message: string }> => 
 // 패키지(로컬 백엔드) 모드에서만 동작. 취소/실패 시 { ok:false }.
 export const pickFolder = async (initial?: string): Promise<{ ok: boolean; path?: string; message?: string; cancelled?: boolean }> => {
   try {
-    const res = await fetch("/api/system/pick-folder", {
+    const res = await apiFetch("/api/system/pick-folder", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ initial: initial || "" }),
@@ -157,7 +191,7 @@ export const getUploadProgress = async (
   sessionId: string
 ): Promise<{ found: boolean; percent?: number; stage?: string; elapsed?: number }> => {
   try {
-    const res = await fetch(`/api/upload/progress/${sessionId}`);
+    const res = await apiFetch(`/api/upload/progress/${sessionId}`);
     if (res.ok) return await res.json();
   } catch { /* 백엔드 없음/무시 */ }
   return { found: false };
@@ -168,7 +202,7 @@ export const cancelUpload = async (
   sessionId: string
 ): Promise<{ ok: boolean; message?: string }> => {
   try {
-    const res = await fetch(`/api/upload/cancel/${sessionId}`, { method: "POST" });
+    const res = await apiFetch(`/api/upload/cancel/${sessionId}`, { method: "POST" });
     if (res.ok) return await res.json();
   } catch { /* 백엔드 없음 */ }
   return { ok: false, message: "취소 요청 실패" };
@@ -178,7 +212,7 @@ export const cancelUpload = async (
 export interface SessionCost { ok: boolean; duration_sec?: number; stt?: number; translate?: number; minutes?: number; total?: number; stt_model?: string; }
 export const getSessionCost = async (sessionId: string): Promise<SessionCost | null> => {
   try {
-    const res = await fetch(`/api/sessions/${sessionId}/cost`);
+    const res = await apiFetch(`/api/sessions/${sessionId}/cost`);
     if (res.ok) return await res.json();
   } catch { /* 백엔드 없음 */ }
   return null;
@@ -186,7 +220,7 @@ export const getSessionCost = async (sessionId: string): Promise<SessionCost | n
 export interface CostRates { stt_model: string; stt_per_min: number; translate_per_min: number; minutes_flat: number; }
 export const getCostRates = async (): Promise<CostRates | null> => {
   try {
-    const res = await fetch(`/api/cost/rates`);
+    const res = await apiFetch(`/api/cost/rates`);
     if (res.ok) return await res.json();
   } catch { /* 백엔드 없음 */ }
   return null;
@@ -195,7 +229,7 @@ export const getCostRates = async (): Promise<CostRates | null> => {
 // 앱(서버) 종료 — 콘솔 창 없는 배포에서 웹으로 깔끔히 끄기.
 export const shutdownApp = async (): Promise<boolean> => {
   try {
-    const res = await fetch("/api/shutdown", { method: "POST" });
+    const res = await apiFetch("/api/shutdown", { method: "POST" });
     return res.ok;
   } catch {
     return true; // 서버가 즉시 죽어 응답이 끊길 수 있음 → 성공으로 간주
@@ -205,7 +239,7 @@ export const shutdownApp = async (): Promise<boolean> => {
 // 볼트 인덱스 재빌드 — folder-only 위키 검색을 위해 .md 폴더를 다시 색인.
 export const reindexVault = async (): Promise<{ ok: boolean; message: string }> => {
   try {
-    const res = await fetch("/api/reindex", { method: "POST" });
+    const res = await apiFetch("/api/reindex", { method: "POST" });
     return await res.json();
   } catch (e: any) {
     return { ok: false, message: `재빌드 실패: ${e?.message || e}` };
@@ -224,7 +258,7 @@ export interface WatcherStatus {
 
 export const getWatcherStatus = async (): Promise<WatcherStatus | null> => {
   try {
-    const res = await fetch("/api/watcher/status");
+    const res = await apiFetch("/api/watcher/status");
     if (res.ok) return await res.json();
   } catch { /* 백엔드 없음 */ }
   return null;
@@ -232,7 +266,7 @@ export const getWatcherStatus = async (): Promise<WatcherStatus | null> => {
 
 export const startWatcher = async (): Promise<{ ok: boolean; running: boolean; message: string }> => {
   try {
-    const res = await fetch("/api/watcher/start", { method: "POST" });
+    const res = await apiFetch("/api/watcher/start", { method: "POST" });
     return await res.json();
   } catch (e: any) {
     return { ok: false, running: false, message: `시작 실패: ${e?.message || e}` };
@@ -241,7 +275,7 @@ export const startWatcher = async (): Promise<{ ok: boolean; running: boolean; m
 
 export const stopWatcher = async (): Promise<{ ok: boolean; running: boolean; message: string }> => {
   try {
-    const res = await fetch("/api/watcher/stop", { method: "POST" });
+    const res = await apiFetch("/api/watcher/stop", { method: "POST" });
     return await res.json();
   } catch (e: any) {
     return { ok: false, running: true, message: `중지 실패: ${e?.message || e}` };
@@ -252,7 +286,7 @@ export const stopWatcher = async (): Promise<{ ok: boolean; running: boolean; me
 export interface DiagnoseResult { ok: boolean; checks: { name: string; ok: boolean; detail: string }[] }
 export const obsidianDiagnose = async (): Promise<DiagnoseResult> => {
   try {
-    const res = await fetch("/api/assistant/obsidian-diagnose");
+    const res = await apiFetch("/api/assistant/obsidian-diagnose");
     return await res.json();
   } catch (e: any) {
     return { ok: false, checks: [{ name: "연결", ok: false, detail: `진단 실패: ${e?.message || e}` }] };
@@ -265,12 +299,12 @@ export interface AssistantSummary {
   dashboard_path?: string;
 }
 export const assistantStatus = async (days = 7): Promise<AssistantSummary> => {
-  try { return await (await fetch(`/api/assistant/status?days=${days}`)).json(); }
+  try { return await (await apiFetch(`/api/assistant/status?days=${days}`)).json(); }
   catch (e: any) { return { ok: false, message: `현황 조회 실패: ${e?.message || e}` }; }
 };
 export const assistantSchedule = async (days = 14, writeDashboard = true): Promise<AssistantSummary> => {
   try {
-    const res = await fetch("/api/assistant/schedule", {
+    const res = await apiFetch("/api/assistant/schedule", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ days, write_dashboard: writeDashboard }),
     });
@@ -280,12 +314,12 @@ export const assistantSchedule = async (days = 14, writeDashboard = true): Promi
 
 export interface PendingMerge { recording_title: string; recording_path: string; plan_title: string; matched_plan: string }
 export const getMerges = async (): Promise<{ ok: boolean; message?: string; pending?: PendingMerge[] }> => {
-  try { return await (await fetch("/api/assistant/merges")).json(); }
+  try { return await (await apiFetch("/api/assistant/merges")).json(); }
   catch (e: any) { return { ok: false, message: `병합 대기 조회 실패: ${e?.message || e}` }; }
 };
 export const doMerge = async (recordingPath: string, deleteRecording = false): Promise<{ ok: boolean; message: string }> => {
   try {
-    const res = await fetch("/api/assistant/merge", {
+    const res = await apiFetch("/api/assistant/merge", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ recording_path: recordingPath, delete_recording: deleteRecording }),
     });
@@ -295,7 +329,7 @@ export const doMerge = async (recordingPath: string, deleteRecording = false): P
 
 export const vaultAudio = async (dryRun: boolean): Promise<{ ok: boolean; running?: boolean; count?: number; message: string }> => {
   try {
-    const res = await fetch("/api/assistant/vault-audio", {
+    const res = await apiFetch("/api/assistant/vault-audio", {
       method: "POST", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ dry_run: dryRun }),
     });
@@ -303,20 +337,20 @@ export const vaultAudio = async (dryRun: boolean): Promise<{ ok: boolean; runnin
   } catch (e: any) { return { ok: false, message: `처리 실패: ${e?.message || e}` }; }
 };
 export const vaultAudioStatus = async (): Promise<{ running: boolean; done: number; message: string }> => {
-  try { return await (await fetch("/api/assistant/vault-audio/status")).json(); }
+  try { return await (await apiFetch("/api/assistant/vault-audio/status")).json(); }
   catch { return { running: false, done: 0, message: "" }; }
 };
 
 export interface PlanAutoStatus { running: boolean; vault: string; notes_researched: number; audio_processed: number; error?: string }
 export const planStatus = async (): Promise<PlanAutoStatus | null> => {
-  try { return await (await fetch("/api/watcher/plan/status")).json(); } catch { return null; }
+  try { return await (await apiFetch("/api/watcher/plan/status")).json(); } catch { return null; }
 };
 export const planStart = async (): Promise<{ ok: boolean; running: boolean; message: string }> => {
-  try { return await (await fetch("/api/watcher/plan/start", { method: "POST" })).json(); }
+  try { return await (await apiFetch("/api/watcher/plan/start", { method: "POST" })).json(); }
   catch (e: any) { return { ok: false, running: false, message: `시작 실패: ${e?.message || e}` }; }
 };
 export const planStop = async (): Promise<{ ok: boolean; running: boolean; message: string }> => {
-  try { return await (await fetch("/api/watcher/plan/stop", { method: "POST" })).json(); }
+  try { return await (await apiFetch("/api/watcher/plan/stop", { method: "POST" })).json(); }
   catch (e: any) { return { ok: false, running: true, message: `중지 실패: ${e?.message || e}` }; }
 };
 
@@ -332,7 +366,7 @@ export const prepBrief = async (
   title: string, topic: string, opts?: { attendees?: string; notes?: string }
 ): Promise<PrepBriefResult> => {
   try {
-    const res = await fetch("/api/prep-brief", {
+    const res = await apiFetch("/api/prep-brief", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ title, topic, attendees: opts?.attendees || "", notes: opts?.notes || "" }),
@@ -348,7 +382,7 @@ export const savePrepBrief = async (
   data: { title: string; brief: string; topic?: string; date?: string; attendees?: string }
 ): Promise<{ ok: boolean; sessionId?: string; message?: string }> => {
   try {
-    const res = await fetch("/api/prep-brief/save", {
+    const res = await apiFetch("/api/prep-brief/save", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(data),
@@ -386,6 +420,27 @@ export const deleteProfile = async (name: string) => {
 
 // Sessions (IndexedDB via localforage)
 export const getSessions = async (search?: string, type?: string) => {
+  // 패키지(백엔드) 모드: 서버 SQLite 세션(폴더 워처·CLI·배치 산출 포함)을 로컬로
+  // 미러링해 대시보드에 전체 세션이 보이게 한다 — 과거엔 IndexedDB만 나열해
+  // 워처/CLI 세션이 영영 안 보였다. 없거나 상태가 바뀐 세션만 풀 미러링.
+  if (await isPackagedMode()) {
+    try {
+      const base = getBackendUrl();
+      const res = await fetch(`${base}/api/sessions`);
+      if (res.ok) {
+        const data = await res.json();
+        const list: any[] = Array.isArray(data) ? data : (data?.sessions || []);
+        for (const s of list) {
+          if (!s?.id) continue;
+          const local: any = await sessionsStore.getItem(s.id);
+          if (!local || local.status !== s.status) {
+            await mirrorServerSession(s.id);
+          }
+        }
+      }
+    } catch { /* 서버 미가용 시 로컬만 표시 */ }
+  }
+
   const sessions: any[] = [];
   await sessionsStore.iterate((value) => {
     sessions.push(value);
@@ -417,7 +472,7 @@ export const getSession = async (id: string): Promise<{ session: Session; segmen
 // 같은 오리진의 /api/* 가 실제로 존재한다. 백엔드가 없는(모바일 전용) 배포에서는 이 호출이
 // 실패하며, 호출부에서 조용히 무시하고 그래프 탭을 숨기도록 처리한다.
 export const getSessionGraph = async (sessionId: string): Promise<SessionGraph> => {
-  const res = await fetch(`/api/graph/sessions/${sessionId}`);
+  const res = await apiFetch(`/api/graph/sessions/${sessionId}`);
   if (!res.ok) throw new Error(`Graph fetch failed (${res.status})`);
   return res.json();
 };
@@ -431,7 +486,7 @@ export const listGraphNodes = async (
   if (opts?.q) params.set("q", opts.q);
   if (opts?.limit) params.set("limit", String(opts.limit));
   const qs = params.toString();
-  const res = await fetch(`/api/graph/nodes${qs ? `?${qs}` : ""}`);
+  const res = await apiFetch(`/api/graph/nodes${qs ? `?${qs}` : ""}`);
   if (!res.ok) throw new Error(`Nodes fetch failed (${res.status})`);
   return res.json();
 };
@@ -445,7 +500,7 @@ export const getNodeNeighbors = async (
   if (opts?.relationType) params.set("relation_type", opts.relationType);
   if (opts?.limit) params.set("limit", String(opts.limit));
   const qs = params.toString();
-  const res = await fetch(`/api/graph/nodes/${nodeId}/neighbors${qs ? `?${qs}` : ""}`);
+  const res = await apiFetch(`/api/graph/nodes/${nodeId}/neighbors${qs ? `?${qs}` : ""}`);
   if (!res.ok) throw new Error(`Neighbors fetch failed (${res.status})`);
   return res.json();
 };
@@ -483,6 +538,10 @@ export const deleteSession = async (id: string) => {
   await sessionsStore.removeItem(id);
   await segmentsStore.removeItem(id);
   await documentsStore.removeItem(id);
+  // 패키지 모드: 서버 DB에서도 삭제 — 로컬만 지우면 다음 미러링 때 되살아난다.
+  if (await isPackagedMode()) {
+    try { await fetch(`${getBackendUrl()}/api/sessions/${id}`, { method: "DELETE" }); } catch { /* 서버 미가용 무시 */ }
+  }
   return { success: true };
 };
 
@@ -490,6 +549,9 @@ export const clearSessions = async () => {
   await sessionsStore.clear();
   await segmentsStore.clear();
   await documentsStore.clear();
+  if (await isPackagedMode()) {
+    try { await fetch(`${getBackendUrl()}/api/sessions/clear`, { method: "POST" }); } catch { /* 서버 미가용 무시 */ }
+  }
   return { success: true };
 };
 
@@ -594,7 +656,7 @@ export const uploadFile = async (formData: FormData) => {
   // 패키지(백엔드) 모드: 서버 배치 파이프라인(/api/upload)으로 위임.
   // STT·회의록 생성이 서버에서 수행되어 OpenAI 키가 브라우저에 노출되지 않는다.
   if (await isPackagedMode()) {
-    const res = await fetch("/api/upload", { method: "POST", body: formData });
+    const res = await apiFetch("/api/upload", { method: "POST", body: formData });
     if (!res.ok) {
       const d = await res.json().catch(() => null);
       throw new Error(d?.detail || `업로드 실패 (${res.status})`);
@@ -663,7 +725,7 @@ export const uploadFile = async (formData: FormData) => {
 export const processTextInput = async (text: string, metadata: any) => {
   // 패키지(백엔드) 모드: 서버가 텍스트→회의록 생성(키 미노출).
   if (await isPackagedMode()) {
-    const res = await fetch("/api/process-text", {
+    const res = await apiFetch("/api/process-text", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ text, title: metadata.title, topic: metadata.topic, type: metadata.type }),
@@ -704,7 +766,12 @@ export const processTextInput = async (text: string, metadata: any) => {
 // 노출되지 않는다. 모바일 단독 배포(백엔드 없음)는 기존 직접 OpenAI 연결로 폴백.
 
 export const getBackendUrl = () => localStorage.getItem("BACKEND_URL") || "";
-export const setBackendUrl = (url: string) => localStorage.setItem("BACKEND_URL", url);
+export const setBackendUrl = (url: string) => {
+  const clean = (url || "").trim().replace(/\/+$/, "");
+  if (clean) localStorage.setItem("BACKEND_URL", clean);
+  else localStorage.removeItem("BACKEND_URL");
+  resetPackagedMode();  // 다음 isPackagedMode() 호출 시 새 주소로 재감지
+};
 
 export async function backendAvailable(): Promise<boolean> {
   const base = getBackendUrl();
@@ -736,7 +803,12 @@ export function createBackendRealtimeWS(): WebSocket {
 export async function mirrorServerSession(sessionId: string): Promise<boolean> {
   const base = getBackendUrl();
   try {
-    const res = await fetch(`${base}/api/sessions/${sessionId}`);
+    // 타임아웃 필수: 서버가 연결만 받고 응답을 안 주면 이 fetch가 무한 대기하고,
+    // 호출부의 .finally(→ 화면 이동)가 영영 안 돌아 녹음 후 멈춤이 된다.
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 8000);
+    const res = await fetch(`${base}/api/sessions/${sessionId}`, { signal: ctrl.signal });
+    clearTimeout(t);
     if (!res.ok) return false;
     const data = await res.json();
     if (data.session) await sessionsStore.setItem(sessionId, data.session);
@@ -839,7 +911,7 @@ const callOpenAIWithFallback = async (prompt: string, apikey: string, primaryMod
 export const generateSummaryForSession = async (sessionId: string, userNotes?: string) => {
    // 패키지 모드: 서버가 기존 전사를 재사용해 노트를 반영, 회의록을 재생성.
    if (await isPackagedMode()) {
-     const res = await fetch(`/api/sessions/${sessionId}/regenerate`, {
+     const res = await apiFetch(`/api/sessions/${sessionId}/regenerate`, {
        method: "POST",
        headers: { "Content-Type": "application/json" },
        body: JSON.stringify({ notes: userNotes || "" }),

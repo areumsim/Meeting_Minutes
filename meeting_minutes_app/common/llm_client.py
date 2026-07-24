@@ -27,11 +27,26 @@ def _c(key: str, default: Any = None) -> Any:
     return _cfg.get(key, default) if _cfg_ok else default
 
 
-GPT_MODEL = _c("models.gpt_model", "gpt-4o") or "gpt-4o"
-CLAUDE_MODEL = _c("models.claude_model", "claude-opus-4-6") or "claude-opus-4-6"
+GPT_MODEL = _c("models.gpt_model", "gpt-4o-mini") or "gpt-4o-mini"
+CLAUDE_MODEL = _c("models.claude_model", "claude-opus-4-8") or "claude-opus-4-8"
 OPENAI_API_KEY = _c("api.openai_api_key", "") or ""
 ANTHROPIC_API_KEY = _c("api.anthropic_api_key", "") or ""
 SSL_VERIFY = _c("ssl.verify", True)  # 안전 기본값: 키 누락 시 검증 켜짐
+
+
+def _refresh_config_globals() -> None:
+    """config_loader.reload() 훅 — 웹 UI에서 설정 저장 시 재시작 없이
+    키/모델/SSL 전역을 재평가한다(위 상수들은 import 시점 값으로 고정되므로)."""
+    global GPT_MODEL, CLAUDE_MODEL, OPENAI_API_KEY, ANTHROPIC_API_KEY, SSL_VERIFY
+    GPT_MODEL = _c("models.gpt_model", "gpt-4o-mini") or "gpt-4o-mini"
+    CLAUDE_MODEL = _c("models.claude_model", "claude-opus-4-8") or "claude-opus-4-8"
+    OPENAI_API_KEY = _c("api.openai_api_key", "") or ""
+    ANTHROPIC_API_KEY = _c("api.anthropic_api_key", "") or ""
+    SSL_VERIFY = _c("ssl.verify", True)
+
+
+if _cfg_ok:
+    _cfg.on_reload(_refresh_config_globals)
 
 logger = logging.getLogger("meeting_minutes")
 

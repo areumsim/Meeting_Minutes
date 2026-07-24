@@ -13,6 +13,16 @@ for _s in (sys.stdout, sys.stderr):
         except Exception:
             pass
 
+# 회사망 SSL 검사(사내 프록시의 인증서 교체) 대응: 파이썬 내장 인증서 목록(certifi)
+# 대신 Windows 인증서 저장소를 신뢰한다 — 회사 PC에는 보통 회사 루트 인증서가
+# 설치돼 있어, SSL 검증을 끄지 않고도 OpenAI/Anthropic 연결이 된다.
+# (모든 후속 ssl 컨텍스트에 전역 적용되므로 가장 먼저 주입)
+try:
+    import truststore
+    truststore.inject_into_ssl()
+except Exception as _ts_err:
+    print(f"[ssl] truststore 주입 생략(무시): {_ts_err}")
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -57,6 +67,33 @@ async def lifespan(app: FastAPI):
         scan_output_dir()
     except Exception as e:
         print(f"[scanner] 초기 스캔 실패: {e}")
+    # 설정에 켜져 있는 백그라운드 자동화(폴더 감시·계획 자동화)를 자동 재개.
+    # 버튼으로 켠 감시가 앱 재시작 후 사라지면 exe 사용자는 원인을 알기 어렵다.
+    try:
+        from web.backend.api.watcher import autostart_from_config
+        autostart_from_config()
+    except Exception as e:
+        print(f"[startup] 자동화 자동 시작 경고: {e}")
+    # indexing.auto_reindex_on_start — 설정 화면에 노출된 플래그인데 지금까지
+    # 웹 앱 lifespan 이 무시했다. 부팅을 막지 않도록 백그라운드 스레드로 수행.
+    try:
+        from meeting_minutes_app.common import config_loader as _cfg
+        if bool(_cfg.get("indexing.auto_reindex_on_start", False)):
+            import threading
+
+            def _reindex_bg():
+                try:
+                    from meeting_minutes_app.wiki_core.vault_indexer import VaultIndexer
+                    idx = VaultIndexer.from_config()
+                    if idx:
+                        n = idx.build(verbose=False)
+                        print(f"[indexing] 시작 시 자동 재인덱스 완료 — 노트 {n}개")
+                except Exception as e:
+                    print(f"[indexing] 시작 시 자동 재인덱스 실패(무시): {e}")
+
+            threading.Thread(target=_reindex_bg, name="auto-reindex", daemon=True).start()
+    except Exception as e:
+        print(f"[startup] 자동 재인덱스 확인 경고: {e}")
     if _mcp_app is not None:
         async with _mcp_app.lifespan(app):
             yield
@@ -70,11 +107,14 @@ if _mcp_app is not None:
     app.mount("/mcp", _mcp_app)
 
 # 단일 오리진(localhost) 데스크톱 앱이라 CORS 는 사실상 불필요하지만, dev(Vite:5173)에서
-# 백엔드(8501)로 직접 붙는 경우를 위해 localhost 계열만 허용한다.
+# 백엔드(8501)로 직접 붙는 경우와, 같은 WiFi의 iOS/Android 앱(Capacitor)이 서버 모드로
+# 붙는 경우를 위해 localhost 계열 + Capacitor 앱 오리진을 허용한다.
+#   - iOS(capacitor.config iosScheme:'https', hostname:'localhost') → Origin: https://localhost
+#   - capacitor://localhost / ionic://localhost (플랫폼/버전별 스킴)
 # 참고: allow_origins=["*"] + allow_credentials=True 는 CORS 명세상 무효 조합이라 쓰지 않는다.
 app.add_middleware(
     CORSMiddleware,
-    allow_origin_regex=r"^https?://(localhost|127\.0\.0\.1)(:\d+)?$",
+    allow_origin_regex=r"^(https?://(localhost|127\.0\.0\.1)(:\d+)?|capacitor://localhost|ionic://localhost)$",
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],

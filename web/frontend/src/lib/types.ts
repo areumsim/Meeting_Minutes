@@ -13,6 +13,7 @@ export interface Session {
   mode: string;
   cost_estimate: number;
   duration_sec: number;
+  error_detail?: string | null;
   created_at: string;
 }
 
@@ -73,11 +74,15 @@ export interface GraphNeighbors {
 }
 
 export interface RealtimeSegment {
+  // 렌더링 key용 안정 식별자 — 텍스트가 스트리밍으로 변해도 행이 리마운트되지 않게 한다
+  id?: string;
   text: string;
   translatedText?: string;
   speaker: string;
   start: number;
   end: number;
+  // 2-pass 보정: true면 빠른 패스 임시 조각(흐리게 표시) — revise 이벤트가 문장으로 교체
+  provisional?: boolean;
 }
 
 export const MODE_PRESETS: Record<number, { label: string; language: string; translate: boolean; type: string }> = {

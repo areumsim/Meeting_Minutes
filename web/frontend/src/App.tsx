@@ -137,7 +137,7 @@ export default function App() {
           >
             <Suspense fallback={<div className="flex items-center justify-center py-32"><Loader2 className="animate-spin text-brand-400" size={32} /></div>}>
               {view === "dashboard" && <Dashboard onSelectSession={navigateToDetail} onNewUpload={() => setView("upload")} onNewRecord={() => setView("recorder")} />}
-              {view === "recorder" && <Recorder onComplete={navigateToDetail} />}
+              {view === "recorder" && <Recorder onComplete={navigateToDetail} onExit={() => setView("dashboard")} />}
               {view === "upload" && <FileUpload onComplete={navigateToDetail} />}
               {view === "text" && <TextInput onComplete={navigateToDetail} />}
               {view === "wiki" && <WikiAsk />}

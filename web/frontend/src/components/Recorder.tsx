@@ -6,7 +6,7 @@ import {
 import { motion, AnimatePresence } from "motion/react";
 import {
   createRealtimeWS, backendAvailable, createBackendRealtimeWS, mirrorServerSession,
-  getCostRates, type CostRates,
+  getCostRates, getConfig, type CostRates,
 } from "../lib/api";
 import { MODE_PRESETS, type RealtimeSegment } from "../lib/types";
 
@@ -20,7 +20,7 @@ import ModeSelector from "./ModeSelector";
 import { KeepAwake } from '@capacitor-community/keep-awake';
 import { Haptics, ImpactStyle, NotificationType } from '@capacitor/haptics';
 
-export default function Recorder({ onComplete }: { onComplete: (id: string) => void }) {
+export default function Recorder({ onComplete, onExit }: { onComplete: (id: string) => void; onExit?: () => void }) {
   const [isRecording, setIsRecording] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
   const [duration, setDuration] = useState(0);
@@ -67,8 +67,9 @@ export default function Recorder({ onComplete }: { onComplete: (id: string) => v
 
   useEffect(() => {
     return () => {
-      // Auto-save on accidental unmount
-      if ((window as any).isRecordingActive) {
+      // Auto-save on accidental unmount — 백엔드 모드는 서버가 수신분을 저장·처리하므로
+      // 로컬 IndexedDB에 문서 없는 중복 'processing' 세션을 만들지 않는다.
+      if ((window as any).isRecordingActive && !backendModeRef.current) {
         const finalTranscript = transcriptRef.current;
         const current = stateRef.current;
         const preset = MODE_PRESETS[current.modeNum] || MODE_PRESETS[2];
@@ -79,6 +80,7 @@ export default function Recorder({ onComplete }: { onComplete: (id: string) => v
       (window as any).isRecordingActive = false;
       delete (window as any).stopActiveRecording;
       if (completionTimerRef.current) clearTimeout(completionTimerRef.current);
+      if (connectTimerRef.current) clearTimeout(connectTimerRef.current);
       stopAll();
     };
   }, []);
@@ -87,12 +89,23 @@ export default function Recorder({ onComplete }: { onComplete: (id: string) => v
   useEffect(() => { getCostRates().then((r) => r && setCostRates(r)); }, []);
 
   const transcriptRef = useRef<RealtimeSegment[]>([]);
+  const transcriptPanelRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     transcriptRef.current = liveTranscript;
-    if (transcriptEndRef.current) {
-      transcriptEndRef.current.scrollIntoView({ behavior: "smooth" });
+    // 사용자가 위로 스크롤해 이전 내용을 읽는 중이면 자동 스크롤로 끌어내리지 않는다.
+    const panel = transcriptPanelRef.current;
+    const nearBottom =
+      !panel || panel.scrollHeight - panel.scrollTop - panel.clientHeight < 120;
+    if (nearBottom && transcriptEndRef.current) {
+      transcriptEndRef.current.scrollIntoView({ behavior: "auto", block: "nearest" });
     }
   }, [liveTranscript]);
+
+  // 세그먼트 렌더링 key용 안정 id 발급기 — 텍스트 스트리밍 중 행 리마운트(깜빡임) 방지
+  const segSeqRef = useRef(0);
+  const newSegId = () => `seg-${++segSeqRef.current}`;
+  // 백엔드 WS 연결/준비 타임아웃 — accept 후 서버가 멈추면 '연결 중...'에 갇히는 것 방지
+  const connectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     (window as any).isRecordingActive = isRecording;
@@ -145,7 +158,7 @@ export default function Recorder({ onComplete }: { onComplete: (id: string) => v
   useEffect(() => {
     if (backendModeRef.current) return;
     if (duration > 0 && duration % 840 === 0 && isRecording && !isPaused) {
-      setWsStatus("Rotating connection...");
+      setWsStatus("연결 갱신 중...");
       const oldWs = wsRef.current;
       try {
         isRotatingRef.current = true; // 회전 중 플래그 — onclose에서 재연결 방지
@@ -161,12 +174,13 @@ export default function Recorder({ onComplete }: { onComplete: (id: string) => v
             session: {
               instructions: topic ? `${instructions}\n\nContext/Topic: ${topic}` : instructions,
               voice: "alloy",
-              turn_detection: { type: "server_vad", threshold: 0.5, prefix_padding_ms: 300, silence_duration_ms: 800 },
+              // 받아쓰기 모드에선 모델 응답 생성 불필요 — 토큰·지연 낭비 방지
+              turn_detection: { type: "server_vad", threshold: 0.5, prefix_padding_ms: 300, silence_duration_ms: 800, create_response: preset.translate },
               input_audio_transcription: { model: "whisper-1" }
             }
           }));
           wsRef.current = newWs;
-          setWsStatus("Connected (GPT-4o Realtime)");
+          setWsStatus("연결됨 (OpenAI 실시간)");
           // 이전 WS 핸들러 제거 후 종료 (재연결 트리거 방지)
           if (oldWs && oldWs.readyState === WebSocket.OPEN) {
             oldWs.onclose = null;
@@ -194,6 +208,17 @@ export default function Recorder({ onComplete }: { onComplete: (id: string) => v
     serverSessionIdRef.current = null;
     captureStartedRef.current = false;
 
+    // 15초 안에 ready/fallback_http가 안 오면 연결 실패로 보고 초기 화면으로 복귀
+    if (connectTimerRef.current) clearTimeout(connectTimerRef.current);
+    connectTimerRef.current = setTimeout(() => {
+      if (!captureStartedRef.current) {
+        try { ws.onclose = null; ws.onerror = null; ws.onmessage = null; ws.close(); } catch {}
+        wsRef.current = null;
+        setWsStatus("서버 연결이 지연되고 있습니다 — 잠시 후 다시 시도해주세요.");
+        setStatus("idle");
+      }
+    }, 15000);
+
     ws.onopen = () => {
       ws.send(JSON.stringify({
         config: {
@@ -204,7 +229,7 @@ export default function Recorder({ onComplete }: { onComplete: (id: string) => v
           type: preset.type,
         },
       }));
-      setWsStatus("Connected (Local Backend)");
+      setWsStatus("서버 연결됨");
     };
 
     ws.onmessage = (evt) => {
@@ -218,6 +243,7 @@ export default function Recorder({ onComplete }: { onComplete: (id: string) => v
           break;
 
         case "ready":
+          if (connectTimerRef.current) clearTimeout(connectTimerRef.current);
           setWsStatus(`실시간 전사 중 (${msg.model})`);
           if (!captureStartedRef.current) { captureStartedRef.current = true; startAudioCapture(); }
           break;
@@ -225,6 +251,7 @@ export default function Recorder({ onComplete }: { onComplete: (id: string) => v
         case "fallback_http":
           // WS 실시간이 안 되면 서버가 같은 오디오 스트림을 HTTP 청크로 전사(자동 폴백).
           // ready 후 캡처가 이미 시작됐다면 다시 시작하지 않는다(중복 캡처 방지).
+          if (connectTimerRef.current) clearTimeout(connectTimerRef.current);
           setHttpFallback(true);
           setWsStatus(`전사 중 (HTTP 청크 방식: ${msg.model})`);
           if (!captureStartedRef.current) { captureStartedRef.current = true; startAudioCapture(); }
@@ -236,7 +263,7 @@ export default function Recorder({ onComplete }: { onComplete: (id: string) => v
             const copy = [...prev];
             const idx = provisionalIdxRef.current[id];
             if (idx === undefined || !copy[idx]) {
-              copy.push({ text: msg.delta || "", translatedText: "", speaker: speakers || "", start: -1, end: 0 });
+              copy.push({ id: `ws-${id}`, text: msg.delta || "", translatedText: "", speaker: speakers || "", start: -1, end: 0 });
               provisionalIdxRef.current[id] = copy.length - 1;
             } else {
               copy[idx] = { ...copy[idx], text: copy[idx].text + (msg.delta || "") };
@@ -256,14 +283,46 @@ export default function Recorder({ onComplete }: { onComplete: (id: string) => v
               speaker: msg.speaker || speakers || "",
               start: msg.start ?? 0,
               end: msg.end ?? 0,
+              provisional: !!msg.provisional,
             };
             // itemId로 스트리밍(provisional) 항목을 확정본으로 교체 — itemId가 없으면(HTTP 폴백 청크 모드)
-            // provisional 항목 자체가 없으므로 그대로 append
+            // provisional 항목 자체가 없으므로 그대로 append. 교체 시 기존 id를 유지해 리마운트 방지.
             const idx = segItemId !== undefined ? provisionalIdxRef.current[segItemId] : undefined;
-            if (idx !== undefined && copy[idx]) copy[idx] = seg; else copy.push(seg);
+            if (idx !== undefined && copy[idx]) copy[idx] = { ...seg, id: copy[idx].id };
+            else copy.push({ ...seg, id: newSegId() });
             return copy;
           });
           if (segItemId !== undefined) delete provisionalIdxRef.current[segItemId];
+          break;
+        }
+
+        case "translation": {
+          // 빠른 패스 세그먼트의 비동기 번역 도착 — start/end로 매칭해 채워 넣는다.
+          setLiveTranscript(prev => prev.map(s =>
+            Math.abs(s.start - (msg.start ?? -1)) < 0.01 && Math.abs(s.end - (msg.end ?? -1)) < 0.01
+              ? { ...s, translatedText: msg.translatedText || "" } : s));
+          break;
+        }
+
+        case "revise": {
+          // 2-pass 보정: [fromTime, toTime) 구간의 조각 세그먼트를 보정된 문장으로 교체.
+          // start<0(WS delta 임시 항목)은 보존 — HTTP 모드에선 존재하지 않는다.
+          const from = msg.fromTime ?? 0;
+          const to = msg.toTime ?? 0;
+          setLiveTranscript(prev => {
+            const kept = prev.filter(s => s.start < 0 || s.start < from || s.start >= to);
+            const revised: RealtimeSegment[] = (msg.segments || []).map((s: any) => ({
+              id: newSegId(),
+              text: s.text || "",
+              translatedText: s.translatedText || "",
+              speaker: s.speaker || speakers || "",
+              start: s.start ?? 0,
+              end: s.end ?? 0,
+              provisional: false,
+            }));
+            return [...kept, ...revised].sort((a, b) =>
+              (a.start < 0 ? Infinity : a.start) - (b.start < 0 ? Infinity : b.start));
+          });
           break;
         }
 
@@ -299,34 +358,88 @@ export default function Recorder({ onComplete }: { onComplete: (id: string) => v
           if (completionTimerRef.current) clearTimeout(completionTimerRef.current);
           const sid = msg.sessionId || serverSessionIdRef.current;
           setStatus("completed");
-          setWsStatus(`Documents ready (${msg.segmentCount ?? "?"} segments)`);
+          setWsStatus(`문서 생성 완료 (세그먼트 ${msg.segmentCount ?? "?"}개)`);
           try { ws.close(); } catch {}
           if (sid) {
-            mirrorServerSession(sid).finally(() => setTimeout(() => onComplete(sid), 800));
+            // 미러 실패 시 몇 차례 재시도 후 이동 — 첫 시도 실패로 상세 화면이
+            // '세션을 찾을 수 없습니다' 막다른 화면이 되는 것을 방지한다.
+            (async () => {
+              let ok = false;
+              for (let i = 0; i < 4 && !ok; i++) {
+                if (i > 0) await new Promise((r) => setTimeout(r, 2000));
+                try { ok = await mirrorServerSession(sid); } catch { ok = false; }
+              }
+              setTimeout(() => onComplete(sid), 400);
+            })();
+          } else {
+            // sessionId를 못 받은 예외 상황 — 상세로 갈 수 없으니 최소한 대시보드로 복귀
+            // (녹음 화면에 멈춰 있지 않도록).
+            setTimeout(() => onExit?.(), 800);
           }
           break;
         }
 
-        case "error":
-          setWsStatus(`Error: ${msg.message || "Unknown error"}`);
+        case "empty": {
+          // 서버가 '음성 미감지'로 세션을 저장하지 않고 종료 — completed가 안 오므로
+          // 여기서 대기를 풀고 대시보드로 복귀시킨다(멈춤 방지).
+          if (completionTimerRef.current) clearTimeout(completionTimerRef.current);
+          setStatus("completed");
+          setWsStatus(msg.message || "음성이 감지되지 않았습니다.");
+          try { ws.close(); } catch {}
+          setTimeout(() => onExit?.(), 1500);
           break;
+        }
+
+        case "cancelled": {
+          // 서버가 취소를 확인 — (프런트에서 이미 리셋했으면 핸들러가 제거돼 안 온다)
+          if (completionTimerRef.current) clearTimeout(completionTimerRef.current);
+          try { ws.close(); } catch (e) {}
+          stopAll();
+          setIsRecording(false);
+          setIsPaused(false);
+          setLiveTranscript([]);
+          setDuration(0);
+          setSessionId(null);
+          setWsStatus("");
+          setStatus("idle");
+          break;
+        }
+
+        case "error": {
+          setWsStatus(`오류: ${msg.message || "알 수 없는 오류"}`);
+          // 생성/종료 단계에서의 에러면 녹음 화면에 멈추지 않고 대시보드로 복귀.
+          // (전사 중 개별 청크 오류 통지는 녹음을 계속하므로 이동하지 않는다.)
+          // isRecording 대신 window 플래그 사용 — 이 핸들러 클로저의 isRecording은
+          // 생성 시점(false) 값이라 stale하다.
+          if (!(window as any).isRecordingActive) {
+            if (completionTimerRef.current) clearTimeout(completionTimerRef.current);
+            try { ws.close(); } catch {}
+            setTimeout(() => onExit?.(), 2000);
+          }
+          break;
+        }
       }
     };
 
-    ws.onerror = () => setWsStatus("Backend connection error");
+    ws.onerror = () => setWsStatus("서버 연결 오류");
 
     ws.onclose = () => {
       setStatus(prev => {
         if (prev === "recording") {
           // 서버가 수신분까지는 저장·처리하므로 데이터 유실은 없음
-          setWsStatus("Backend connection lost — server will finalize received audio. Check Sessions later.");
+          setWsStatus("서버 연결이 끊겼습니다 — 수신된 오디오까지는 서버가 저장·처리합니다. 나중에 대시보드에서 확인하세요.");
           try { KeepAwake.allowSleep(); } catch {}
           stopAll();
           setIsRecording(false);
           return "error";
         }
         if (prev === "generating") {
-          setWsStatus("Connection closed while generating — check Sessions later.");
+          // 생성 중 소켓이 끊겨 completed를 못 받은 경우 — 서버는 수신분을 계속
+          // 처리·저장하므로, 녹음 화면에 멈추지 말고 대시보드로 복귀시킨다(나중에
+          // Sessions에서 확인 가능).
+          setWsStatus("생성 중 연결이 끊겼습니다 — 서버에서 계속 처리됩니다. 대시보드에서 확인하세요.");
+          if (completionTimerRef.current) clearTimeout(completionTimerRef.current);
+          setTimeout(() => onExit?.(), 2000);
           return "completed";
         }
         return prev;
@@ -350,6 +463,18 @@ export default function Recorder({ onComplete }: { onComplete: (id: string) => v
       // 없으면 기존 직접 OpenAI 연결로 폴백 (모바일 단독 배포)
       backendModeRef.current = await backendAvailable();
       if (backendModeRef.current) {
+        // 사전 점검: 키 없이 시작하면 서버 error 이벤트로만 실패가 보여
+        // 비개발자는 원인을 알기 어렵다. 시작 전에 확인해 설정으로 안내한다.
+        try {
+          const cfg = await getConfig();
+          if (!cfg?.api?.openai_api_key) {
+            alert("OpenAI API 키가 설정되지 않았습니다.\n[설정] → API 키에서 입력한 뒤 녹음을 시작하세요.");
+            setStatus("idle");
+            return;
+          }
+        } catch {
+          // 설정 조회 실패는 차단하지 않는다 — 서버가 최종 검증한다.
+        }
         await startBackendRecording();
         return;
       }
@@ -374,14 +499,16 @@ export default function Recorder({ onComplete }: { onComplete: (id: string) => v
               type: "server_vad",
               threshold: 0.5,
               prefix_padding_ms: 300,
-              silence_duration_ms: 800
+              silence_duration_ms: 800,
+              // 받아쓰기 모드에선 모델 응답 생성 불필요 — 토큰·지연 낭비 방지
+              create_response: preset.translate
             },
             input_audio_transcription: {
               model: "whisper-1"
             }
           }
         }));
-        setWsStatus("Connected (GPT-4o Realtime)");
+        setWsStatus("연결됨 (OpenAI 실시간)");
         startAudioCapture();
       };
 
@@ -396,9 +523,10 @@ export default function Recorder({ onComplete }: { onComplete: (id: string) => v
             break;
 
           case "input_audio_buffer.speech_started":
+            // duration을 직접 읽으면 핸들러 생성 시점(0)에 고정되므로 stateRef 사용
             setLiveTranscript(prev => [
               ...prev,
-              { text: "(Listening...)", translatedText: "", speaker: speakers || "Speaker", start: duration, end: 0 }
+              { id: newSegId(), text: "(듣는 중...)", translatedText: "", speaker: speakers || "Speaker", start: stateRef.current.duration, end: 0 }
             ]);
             break;
 
@@ -433,13 +561,13 @@ export default function Recorder({ onComplete }: { onComplete: (id: string) => v
 
           case "error":
             console.error("[OpenAI Error]", msg.error);
-            setWsStatus(`Error: ${msg.error?.message || "Unknown error"}`);
+            setWsStatus(`오류: ${msg.error?.message || "알 수 없는 오류"}`);
             break;
         }
       };
 
       ws.onerror = () => {
-        setWsStatus("Connection error - reconnecting...");
+        setWsStatus("연결 오류 — 재연결 중...");
       };
 
       ws.onclose = (event) => {
@@ -450,7 +578,7 @@ export default function Recorder({ onComplete }: { onComplete: (id: string) => v
           if (prev === "recording") {
             const retryCount = (wsRef.current as any)?._retryCount || 0;
             if (retryCount < 3) {
-              setWsStatus(`Reconnecting... (${retryCount + 1}/3)`);
+              setWsStatus(`재연결 중... (${retryCount + 1}/3)`);
               setTimeout(() => {
                 try {
                   const newWs = createRealtimeWS();
@@ -461,13 +589,13 @@ export default function Recorder({ onComplete }: { onComplete: (id: string) => v
                   newWs.onerror = ws.onerror;
                   newWs.onclose = ws.onclose;
                 } catch {
-                  setWsStatus("Reconnection failed");
+                  setWsStatus("재연결에 실패했습니다");
                   setStatus("error");
                 }
               }, 1000 * (retryCount + 1));
               return "recording"; // 재연결 중에도 녹음 상태 유지
             }
-            setWsStatus("Connection lost after 3 retries");
+            setWsStatus("재연결 3회 실패 — 연결이 끊겼습니다");
             try { KeepAwake.allowSleep(); } catch {}
             return "error";
           }
@@ -483,6 +611,15 @@ export default function Recorder({ onComplete }: { onComplete: (id: string) => v
   };
 
   const startAudioCapture = async () => {
+    // 재연결 등으로 onopen이 다시 실행돼도 캡처 파이프라인을 중복 생성하지 않는다.
+    // (과거엔 재연결마다 stream/AudioContext/타이머가 하나씩 늘어 타이머가 2배속으로
+    // 돌고 메모리가 새는 버그가 있었다 — onaudioprocess는 wsRef를 참조하므로 기존
+    // 파이프라인이 새 소켓으로 계속 전송한다.)
+    if (streamRef.current || processorRef.current) {
+      setIsRecording(true);
+      setStatus("recording");
+      return;
+    }
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
@@ -551,13 +688,18 @@ export default function Recorder({ onComplete }: { onComplete: (id: string) => v
         }
       };
 
-      const dataArray = new Uint8Array(analyser.frequencyBinCount);
+      // 볼륨 지표: 시간영역 RMS. 과거엔 주파수 빈 128개 전체 평균이라 음성 에너지가
+      // 고주파(≈0) 빈에 희석돼, 실제로 말하는 중에도 '무음'으로 표시되기 일쑤였다.
+      const dataArray = new Uint8Array(analyser.fftSize);
       const updateVolume = () => {
         if (!analyserRef.current) return;
-        analyserRef.current.getByteFrequencyData(dataArray);
-        let sum = 0;
-        for (let i = 0; i < dataArray.length; i++) sum += dataArray[i];
-        setVolume(sum / dataArray.length);
+        analyserRef.current.getByteTimeDomainData(dataArray);
+        let sumSq = 0;
+        for (let i = 0; i < dataArray.length; i++) {
+          const d = dataArray[i] - 128;
+          sumSq += d * d;
+        }
+        setVolume(Math.sqrt(sumSq / dataArray.length) * 3); // 기존 0~100 스케일 근사
         animFrameRef.current = requestAnimationFrame(updateVolume);
       };
       updateVolume();
@@ -571,9 +713,14 @@ export default function Recorder({ onComplete }: { onComplete: (id: string) => v
     } catch (err: any) {
       console.error("Audio capture error:", err);
       if (err?.name === "NotAllowedError" || err?.name === "PermissionDeniedError") {
-        alert("마이크 권한이 거부되었습니다.\n\niPhone: 설정 > 개인정보 보호 > 마이크에서 이 앱을 허용해주세요.");
+        alert(
+          "마이크 권한이 거부되었습니다.\n\n" +
+          "PC(브라우저): 주소창 왼쪽 자물쇠 아이콘 → 사이트 권한에서 마이크를 '허용'으로 바꾸고 새로고침하세요.\n" +
+          "(Windows 설정 > 개인 정보 > 마이크에서 접근 허용도 켜져 있어야 합니다)\n\n" +
+          "iPhone: 설정 > 개인정보 보호 > 마이크에서 이 앱을 허용해주세요."
+        );
       } else {
-        alert("마이크에 접근할 수 없습니다. 권한을 확인해주세요.");
+        alert("마이크에 접근할 수 없습니다. 다른 프로그램이 마이크를 사용 중인지, 권한이 허용돼 있는지 확인해주세요.");
       }
       setStatus("idle");
       setIsRecording(false);
@@ -608,10 +755,10 @@ export default function Recorder({ onComplete }: { onComplete: (id: string) => v
       setIsRecording(false);
       setIsPaused(false);
       setStatus("generating");
-      setWsStatus("Server is generating documents...");
+      setWsStatus("서버에서 회의록을 생성하는 중...");
       completionTimerRef.current = setTimeout(() => {
         setStatus("completed");
-        setWsStatus("Still processing on server — check Sessions later.");
+        setWsStatus("서버에서 계속 처리 중입니다 — 나중에 대시보드에서 확인하세요.");
         try { wsRef.current?.close(); } catch {}
       }, 600000);
       return;
@@ -639,15 +786,64 @@ export default function Recorder({ onComplete }: { onComplete: (id: string) => v
        }).catch(err => {
           console.error("Session save failed:", err);
           setStatus("error");
-          setWsStatus("Failed to save session. Please try again.");
+          setWsStatus("세션 저장에 실패했습니다. 다시 시도하세요.");
        });
     }).catch(err => {
        console.error("Module load failed:", err);
        setStatus("error");
-       setWsStatus("Failed to save session.");
+       setWsStatus("세션 저장에 실패했습니다.");
     });
   };
   stopRecordingRef.current = stopRecording;
+
+  // 저장하지 않고 취소 — 서버에 cancel을 보내 세션을 삭제시키고 즉시 새 녹음 가능 상태로.
+  const cancelRecording = () => {
+    if (!confirm("이 녹음을 저장하지 않고 버릴까요?\n(회의록을 만들지 않습니다)")) return;
+    try { KeepAwake.allowSleep(); } catch (e) {}
+    const ws = wsRef.current;
+    if (ws) {
+      // 리셋 후 onclose가 '연결 끊김' 오류 화면으로 덮지 않도록 핸들러 제거
+      ws.onclose = null; ws.onerror = null; ws.onmessage = null;
+      try {
+        if (ws.readyState === WebSocket.OPEN) {
+          if (backendModeRef.current) ws.send(JSON.stringify({ type: "cancel" }));
+          setTimeout(() => { try { ws.close(); } catch (e) {} }, 300);
+        } else {
+          ws.close();
+        }
+      } catch (e) {}
+    }
+    wsRef.current = null;
+    if (completionTimerRef.current) clearTimeout(completionTimerRef.current);
+    stopAll();
+    setIsRecording(false);
+    setIsPaused(false);
+    setLiveTranscript([]);
+    setRelatedNotes([]);
+    setDuration(0);
+    setSessionId(null);
+    setWsStatus("");
+    setStatus("idle");
+  };
+
+  // 생성 중 이탈 — 회의록 생성은 서버에서 계속되고(완료 후 대시보드에 표시),
+  // 화면은 즉시 새 녹음을 시작할 수 있는 상태로 돌아간다.
+  const startNewWhileGenerating = () => {
+    if (!confirm("회의록 생성은 서버에서 계속 진행됩니다(완료 후 대시보드에서 확인).\n지금 새 녹음을 준비할까요?")) return;
+    if (completionTimerRef.current) clearTimeout(completionTimerRef.current);
+    const ws = wsRef.current;
+    if (ws) {
+      ws.onclose = null; ws.onerror = null; ws.onmessage = null;
+      try { ws.close(); } catch (e) {}
+    }
+    wsRef.current = null;
+    setLiveTranscript([]);
+    setRelatedNotes([]);
+    setDuration(0);
+    setSessionId(null);
+    setWsStatus("");
+    setStatus("idle");
+  };
 
   const formatDuration = (s: number) => {
     const hrs = Math.floor(s / 3600);
@@ -665,56 +861,50 @@ export default function Recorder({ onComplete }: { onComplete: (id: string) => v
 
   const preset = MODE_PRESETS[modeNum] || MODE_PRESETS[2];
 
+  // 마이크 입력 감지: volume(0~255, analyser 평균)에 저임계값 적용.
+  // 무음 노이즈 플로어(≈0~2)를 넘으면 '소리 감지 중'으로 본다 → 사용자가
+  // 소리가 실제로 들어가는지/무음인지 명확히 구분할 수 있게 한다.
+  const SOUND_THRESHOLD = 4;
+  const soundDetected = isRecording && !isPaused && volume > SOUND_THRESHOLD;
+
   return (
       <div className="bg-white border md:border-zinc-200 md:rounded-3xl md:shadow-xl overflow-hidden min-h-[calc(100dvh-5rem)] md:min-h-0 flex flex-col">
-        {/* Status Header */}
-        <div className="bg-zinc-900 text-white p-6 md:p-8 shrink-0">
-          <div className="flex flex-row items-center justify-between gap-4">
-            <div className="flex items-center gap-3 md:gap-4">
-              <div className="relative">
-                <div className={`w-12 h-12 md:w-16 md:h-16 rounded-xl md:rounded-2xl flex items-center justify-center transition-all duration-500 ${
+        {/* Status Header (컴팩트) */}
+        <div className="bg-zinc-900 text-white px-4 py-3 md:px-5 md:py-4 shrink-0">
+          <div className="flex flex-row items-center justify-between gap-3">
+            <div className="flex items-center gap-2.5 md:gap-3 min-w-0">
+              <div className="relative shrink-0">
+                <div className={`w-9 h-9 md:w-10 md:h-10 rounded-lg md:rounded-xl flex items-center justify-center transition-all duration-500 ${
                   isRecording ? (isPaused ? "bg-amber-500" : "bg-red-500 animate-pulse") : "bg-zinc-800"
                 }`}>
-                  <Mic className="w-8 h-8 text-white" />
+                  <Mic className="w-5 h-5 text-white" />
                 </div>
-                {isRecording && !isPaused && (
-                  <motion.div
-                    initial={{ scale: 0.8, opacity: 0 }}
-                    animate={{ scale: 1.5, opacity: 0 }}
-                    transition={{ repeat: Infinity, duration: 1.5 }}
-                    className="absolute inset-0 bg-red-500 rounded-2xl -z-10"
-                  />
-                )}
               </div>
-              <div>
-                <h3 className="text-2xl font-bold tracking-tight">
+              <div className="min-w-0">
+                <h3 className="text-base md:text-lg font-bold tracking-tight leading-tight">
                   {status === "generating" ? "문서 생성 중..." :
                    status === "completed" ? "세션 완료" :
                    status === "connecting" ? "연결 중..." :
                    isRecording ? (isPaused ? "녹음 일시정지" : "녹음 중") : "녹음 준비 완료"}
                 </h3>
-                <div className="flex items-center gap-2 text-zinc-400 text-sm mt-1">
-                  <Activity className="w-4 h-4" />
-                  <span>{wsStatus || (isRecording ? "OpenAI로 스트리밍 중..." : "마이크 준비됨")}</span>
+                <div className="flex items-center gap-1.5 text-zinc-400 text-xs mt-0.5 truncate">
+                  <Activity className="w-3.5 h-3.5 shrink-0" />
+                  <span className="truncate">{wsStatus || (isRecording ? "스트리밍 중..." : "마이크 준비됨")}</span>
                 </div>
-                {httpFallback && (
-                  <div className="mt-2 text-xs text-amber-300/90 bg-amber-500/10 border border-amber-500/20 rounded-lg px-3 py-2 max-w-md">
-                    실시간(WebSocket) 전사를 사용할 수 없어 <b>HTTP 청크 방식</b>으로 전환했습니다.
-                    전사는 정상 진행되며, 말한 내용이 몇 초 뒤에 표시될 수 있습니다(안정적·저비용 방식).
-                  </div>
-                )}
               </div>
             </div>
 
-            <div className="flex flex-col items-end">
-              <div className="text-3xl md:text-5xl font-mono font-black tracking-tighter text-white tabular-nums">
+            <div className="flex flex-col items-end shrink-0">
+              <div className="text-xl md:text-2xl font-mono font-black tracking-tighter text-white tabular-nums leading-none">
                 {formatDuration(duration)}
               </div>
-              <div className="flex items-center gap-2 mt-1 md:mt-2">
-                <div className="w-16 md:w-32 h-1.5 bg-zinc-800 rounded-full overflow-hidden">
+              <div className="flex items-center gap-2 mt-1.5">
+                <div className="w-16 md:w-24 h-1 bg-zinc-800 rounded-full overflow-hidden">
                   <motion.div
                     animate={{ width: `${Math.min(volume * 2, 100)}%` }}
-                    className={`h-full transition-colors ${volume > 40 ? "bg-red-500" : "bg-emerald-500"}`}
+                    className={`h-full transition-colors ${
+                      volume > 40 ? "bg-red-500" : soundDetected ? "bg-emerald-500" : "bg-zinc-600"
+                    }`}
                   />
                 </div>
               </div>
@@ -729,6 +919,14 @@ export default function Recorder({ onComplete }: { onComplete: (id: string) => v
             </div>
           </div>
         </div>
+
+        {/* HTTP 청크 모드 안내 — 얇은 한 줄(설정상 기본값이거나 WS 폴백 모두 포함). 과거엔
+            헤더에 큰 배너로 떠서 제일 먼저 화면을 채웠다. */}
+        {httpFallback && isRecording && (
+          <div className="bg-amber-50 border-b border-amber-100 text-amber-700 text-[11px] px-4 md:px-5 py-1.5 shrink-0">
+            안정·저비용 <b>HTTP 청크 방식</b>으로 전사 중 — 말한 내용이 몇 초 뒤에 표시될 수 있어요.
+          </div>
+        )}
 
         {/* Live Wiki — 실시간 vault 검색 관련 노트 (백엔드 모드, wiki.realtime_vault_search) */}
         <AnimatePresence>
@@ -831,7 +1029,7 @@ export default function Recorder({ onComplete }: { onComplete: (id: string) => v
                     modeNum={modeNum}
                     onChange={setModeNum}
                     disabled={isRecording}
-                    hint="오디오를 OpenAI Realtime API로 직접 스트리밍해 1초 미만 지연으로 전사합니다."
+                    hint="말한 내용이 실시간으로 전사됩니다. 연결 방식(WS/HTTP)에 따라 화면 표시까지 1~5초 정도 걸릴 수 있어요."
                   />
                 </div>
               </motion.div>
@@ -850,13 +1048,30 @@ export default function Recorder({ onComplete }: { onComplete: (id: string) => v
                   className="w-full h-full flex flex-col items-center gap-6 md:gap-10 px-0 md:px-10"
                 >
                   {/* Live Transcript */}
-                  <div className={`w-full max-w-4xl glass-panel md:rounded-[2rem] p-4 md:p-8 flex-1 overflow-y-auto flex flex-col gap-4 md:gap-6 transition-all duration-700 relative`}>
+                  <div ref={transcriptPanelRef} className={`w-full max-w-4xl glass-panel md:rounded-[2rem] p-3 md:p-5 flex-1 overflow-y-auto flex flex-col gap-2 md:gap-3 transition-all duration-700 relative`}>
                     <div className="sticky top-0 z-10 flex justify-end pb-2">
                        <div className="inline-flex items-center gap-2 bg-white/80 backdrop-blur-md px-3 py-1.5 rounded-full shadow-sm">
-                        <div className={`w-2 h-2 rounded-full ${status === "generating" ? "bg-amber-500 animate-pulse" : status === "completed" ? "bg-emerald-500" : "bg-red-500 animate-pulse"}`} />
-                        <span className="text-[10px] font-bold text-brand-400 uppercase tracking-widest">
-                          {status === "generating" ? "처리 중" : status === "completed" ? "완료" : "실시간 스트리밍"}
-                        </span>
+                        {/* 녹음 중에는 실제 마이크 입력(소리 감지/무음)을 여기 표시 — 전사를
+                            보는 바로 그 자리에서 소리가 들어가는지 즉시 알 수 있게 한다. */}
+                        {status === "recording" ? (
+                          <>
+                            <div className={`w-2 h-2 rounded-full ${
+                              isPaused ? "bg-amber-500" : soundDetected ? "bg-emerald-500 animate-pulse" : "bg-zinc-300"
+                            }`} />
+                            <span className={`text-[10px] font-bold uppercase tracking-widest ${
+                              isPaused ? "text-amber-500" : soundDetected ? "text-emerald-600" : "text-zinc-400"
+                            }`}>
+                              {isPaused ? "일시정지" : soundDetected ? "🎤 소리 감지 중" : "무음 — 소리 없음"}
+                            </span>
+                          </>
+                        ) : (
+                          <>
+                            <div className={`w-2 h-2 rounded-full ${status === "generating" ? "bg-amber-500 animate-pulse" : status === "completed" ? "bg-emerald-500" : "bg-red-500 animate-pulse"}`} />
+                            <span className="text-[10px] font-bold text-brand-400 uppercase tracking-widest">
+                              {status === "generating" ? "처리 중" : status === "completed" ? "완료" : "실시간 스트리밍"}
+                            </span>
+                          </>
+                        )}
                       </div>
                     </div>
 
@@ -867,20 +1082,28 @@ export default function Recorder({ onComplete }: { onComplete: (id: string) => v
                           <Activity className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 text-brand-400" size={14} />
                         </div>
                         <p className="text-sm font-medium tracking-wide">
-                          {status === "generating" ? "회의 문서를 생성하는 중..." : "오디오를 듣는 중..."}
+                          {status === "generating"
+                            ? "회의 문서를 생성하는 중..."
+                            : isPaused
+                              ? "일시정지됨"
+                              : soundDetected
+                                ? "🎤 소리 감지 중 — 전사를 기다리는 중..."
+                                : "오디오를 듣는 중... (아직 소리가 감지되지 않았어요)"}
                         </p>
                       </div>
                     ) : (
-                      <div className="flex flex-col gap-4">
-                        {liveTranscript.map((item, idx) => (
+                      <div className="flex flex-col gap-2 md:gap-2.5">
+                        {liveTranscript.map((item) => (
                           <motion.div
                             initial={{ opacity: 0, y: 10 }}
                             animate={{ opacity: 1, y: 0 }}
-                            key={idx}
+                            // 안정 id 기반 key — 과거 시간+내용 키는 스트리밍으로 텍스트가
+                            // 변할 때마다 행이 리마운트돼 깜빡였다.
+                            key={item.id ?? `${item.start.toFixed(2)}-${item.text.slice(0, 16)}`}
                             className="flex flex-col w-full"
                           >
                             {item.speaker && (
-                              <div className="flex items-center gap-2 mb-2">
+                              <div className="flex items-center gap-2 mb-1">
                                 <span className="text-[10px] font-black uppercase tracking-[0.2em] text-brand-400">
                                   {item.speaker}
                                 </span>
@@ -888,38 +1111,29 @@ export default function Recorder({ onComplete }: { onComplete: (id: string) => v
                               </div>
                             )}
                             
-                            {item.translatedText ? (
-                              // 2-Column or Stacked Bilingual Layout
-                              <div className="flex flex-col md:grid md:grid-cols-2 gap-2 md:gap-4 w-full">
-                                {/* Source (English) */}
-                                <div className={`p-3 md:p-4 rounded-2xl ${item.start === -1 ? 'bg-zinc-50 border border-zinc-100' : 'bg-zinc-100/50'}`}>
-                                  <div className="text-[10px] font-mono text-zinc-400 mb-1.5">
-                                    {formatTimestamp(item.start)} {item.start === -1 && " (Typing...)"}
-                                  </div>
-                                  <p className={`text-[13px] md:text-sm leading-relaxed ${item.start === -1 ? "text-zinc-400 italic" : "text-zinc-600"}`}>
-                                    {item.text}
-                                  </p>
-                                </div>
-                                {/* Translated (Korean) */}
-                                <div className="bg-white p-3 md:p-4 rounded-2xl border border-brand-100 shadow-sm border-l-4 border-l-brand-400">
-                                   <div className="text-[10px] font-mono text-zinc-400 mb-1.5 md:hidden">
-                                    Translation
-                                  </div>
-                                  <p className="text-[15px] md:text-base font-semibold leading-relaxed text-brand-900">
-                                    {item.translatedText}
-                                  </p>
-                                </div>
-                              </div>
-                            ) : (
-                              // Monolingual Single Layout
-                              <div className={`p-3 md:p-5 rounded-2xl bg-white border border-brand-100 shadow-sm border-l-4 ${item.start === -1 ? 'border-l-zinc-300' : 'border-l-brand-400'}`}>
-                                <div className="text-[10px] font-mono text-zinc-400 mb-1.5">
-                                  {formatTimestamp(item.start)} {item.start === -1 && " (Typing...)"}
-                                </div>
-                                <p className={`text-[15px] md:text-lg font-medium leading-relaxed ${item.start === -1 ? "text-brand-400 italic" : "text-brand-900"}`}>
-                                  {item.text}
+                            {(item.translatedText || (preset.translate && item.start >= 0)) ? (
+                              // 번역 모드: 좌=영어(보조·작게), 우=한국어(주·조금 크게).
+                              // 번역이 아직 안 왔어도 2열 틀을 유지해 도착 시 레이아웃이
+                              // 출렁이지 않게 하고, 자리에 '번역 중…'을 표시한다.
+                              <div className={`flex flex-col md:grid md:grid-cols-2 gap-0.5 md:gap-3 w-full items-start ${item.provisional ? "opacity-60" : ""}`}>
+                                {/* Source (English) — 보조 */}
+                                <p className={`text-xs md:text-[13px] leading-snug ${item.start === -1 ? "text-zinc-400 italic" : "text-zinc-500"}`}>
+                                  {item.text}{item.start === -1 && " …"}
+                                </p>
+                                {/* Translated (Korean) — 주 */}
+                                <p className={`text-sm md:text-base leading-snug font-medium md:border-l-2 md:border-l-brand-300 md:pl-3 ${item.translatedText ? "text-brand-900" : "text-brand-300 italic"}`}>
+                                  {item.translatedText || "번역 중…"}
                                 </p>
                               </div>
+                            ) : (
+                              // 받아쓰기(비번역) 모드: 더 작게, 한 줄로 조밀하게.
+                              // provisional(빠른 패스 임시 조각)은 흐리게 — 보정되면 선명해진다.
+                              <p className={`text-[13px] md:text-sm leading-snug ${
+                                item.start === -1 ? "text-brand-400 italic"
+                                : item.provisional ? "text-zinc-400"
+                                : "text-brand-900"}`}>
+                                {item.text}{item.start === -1 && " …"}
+                              </p>
                             )}
                           </motion.div>
                         ))}
@@ -931,19 +1145,24 @@ export default function Recorder({ onComplete }: { onComplete: (id: string) => v
                   {/* Controls */}
                   {status === "recording" && (
                     <div className="flex flex-col items-center gap-4 md:gap-6 shrink-0 pb-4">
-                      {/* Audio Level Wave */}
+                      {/* Audio Level Wave — 실제 입력 볼륨 기반. 무음이면 잔잔(bar가
+                          거의 안 움직이고 흐려짐), 소리가 들어오면 볼륨에 비례해 커진다.
+                          과거엔 Math.random()이라 무음에도 춤춰 '소리 들어가는 척' 착시를 줬다. */}
                       <div className="flex gap-1.5 md:gap-2 items-end h-10 md:h-16">
-                        {[...Array(24)].map((_, i) => (
-                          <motion.div
-                            key={i}
-                            animate={{
-                              height: isPaused ? 4 : [4, Math.random() * 40 + 6, 4],
-                              opacity: isPaused ? 0.3 : [0.3, 1, 0.3],
-                            }}
-                            transition={{ repeat: Infinity, duration: 0.6, delay: i * 0.03 }}
-                            className={`w-1 md:w-1.5 rounded-full transition-colors ${isPaused ? "bg-brand-300" : "bg-brand-900"}`}
-                          />
-                        ))}
+                        {[...Array(24)].map((_, i) => {
+                          const level = Math.min(volume / 40, 1);            // 0~1 정규화
+                          const shape = 0.35 + 0.65 * Math.sin(((i + 1) / 25) * Math.PI); // 가운데 높은 형태
+                          const h = isPaused ? 4 : 4 + level * 44 * shape;
+                          return (
+                            <div
+                              key={i}
+                              style={{ height: `${h}px` }}
+                              className={`w-1 md:w-1.5 rounded-full transition-[height,background-color] duration-150 ${
+                                isPaused ? "bg-brand-300" : soundDetected ? "bg-brand-900" : "bg-brand-200"
+                              }`}
+                            />
+                          );
+                        })}
                       </div>
 
                       <div className="flex items-center gap-6 md:gap-8">
@@ -966,13 +1185,28 @@ export default function Recorder({ onComplete }: { onComplete: (id: string) => v
                       <p className="text-[10px] md:text-xs text-brand-400 font-bold uppercase tracking-[0.3em] animate-pulse">
                         {isPaused ? "녹음 일시정지" : "세션 진행 중"}
                       </p>
+
+                      <button
+                        onClick={cancelRecording}
+                        className="text-xs text-brand-400 hover:text-red-500 underline underline-offset-2 transition-colors"
+                      >
+                        저장하지 않고 취소
+                      </button>
                     </div>
                   )}
 
                   {status === "generating" && (
-                    <div className="flex items-center gap-3 text-amber-600">
-                      <Loader2 className="animate-spin" size={20} />
-                      <span className="text-sm font-bold">AI가 회의 문서를 생성하는 중...</span>
+                    <div className="flex flex-col items-center gap-3">
+                      <div className="flex items-center gap-3 text-amber-600">
+                        <Loader2 className="animate-spin" size={20} />
+                        <span className="text-sm font-bold">AI가 회의 문서를 생성하는 중...</span>
+                      </div>
+                      <button
+                        onClick={startNewWhileGenerating}
+                        className="px-4 py-2 bg-white border border-brand-200 text-brand-600 rounded-xl text-xs font-semibold hover:bg-brand-50 transition-all"
+                      >
+                        새 녹음 시작 (생성은 백그라운드에서 계속)
+                      </button>
                     </div>
                   )}
                 </motion.div>
@@ -998,7 +1232,7 @@ export default function Recorder({ onComplete }: { onComplete: (id: string) => v
                   <div className="text-center">
                     <p className="text-lg font-bold text-zinc-900">새 세션 시작</p>
                     <p className="text-sm text-zinc-500 mt-1">
-                      OpenAI Realtime API로 실시간 전사
+                      말하면 실시간으로 전사돼요 — 표시까지 몇 초 걸릴 수 있어요
                     </p>
                   </div>
                 </motion.div>

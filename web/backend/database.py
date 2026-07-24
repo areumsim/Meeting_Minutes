@@ -22,9 +22,9 @@ DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 @contextmanager
 def _conn():
     """Context manager guaranteeing connection close."""
-    # timeout: 동시 접근(실시간 finalize 스레드 + REST 조회) 시 잠금 대기 —
-    # wiki_core.graph_db._conn과 동일한 이유
-    c = sqlite3.connect(str(DB_PATH), check_same_thread=False, timeout=5.0)
+    # timeout: 동시 접근(실시간 finalize 스레드 + REST 조회 + revise/번역 워커) 시
+    # 잠금 대기 — 5초는 부하 시 'database is locked'가 표면화돼 30초로 상향
+    c = sqlite3.connect(str(DB_PATH), check_same_thread=False, timeout=30.0)
     c.row_factory = sqlite3.Row
     c.execute("PRAGMA journal_mode=WAL")
     c.execute("PRAGMA foreign_keys=ON")
@@ -54,6 +54,7 @@ def init_db():
                 mode TEXT,
                 cost_estimate REAL DEFAULT 0,
                 duration_sec REAL DEFAULT 0,
+                error_detail TEXT,
                 created_at DATETIME DEFAULT CURRENT_TIMESTAMP
             );
             CREATE TABLE IF NOT EXISTS segments (
@@ -78,10 +79,17 @@ def init_db():
             CREATE INDEX IF NOT EXISTS idx_documents_session ON documents(session_id);
             CREATE INDEX IF NOT EXISTS idx_sessions_created ON sessions(created_at DESC);
         """)
+        # 기존 DB 마이그레이션: error_detail 컬럼(실패 원인 표시용)이 없으면 추가.
+        try:
+            c.execute("ALTER TABLE sessions ADD COLUMN error_detail TEXT")
+        except sqlite3.OperationalError:
+            pass  # 이미 존재
         # 서버가 (재)시작되는 시점엔 실제로 처리 중인 작업이 있을 수 없다.
         # 이전 실행이 비정상 종료(크래시·강제종료·키 누락 등)돼 'processing'
         # 상태로 고착된 세션을 error 로 정리해 대시보드가 지저분해지는 것을 막는다.
-        c.execute("UPDATE sessions SET status='error' WHERE status='processing'")
+        c.execute("UPDATE sessions SET status='error', error_detail=COALESCE(error_detail, "
+                  "'서버가 종료되어 처리가 중단되었습니다. 다시 시도하세요.') "
+                  "WHERE status='processing'")
         c.commit()
 
 
@@ -138,6 +146,10 @@ def list_sessions(search: str = "", type_filter: str = "") -> List[Dict]:
 
 
 def update_session_status(sid: str, status: str, **kwargs):
+    # 새 시도 시작(processing)·성공(completed) 시 이전 실패 원인은 더 이상
+    # 유효하지 않으므로 명시 값이 없으면 비운다.
+    if status in ("processing", "completed") and "error_detail" not in kwargs:
+        kwargs["error_detail"] = None
     with _conn() as c:
         sets = ["status = ?"]
         params: list = [status]
@@ -193,16 +205,40 @@ def get_segments(session_id: str) -> List[Dict]:
 def add_segments_bulk(session_id: str, segments: List[Dict]):
     with _conn() as c:
         for seg in segments:
+            # CLI 세그먼트(JSONL) 형식: 번역 세션은 text=번역, text_original=원문.
+            # 과거엔 translated_text 자리에 text_original(원문)을 넣어, 번역 없는
+            # 세션에서 '번역' 칸에 영어 원문이 그대로 들어갔다. 명시 translated_text 가
+            # 없으면 text≠text_original 인 경우에만 (원문, 번역) 순으로 재배치한다.
+            text = seg.get("text", "")
+            orig = seg.get("text_original", "")
+            translated = seg.get("translated_text", "")
+            if not translated and orig and text != orig:
+                text, translated = orig, text
             c.execute(
                 """INSERT INTO segments (id, session_id, speaker, text, translated_text,
                    start_time, end_time) VALUES (?, ?, ?, ?, ?, ?, ?)""",
                 (_new_id(), session_id,
                  seg.get("speaker", ""),
-                 seg.get("text", ""),
-                 seg.get("translated_text", seg.get("text_original", "")),
+                 text,
+                 translated,
                  seg.get("start", seg.get("start_time", 0)),
                  seg.get("end", seg.get("end_time", 0))),
             )
+        c.commit()
+
+
+def update_segment_translation(session_id: str, start_time: float, translated_text: str):
+    """start_time으로 세그먼트를 찾아 번역만 갱신 — 실시간(WS) 비동기 번역 반영용.
+
+    부동소수 오차 대비 ±5ms 허용. (과거 WS 경로는 번역을 메모리/화면에만 채워
+    세션을 다시 열면 번역이 사라졌다.)
+    """
+    with _conn() as c:
+        c.execute(
+            """UPDATE segments SET translated_text = ?
+               WHERE session_id = ? AND ABS(start_time - ?) < 0.005""",
+            (translated_text, session_id, start_time),
+        )
         c.commit()
 
 
@@ -212,6 +248,33 @@ def replace_segments(session_id: str, segments: List[Dict]):
         c.execute("DELETE FROM segments WHERE session_id = ?", (session_id,))
         c.commit()
     add_segments_bulk(session_id, segments)
+
+
+def replace_segments_range(session_id: str, t0: float, t1: float, segments: List[Dict]):
+    """[t0, t1) 구간(start_time 기준)의 세그먼트를 삭제 후 새 세그먼트로 교체.
+
+    실시간 2-pass 보정용 — 빠른 패스의 조각 세그먼트를 보정 패스의 문장 세그먼트로
+    바꾼다. add_segments_bulk 를 재사용하지 않는 이유: 그쪽의
+    translated_text ← text_original 폴백이 보정 세그먼트에서 원문(영어)을 번역
+    칸에 넣어버리기 때문. 여기서는 translated_text 를 명시 값 그대로만 기록한다.
+    """
+    with _conn() as c:
+        c.execute(
+            "DELETE FROM segments WHERE session_id = ? AND start_time >= ? AND start_time < ?",
+            (session_id, t0, t1),
+        )
+        for seg in segments:
+            c.execute(
+                """INSERT INTO segments (id, session_id, speaker, text, translated_text,
+                   start_time, end_time) VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (_new_id(), session_id,
+                 seg.get("speaker", ""),
+                 seg.get("text", ""),
+                 seg.get("translated_text", ""),
+                 seg.get("start", seg.get("start_time", 0)),
+                 seg.get("end", seg.get("end_time", 0))),
+            )
+        c.commit()
 
 
 # ── Documents ─────────────────────────────────────

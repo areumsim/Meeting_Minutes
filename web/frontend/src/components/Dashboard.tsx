@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import {
   Plus, Mic, Search, Trash2, Loader2, FileAudio,
   CheckCircle, AlertCircle, Clock, ChevronRight, RefreshCw,
@@ -20,26 +20,27 @@ export default function Dashboard({ onSelectSession, onNewUpload, onNewRecord }:
   const [typeFilter, setTypeFilter] = useState("");
   const [loading, setLoading] = useState(true);
 
-  const load = async () => {
-    setLoading(true);
+  const load = async (background = false) => {
+    // background 갱신은 로딩 스피너로 목록을 깜빡이지 않는다
+    if (!background) setLoading(true);
     try {
       const data = await getSessions(search, typeFilter);
       setSessions(data);
     } catch (e) {
       console.error(e);
     }
-    setLoading(false);
+    if (!background) setLoading(false);
   };
 
   useEffect(() => { load(); }, [search, typeFilter]);
 
-  // 처리 중인 세션 폴링 (dependency에 sessions를 넣지 않아 무한 재시작 방지)
+  // 처리 중인 세션 폴링 — setState updater 안에서 load()를 호출하면 StrictMode에서
+  // 이중 실행되는 부수효과가 생기므로 ref로 현재 목록을 읽는다.
+  const sessionsRef = useRef<Session[]>([]);
+  useEffect(() => { sessionsRef.current = sessions; }, [sessions]);
   useEffect(() => {
     const t = setInterval(() => {
-      setSessions(prev => {
-        if (prev.some(s => s.status === "processing")) load();
-        return prev;
-      });
+      if (sessionsRef.current.some(s => s.status === "processing")) load(true);
     }, 5000);
     return () => clearInterval(t);
   }, [search, typeFilter]);
@@ -100,7 +101,7 @@ export default function Dashboard({ onSelectSession, onNewUpload, onNewRecord }:
               className="w-full pl-11 pr-4 py-2.5 bg-white border border-brand-200 rounded-xl focus:ring-2 focus:ring-brand-900 outline-none transition-all font-medium text-sm"
             />
           </div>
-          <button onClick={load} className="px-4 py-3 bg-white border border-brand-200 rounded-xl hover:bg-brand-50 transition-all shrink-0">
+          <button onClick={() => load()} className="px-4 py-3 bg-white border border-brand-200 rounded-xl hover:bg-brand-50 transition-all shrink-0">
             <RefreshCw size={16} className="text-brand-500" />
           </button>
         </div>
@@ -166,6 +167,11 @@ export default function Dashboard({ onSelectSession, onNewUpload, onNewRecord }:
                       {s.duration_sec > 0 && <span>{formatDuration(s.duration_sec)}</span>}
                       {s.translate ? <span className="text-amber-600">번역됨</span> : null}
                     </div>
+                    {s.status === "error" && s.error_detail && (
+                      <p className="mt-1 text-xs text-red-500 truncate" title={s.error_detail}>
+                        {s.error_detail}
+                      </p>
+                    )}
                   </div>
                   <div className="flex items-center gap-2">
                     <button

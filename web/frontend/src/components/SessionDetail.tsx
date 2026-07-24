@@ -6,7 +6,8 @@ import { motion } from "motion/react";
 import Markdown from "./Markdown";
 import { Share } from '@capacitor/share';
 import { getSession, getSessionStatus, generateSummaryForSession, getTargetEmail,
-  getSessionGraph, getNodeNeighbors, getUploadProgress, getSessionCost, cancelUpload, type SessionCost } from "../lib/api";
+  getSessionGraph, getNodeNeighbors, getUploadProgress, getSessionCost, cancelUpload,
+  mirrorServerSession, type SessionCost } from "../lib/api";
 import { formatDuration, formatTime } from "../lib/format";
 import type { Session, Segment, Document as Doc, SessionGraph, GraphNeighbors } from "../lib/types";
 
@@ -59,7 +60,7 @@ export default function SessionDetail({ id, onBack }: Props) {
     onBack();
   };
 
-  const load = async () => {
+  const load = async (tryMirror = true) => {
     try {
       const data = await getSession(id);
       setSession(data.session);
@@ -69,6 +70,14 @@ export default function SessionDetail({ id, onBack }: Props) {
         getSessionCost(id).then((c) => { if (c?.ok) setCost(c); });
       }
     } catch (e) {
+      // 로컬 IndexedDB에 없어도 서버에는 있을 수 있다(완료 직후 미러 실패 등).
+      // 서버에서 한 번 미러링해 재시도 — '세션을 찾을 수 없습니다' 막다른 화면 방지.
+      if (tryMirror) {
+        try {
+          const ok = await mirrorServerSession(id);
+          if (ok) return load(false);
+        } catch { /* 서버 미가용 */ }
+      }
       console.error(e);
     }
     setLoading(false);
@@ -111,8 +120,11 @@ export default function SessionDetail({ id, onBack }: Props) {
     }
   };
 
-  // 처리 중이면 폴링 (session을 dependency에서 제외하여 무한 재시작 방지)
+  // 처리 중일 때만 폴링 — 완료/오류 세션에서 2초마다 서버를 두드리지 않는다.
+  // (regenerating 중에는 서버 상태가 다시 processing이 될 수 있어 함께 폴링)
+  const shouldPoll = session?.status === "processing" || regenerating;
   useEffect(() => {
+    if (!shouldPoll) return;
     const t = setInterval(async () => {
       try {
         const s = await getSessionStatus(id);
@@ -122,7 +134,7 @@ export default function SessionDetail({ id, onBack }: Props) {
       } catch { /* ignore */ }
     }, 2000);
     return () => clearInterval(t);
-  }, [id]);
+  }, [id, shouldPoll]);
 
   const getDoc = (type: string) => documents.find(d => d.type === type);
   const activeDoc = getDoc(activeTab);
@@ -159,26 +171,43 @@ export default function SessionDetail({ id, onBack }: Props) {
     if (!activeDoc?.content) return;
     try {
       const targetEmail = getTargetEmail();
-      const emailQuery = targetEmail ? `?emails=${encodeURIComponent(targetEmail)}` : "";
-      
+      // mailto URL은 길이 제한이 있어 본문이 길면 잘리거나 실패한다 — 앞부분만 싣는다.
+      const mailBody = activeDoc.content.length > 1800
+        ? activeDoc.content.slice(0, 1800) + "\n\n…(전문은 앱에서 '다운로드'로 저장해 첨부하세요)"
+        : activeDoc.content;
       await Share.share({
-        title: session?.title || "Meeting Document",
+        title: session?.title || "회의 문서",
         text: activeDoc.content,
-        url: targetEmail ? `mailto:${targetEmail}?subject=${encodeURIComponent(session?.title || "Meeting Document")}&body=${encodeURIComponent(activeDoc.content)}` : undefined,
-        dialogTitle: "Share Document",
+        url: targetEmail ? `mailto:${targetEmail}?subject=${encodeURIComponent(session?.title || "회의 문서")}&body=${encodeURIComponent(mailBody)}` : undefined,
+        dialogTitle: "문서 공유",
       });
-    } catch (e) {
+    } catch (e: any) {
       console.error(e);
-      // Fallback
+      // 사용자가 공유 시트를 닫은 경우(AbortError)는 조용히 무시
+      if (e?.name !== "AbortError" && !String(e?.message || "").includes("cancel")) {
+        alert("공유에 실패했습니다. '복사' 또는 '다운로드'를 이용해주세요.");
+      }
     }
   };
 
   const handleRegenerate = async () => {
     setRegenerating(true);
-    await generateSummaryForSession(id, userNotes);
-    setUserNotes("");
-    setRegenerating(false);
-    load();
+    try {
+      await generateSummaryForSession(id, userNotes);
+      setUserNotes("");
+      // 패키지 모드에선 요청이 즉시 반환되고 서버가 백그라운드로 재생성한다 —
+      // 상태가 processing에서 벗어날 때까지 대기 표시를 유지한다(최대 5분).
+      for (let i = 0; i < 150; i++) {
+        await new Promise((r) => setTimeout(r, 2000));
+        const s = await getSessionStatus(id).catch(() => null);
+        if (!s || s.status !== "processing") break;
+      }
+    } catch (e: any) {
+      alert(e?.message || "재생성 요청에 실패했습니다.");
+    } finally {
+      setRegenerating(false);
+      load();
+    }
   };
 
   const tabs: { key: Tab; label: string; icon: React.ReactNode }[] = [
@@ -195,6 +224,17 @@ export default function SessionDetail({ id, onBack }: Props) {
 
   const isTabAvailable = (t: Tab) => (t === "graph" ? !!graph : !!getDoc(t));
 
+  // 현재 탭 문서가 없으면 첫 번째 사용 가능한 탭으로 자동 전환 —
+  // 기본값(minutes)이 없을 때 '해당 문서가 없습니다'만 보이는 것 방지.
+  useEffect(() => {
+    if (loading) return;
+    if (!isTabAvailable(activeTab)) {
+      const first = tabs.find(t => isTabAvailable(t.key));
+      if (first) setActiveTab(first.key);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading, documents, graph]);
+
   if (loading) {
     return (
       <div className="flex items-center justify-center py-32">
@@ -208,7 +248,16 @@ export default function SessionDetail({ id, onBack }: Props) {
       <div className="text-center py-20">
         <AlertCircle size={48} className="mx-auto text-red-400 mb-4" />
         <p className="text-lg font-bold text-brand-500">세션을 찾을 수 없습니다</p>
-        <button onClick={onBack} className="mt-4 text-brand-500 hover:text-brand-900 font-medium">돌아가기</button>
+        <p className="text-sm text-brand-400 mt-2">서버에서 아직 동기화 중일 수 있어요. 잠시 후 다시 시도해주세요.</p>
+        <div className="mt-4 flex items-center justify-center gap-4">
+          <button
+            onClick={() => { setLoading(true); load(); }}
+            className="px-4 py-2 bg-brand-900 text-white rounded-xl text-sm font-semibold hover:bg-brand-950 transition-all"
+          >
+            다시 불러오기
+          </button>
+          <button onClick={onBack} className="text-brand-500 hover:text-brand-900 font-medium">돌아가기</button>
+        </div>
       </div>
     );
   }
@@ -242,8 +291,13 @@ export default function SessionDetail({ id, onBack }: Props) {
             )}
             {session.source === "cli" && <span className="text-zinc-400">CLI</span>}
           </div>
+          {session.status === "error" && session.error_detail && (
+            <p className="mt-2 text-sm text-red-600 bg-red-50 border border-red-100 rounded-lg px-3 py-2">
+              {session.error_detail}
+            </p>
+          )}
         </div>
-        <button onClick={load} className="p-2 hover:bg-brand-100 rounded-xl transition-colors">
+        <button onClick={() => load()} className="p-2 hover:bg-brand-100 rounded-xl transition-colors">
           <RefreshCw size={16} className="text-brand-400" />
         </button>
       </div>

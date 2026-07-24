@@ -32,6 +32,12 @@ datas = [
 if os.path.exists(os.path.join(ROOT, 'config.example.json')):
     datas.append((os.path.join(ROOT, 'config.example.json'), '.'))
 
+# 외부 분석 프롬프트 템플릿 — analysis.templates_dir 기본값("prompts")이 frozen 에서
+# _MEIPASS/prompts 를 가리키는데 지금까지 번들에 없어서 커스텀 템플릿이 조용히
+# 무시되고 내장 기본 템플릿으로만 동작했다.
+if os.path.isdir(os.path.join(ROOT, 'prompts')):
+    datas.append((os.path.join(ROOT, 'prompts'), 'prompts'))
+
 # ── 원격 MCP(fastmcp) 데이터 파일 ──
 # fastmcp→mcp→jsonschema 포맷 검증이 rfc3987_syntax 를 쓰는데, 이 패키지는 문법
 # 파일(syntax_rfc3987.lark)을 패키지 폴더 상대경로로 읽는다. PyInstaller가 .py만
@@ -128,6 +134,9 @@ hiddenimports = [
     'web.backend.api.tools',
     'web.backend.api.watcher',
     'web.backend.api.assistant',
+
+    # 회사망 SSL 검사 대응 — Windows 인증서 저장소 신뢰(app.py에서 inject)
+    'truststore',
 
     # 폴더 자동 감시(vault_watcher) — watchdog FS 이벤트 모드 + 감시/처리 모듈
     'watchdog',

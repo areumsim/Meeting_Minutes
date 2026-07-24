@@ -12,7 +12,7 @@ config_schema.py — 설정 스키마 단일 소스
   1) config.example.json 에 기본값을 추가(마이그레이션·시드용 전체 기본값 소스).
   2) 여기 해당 그룹의 fields 에 한 줄 추가(웹 노출용 UI 메타).
 
-field 키: section, key, label, type(text|password|bool|select|number),
+field 키: section, key, label, type(text|password|bool|select|number|list),
   default, desc, options([str|{value,label}]), sensitive, mirror, placeholder,
   picker(bool: 폴더 선택 '찾아보기' 버튼 표시), required(bool: 필수값 * 표시/경고)
 그룹 키: id, label, desc, advanced(bool: 웹에서 기본 접힘 '고급 설정')
@@ -43,7 +43,7 @@ SCHEMA: List[Dict[str, Any]] = [
         "desc": "회의록/요약 생성 AI와 음성 인식 모델. 비용은 100만 토큰당 대략치(입력/출력)이며 변동될 수 있습니다.",
         "fields": [
             {"section": "models", "key": "llm", "label": "회의록 생성 AI", "type": "select", "default": "gpt", "options": [{"value": "gpt", "label": "GPT (OpenAI)"}, {"value": "claude", "label": "Claude (Anthropic)"}], "desc": "기본 GPT(OpenAI 키만 필요). Claude 선택 시 Anthropic 키 별도 필요."},
-            {"section": "models", "key": "stt", "label": "음성 인식(STT) 모델", "type": "select", "default": "gpt-4o-mini-transcribe", "options": [{"value": "gpt-4o-mini-transcribe", "label": "gpt-4o-mini-transcribe — 저렴·빠름 (추천)"}, {"value": "gpt-4o-transcribe", "label": "gpt-4o-transcribe — 고정확·비쌈"}, {"value": "gpt-4o-transcribe-diarize", "label": "gpt-4o-transcribe-diarize — 화자분리"}, {"value": "whisper-1", "label": "whisper-1 — 구형·안정"}]},
+            {"section": "models", "key": "stt", "label": "음성 인식(STT) 모델", "type": "select", "default": "gpt-4o-mini-transcribe", "options": [{"value": "gpt-4o-mini-transcribe", "label": "gpt-4o-mini-transcribe — 저렴·빠름 ($0.003/분)"}, {"value": "gpt-4o-transcribe", "label": "gpt-4o-transcribe — 고정확 ($0.006/분)"}, {"value": "gpt-4o-transcribe-diarize", "label": "gpt-4o-transcribe-diarize — 화자분리(배치 전용)"}, {"value": "whisper-1", "label": "whisper-1 — 구형·안정"}], "desc": "실시간 화면에 먼저 뜨는 전사와 배치 처리가 이 모델을 씁니다. 2단계 보정이 켜져 있으면 확정본은 '보정 전사 모델'(기본 gpt-4o-transcribe)이 다시 만듭니다. 실시간 인식 정확도가 아쉬우면 gpt-4o-transcribe로 올리세요."},
             {"section": "models", "key": "claude_model", "label": "Claude 모델", "type": "select", "default": "claude-opus-4-8", "options": [{"value": "claude-opus-4-8", "label": "Opus 4.8 — 최고 성능 (약 $5/$25)"}, {"value": "claude-sonnet-5", "label": "Sonnet 5 — 균형·빠름 (약 $3/$15)"}, {"value": "claude-haiku-4-5", "label": "Haiku 4.5 — 저렴·빠름 (약 $1/$5)"}, {"value": "claude-opus-4-6", "label": "Opus 4.6 — 구버전"}]},
             {"section": "models", "key": "gpt_model", "label": "GPT 모델", "type": "select", "default": "gpt-4o-mini", "options": [{"value": "gpt-4o-mini", "label": "gpt-4o-mini — 저렴·빠름 (추천)"}, {"value": "gpt-4o", "label": "gpt-4o — 고품질·비쌈"}, {"value": "o1", "label": "o1 — 추론(느림·고비용)"}, {"value": "o3-mini", "label": "o3-mini — 추론(경량)"}]},
             {"section": "models", "key": "minutes_model", "label": "회의록 생성 모델(GPT, 선택)", "type": "text", "default": "gpt-4o", "desc": "미설정 시 GPT 모델 사용. 상세 기록이라 고성능 권장."},
@@ -90,16 +90,31 @@ SCHEMA: List[Dict[str, Any]] = [
         "label": "실시간 녹취",
         "desc": "실시간 녹음/전사 기본값입니다.",
         "fields": [
-            {"section": "realtime", "key": "mode", "label": "전사 방식", "type": "select", "default": "http", "desc": "http=5초 단위 청크 전사(안정·권장). auto/ws는 OpenAI 실시간 WebSocket을 쓰는데, 현재 OpenAI가 구 Beta 실시간 API를 종료해 대부분 실패하며 http로 자동 폴백됩니다. 특별한 이유가 없으면 http 유지.", "options": [{"value": "http", "label": "http — 청크(안정·권장)"}, {"value": "auto", "label": "auto — WS 우선·실패 시 http 폴백"}, {"value": "ws", "label": "ws — WebSocket 전용(현재 대부분 미지원)"}]},
+            {"section": "realtime", "key": "mode", "label": "전사 방식", "type": "select", "default": "http", "desc": "http=청크 전사(안정·저비용, 표시까지 2~6초). auto/ws=OpenAI GA 실시간 WebSocket(표시 ~1초, 비용 높음) — 표시가 느리다고 느끼면 auto를 권장(실패 시 http로 자동 폴백).", "options": [{"value": "http", "label": "http — 청크(안정·저비용)"}, {"value": "auto", "label": "auto — WS 실시간 우선·실패 시 http 폴백(저지연)"}, {"value": "ws", "label": "ws — WebSocket 전용(~1초 지연)"}]},
             {"section": "realtime", "key": "language", "label": "기본 언어", "type": "select", "default": "en", "options": ["en", "ko", "auto"]},
             {"section": "realtime", "key": "type", "label": "기본 문서 유형", "type": "select", "default": "meeting", "options": ["meeting", "seminar", "lecture"]},
             {"section": "realtime", "key": "translate", "label": "번역 사용", "type": "bool", "default": False},
             {"section": "realtime", "key": "audio_backup", "label": "오디오 백업(PCM)", "type": "bool", "default": True, "desc": "크래시 복구용. 약 115MB/시간."},
             {"section": "realtime", "key": "chunk_duration", "label": "청크 길이(초)", "type": "number", "default": 3.0},
+            {"section": "realtime", "key": "two_pass", "label": "2단계 전사 보정", "type": "bool", "default": True, "desc": "실시간 조각 전사를 일정 구간마다 다시 전사해 온전한 문장으로 교체합니다(화면·회의록 모두). STT 비용이 약 2배가 되지만 품질이 크게 좋아집니다."},
+            {"section": "realtime", "key": "revise_window_sec", "label": "보정 구간 길이(초)", "type": "number", "default": 25, "desc": "이 길이만큼 쌓이면 다시 전사해 문장으로 교체. 짧을수록 빨리 확정되지만 문맥이 줄어듭니다."},
+            {"section": "realtime", "key": "revise_model", "label": "보정 전사 모델", "type": "select", "default": "gpt-4o-transcribe", "options": [{"value": "gpt-4o-transcribe", "label": "gpt-4o-transcribe — 고정확(권장)"}, {"value": "gpt-4o-mini-transcribe", "label": "gpt-4o-mini-transcribe — 저렴"}], "desc": "최종 품질을 결정하는 모델. 실시간 표시는 STT 모델, 확정본은 이 모델."},
+            {"section": "realtime", "key": "fast_max_chunk_sec", "label": "실시간 청크 최대 길이(초)", "type": "number", "default": 5.0, "desc": "무음이 없어도 이 길이에서 잘라 표시합니다. 짧을수록 빨리 뜨고 조각납니다(조각은 보정 패스가 정리)."},
+            {"section": "realtime", "key": "silence_rms", "label": "무음 판정 임계값(RMS)", "type": "number", "default": 300, "desc": "HTTP 모드 발화 경계 감지. 마이크 입력이 작아 전사가 잘게 끊기면 100~200으로 낮추고, 시끄러운 환경에서 항상 최대 길이로 잘리면 500~800으로 올리세요."},
+            {"section": "realtime", "key": "stt_concurrency", "label": "실시간 STT 동시 호출 수", "type": "number", "default": 2, "desc": "HTTP 모드 빠른 패스 병렬 전사(1~4). STT 응답이 느린 네트워크에서 표시 지연이 누적되는 것을 막습니다. 표시 순서는 항상 유지됩니다."},
             {"section": "realtime", "key": "ws_vad_type", "label": "WS VAD 방식", "type": "select", "default": "server_vad", "options": ["server_vad", "semantic_vad"]},
             {"section": "realtime", "key": "ws_vad_eagerness", "label": "WS 발화종료 민감도", "type": "select", "default": "medium", "options": ["low", "medium", "high", "auto"]},
             {"section": "realtime", "key": "ws_noise_reduction", "label": "WS 노이즈 리덕션", "type": "select", "default": "near_field", "options": ["near_field", "far_field"]},
             {"section": "realtime", "key": "email_on_finish", "label": "종료 후 이메일 자동발송", "type": "bool", "default": False},
+        ],
+    },
+    {
+        "id": "server",
+        "advanced": True,
+        "label": "서버/네트워크",
+        "desc": "아이폰·태블릿 앱에서 이 PC에 접속하려면 'LAN 접속 허용'을 켜세요. 켜면 같은 WiFi의 다른 기기가 이 PC의 회의록 서버에 연결할 수 있습니다.",
+        "fields": [
+            {"section": "server", "key": "lan_access", "label": "LAN 접속 허용 (모바일 앱 연결용)", "type": "bool", "default": False, "desc": "끄면 이 PC에서만(localhost) 접속 가능(기본, 안전). 켜면 0.0.0.0으로 바인딩해 같은 WiFi의 기기가 접속할 수 있습니다 — 신뢰된 네트워크(집·사무실)에서만 켜세요. 변경 후 앱을 재시작해야 적용됩니다."},
         ],
     },
     {
@@ -120,7 +135,8 @@ SCHEMA: List[Dict[str, Any]] = [
             {"section": "wiki_knowledge", "key": "decision_registry_enabled", "label": "결정 레지스트리", "type": "bool", "default": True},
             {"section": "wiki_knowledge", "key": "update_proposals_enabled", "label": "위키 업데이트 제안", "type": "bool", "default": True},
             {"section": "wiki_knowledge", "key": "section_index_enabled", "label": "섹션 단위 인덱싱", "type": "bool", "default": True},
-            {"section": "vault_watcher", "key": "enabled", "label": "폴더 자동 감시 처리", "type": "bool", "default": False},
+            {"section": "vault_watcher", "key": "enabled", "label": "폴더 자동 감시 처리", "type": "bool", "default": False, "desc": "켜 두면 앱 시작 시 폴더 감시를 자동으로 시작합니다. 감시할 폴더는 [설정] 하단 '폴더 자동 감시' 카드에서 추가하세요."},
+            {"section": "plan_watcher", "key": "enabled", "label": "계획 자동화 자동 시작", "type": "bool", "default": False, "desc": "켜 두면 앱 시작 시 planned 노트 사전 리서치·첨부 녹음 자동 처리를 자동으로 시작합니다(Obsidian 볼트 필요)."},
             {"section": "supermemory", "key": "enabled", "label": "Supermemory 연동", "type": "bool", "default": False},
         ],
     },

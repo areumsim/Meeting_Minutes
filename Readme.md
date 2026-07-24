@@ -174,14 +174,16 @@ Browser mic → AudioWorkletProcessor
 ## iOS 모바일 앱 (Capacitor)
 
 동일한 React 웹 UI를 Capacitor로 감싸서 **iPhone/iPad 네이티브 앱**으로 빌드할 수 있습니다.
-PC 백엔드(FastAPI) 없이 **완전 독립형(Serverless)** 으로 동작하며, 앱에서 직접 OpenAI API와 통신합니다.
+프로젝트는 `web/frontend/ios`에 있으며 Swift Package Manager 기반입니다(CocoaPods 아님).
+**빌드는 macOS + Xcode에서만 가능**합니다. 앱은 두 가지 모드를 지원하며 [설정]에서 전환합니다:
 
-- **실시간 녹음**: OpenAI Realtime WebSocket API 직결 (WebSocket 끊김 시 자동 재연결)
-- **백그라운드 녹음**: 화면 잠금/앱 전환 시에도 오디오 세션 유지
-- **대용량 파일 업로드**: 25MB 초과 파일 자동 청크 분할 STT
-- **로컬 저장**: 모든 데이터는 기기 내 IndexedDB에만 저장 (완벽한 프라이버시)
+- **단독 모드**: 앱에 OpenAI API 키를 넣고 OpenAI에 직접 연결. 데이터는 기기 내 IndexedDB에만 저장(프라이버시). 파일 업로드 전사·텍스트→회의록·요약이 견고.
+- **PC 연결 모드(권장)**: 같은 WiFi의 PC에서 `MeetingMinutes.exe`를 켜고 앱 [설정] → "PC 서버 연결"에 그 주소를 입력하면, exe와 **동일한 고품질 파이프라인**(2단계 보정·위키·그래프)을 아이폰에서 그대로 사용. PC에서 `server.lan_access`를 켜야 합니다(아래 설정 참고).
 
-> 상세 내용: [`ios_app/README.md`](ios_app/README.md) | 빌드 가이드: [`ios_app/BuildGuide.md`](ios_app/BuildGuide.md)
+기타: 대용량 파일 자동 청크 분할, 백그라운드 녹음(오디오 세션 유지), 네이티브 공유 시트.
+
+> **빌드·사용 상세 가이드**: [`scripts/build/iOS_빌드_사용법.md`](scripts/build/iOS_빌드_사용법.md)
+> (Mac에서 `cd web/frontend && npm install && npm run ios:build` 후 Xcode에서 서명·실행)
 
 ---
 
@@ -492,10 +494,17 @@ cp   config.example.json config.json   # Mac/Linux
     "translate_model": "gpt-4o-mini"
   },
   "realtime": {
-    "language":           "ko",           // 실시간 기본 언어 (ko / en)
-    "chunk_duration":     3.0,            // 청크 길이(초) — HTTP 모드 전용
+    "language":           "en",           // 실시간 기본 언어 (en / ko / auto)
+    "mode":               "http",         // http(안정·저비용, 기본) | auto(WS 우선·저지연) | ws
+    "two_pass":           true,           // 2단계 전사 보정 — 조각을 구간마다 재전사해 문장으로 교체
+    "revise_window_sec":  25,             // 보정 구간 길이(초)
+    "revise_model":       "gpt-4o-transcribe",  // 보정 전사 모델(최종 품질 결정)
+    "fast_max_chunk_sec": 5.0,            // 무음 없어도 이 길이에서 잘라 표시
+    "silence_rms":        300,            // HTTP 무음 판정 임계값 — 마이크 작으면 낮추고 시끄러우면 올림
+    "stt_concurrency":    2,              // HTTP 빠른 패스 STT 동시 호출 수(1~4, 지연 누적 방지)
+    "chunk_duration":     3.0,            // 청크 길이(초) — CLI 전용
     "audio_backup":       true,           // PCM 오디오 백업 (크래시 복구용)
-    "mode":               "http",         // http | ws | auto
+    "diarize_postprocess": false,         // 종료 후 diarize 재전사로 화자 라벨 채움(비용·메모리↑)
     "ws_vad_type":        "server_vad",   // server_vad | semantic_vad
     "ws_vad_eagerness":   "medium",       // low | medium | high | auto (semantic_vad 전용)
     "ws_noise_reduction": "near_field"    // near_field | far_field | null
@@ -556,6 +565,7 @@ cp   config.example.json config.json   # Mac/Linux
 | 설정 영역 | 쓰는 곳 |
 | --- | --- |
 | `api`, `models`, `ssl` | STT, 번역, 회의록/요약 생성, SSL 검증 |
+| `server` | `server.lan_access`=true 면 exe가 0.0.0.0에 바인딩해 같은 WiFi의 iOS/태블릿 앱이 접속(PC 연결 모드). 기본 false(localhost 전용) |
 | `realtime` | `realtime_transcription.py`, `run_realtime.py`, 웹 Recorder |
 | `email`, `notify` | 배치/실시간/자동 처리 완료 알림. `notify.on_finish`가 있으면 기본 알림으로 사용 |
 | `obsidian` | Local REST API 발행, 계획 노트 매칭/병합, Vault 폴더 경로 |
@@ -757,7 +767,7 @@ python run_meeting.py batch meeting.mp4 --debug
 | `--profile` | 저장된 프로필 이름 적용 | - |
 | `--model` | STT 모델 | config `models.stt` 값 (코드 fallback: gpt-4o-mini-transcribe) |
 | `--llm` | gpt / claude | gpt |
-| `--language` | STT 언어 (ko, en) | ko |
+| `--language` | STT 언어 (en, ko, auto) | 설정 `realtime.language`(기본 en) |
 | `--translate` | 영→한 번역 | OFF |
 | `--translate-script` | 스크립트 번역본도 생성 | OFF |
 | `--memo` | 메모 파일 | - |
@@ -1094,7 +1104,7 @@ output/
 
 | 옵션 | 설명 | 기본값 |
 | --- | --- | --- |
-| `--language` | ko / en | ko |
+| `--language` | en / ko / auto | 설정 `realtime.language`(기본 en) |
 | `--type` | meeting / seminar / lecture | meeting |
 | `--topic` | 회의 주제 (번역·회의록·요약 프롬프트에 맥락으로 반영) | - |
 | `--model` | STT 모델 (아래 표 참고) | config `models.stt` 값 |

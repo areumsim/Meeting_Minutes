@@ -237,11 +237,30 @@ def migrate() -> bool:
     return changed
 
 
+# reload() 시 함께 호출되는 콜백들. llm_client 등 일부 모듈은 키/모델/SSL을
+# import 시점에 모듈 전역으로 고정하는데, 웹 UI에서 설정을 저장해도 그 전역은
+# 낡은 값으로 남아 재시작 전까지 반영되지 않았다. 해당 모듈이 여기 훅을 등록해
+# reload 때 자신의 전역을 재평가한다.
+_RELOAD_HOOKS: list = []
+
+
+def on_reload(fn) -> None:
+    """reload() 후 호출될 콜백 등록(중복 등록 무시). 등록 순서대로 호출된다."""
+    if fn not in _RELOAD_HOOKS:
+        _RELOAD_HOOKS.append(fn)
+
+
 def reload():
     """config.json 재로드 (런타임 변경 반영용)"""
     global _cache
     _cache = None
     _load()
+    for fn in list(_RELOAD_HOOKS):
+        try:
+            fn()
+        except Exception as e:
+            print(f"[config] ⚠  reload 훅 실패({getattr(fn, '__module__', '?')}): {e}",
+                  file=sys.stderr)
 
 
 def exists() -> bool:

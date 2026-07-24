@@ -23,6 +23,8 @@ watchdog>=4.0.0
 fastapi>=0.110.0
 uvicorn[standard]>=0.29.0
 python-multipart>=0.0.9
+# 회사망 SSL 검사 대응 — OS(Windows) 인증서 저장소 신뢰 (web/backend/app.py에서 주입)
+truststore>=0.10
 
 # Optional (VAD mode - faster response on short utterances)
 # Windows: pip install webrtcvad-wheels

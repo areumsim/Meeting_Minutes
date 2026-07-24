@@ -2,8 +2,9 @@
 @plugin "@tailwindcss/typography";
 
 @theme {
-  --font-sans: "Inter", system-ui, -apple-system, sans-serif;
-  --font-display: "Inter", system-ui, -apple-system, sans-serif;
+  /* 외부 폰트 미사용(오프라인 배포) — 시스템 폰트 스택. 한글은 Malgun Gothic 폴백. */
+  --font-sans: system-ui, -apple-system, "Segoe UI", "Malgun Gothic", sans-serif;
+  --font-display: system-ui, -apple-system, "Segoe UI", "Malgun Gothic", sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, monospace;
 
   --color-brand-50: #f8fafc;

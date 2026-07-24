@@ -21,6 +21,22 @@ from meeting_minutes_app.meeting_pipeline.meeting_minutes import (
 )
 
 
+def _refresh_config_globals() -> None:
+    """config_loader.reload() 훅 — from-import 로 복사된 모델 전역을
+    웹 UI 설정 저장 시 재시작 없이 갱신한다(meeting_minutes 훅이 먼저 실행됨)."""
+    global MINUTES_MODEL, SUMMARY_MODEL
+    from meeting_minutes_app.meeting_pipeline import meeting_minutes as _mm
+    MINUTES_MODEL = _mm.MINUTES_MODEL
+    SUMMARY_MODEL = _mm.SUMMARY_MODEL
+
+
+try:
+    from meeting_minutes_app.common import config_loader as _cfg_mod
+    _cfg_mod.on_reload(_refresh_config_globals)
+except ImportError:
+    pass
+
+
 # ══════════════════════════════════════════════════════════════════
 #  프롬프트 템플릿 — 여기를 직접 편집하여 구조·규칙을 변경할 수 있습니다.
 #  {prefix} 자리는 주제·일시·지시문이 자동 삽입됩니다 (수정 금지).

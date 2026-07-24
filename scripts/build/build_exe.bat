@@ -21,6 +21,22 @@ if not exist "web\frontend\dist\index.html" (
     exit /b 1
 )
 
+:: 1.5. ffmpeg 번들 확인 — 없으면 exe 가 영상 포맷(mkv/avi/mov)·대용량 변환을 못 한다.
+:: 배포용 빌드에서 조용히 빠지는 사고를 막기 위해 기본은 중단. (의도적으로 뺄 때만
+:: SKIP_FFMPEG=1 로 실행)
+if not exist "vendor\ffmpeg\ffmpeg.exe" (
+    if "%SKIP_FFMPEG%"=="1" (
+        echo  [WARN] vendor\ffmpeg\ffmpeg.exe 없음 - ffmpeg 없이 빌드합니다. ^(SKIP_FFMPEG=1^)
+    ) else (
+        echo  [ERROR] vendor\ffmpeg\ffmpeg.exe 가 없습니다.
+        echo          배포 exe 에 ffmpeg 이 포함되지 않으면 영상 변환 기능이 동작하지 않습니다.
+        echo          vendor\ffmpeg\README.txt 안내대로 ffmpeg.exe/ffprobe.exe 를 넣거나,
+        echo          의도적으로 빼려면  set SKIP_FFMPEG=1  후 다시 실행하세요.
+        pause
+        exit /b 1
+    )
+)
+
 :: 2. PyInstaller 확인
 python -m pyinstaller --version >nul 2>&1
 if errorlevel 1 (

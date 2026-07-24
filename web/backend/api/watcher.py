@@ -5,8 +5,10 @@ CLI 전용이던 audio_watcher(AudioWatcher)를 웹에서 시작/중지/상태 �
 백그라운드 스레드로 감싼다. exe(완전 내장) 배포에서 watchdog 가 번들되므로 FS 이벤트
 모드로, 없으면 폴링으로 동작한다(AudioWatcher.start 가 자동 폴백).
 
-감시 폴더는 config 의 vault_watcher.watch_folders(리스트)에서 읽는다. 폼에 없는
-고급 설정이므로 [설정] → '고급: 전체 설정(JSON)'에서 편집한다.
+감시 폴더는 config 의 vault_watcher.watch_folders(리스트)에서 읽는다.
+[설정] 하단 '폴더 자동 감시' 카드(WatcherCard)에서 추가/삭제한다.
+vault_watcher.enabled / plan_watcher.enabled 가 켜져 있으면 앱 시작 시
+autostart_from_config()가 자동으로 재개한다.
 """
 
 import threading
@@ -46,8 +48,8 @@ class _WatcherManager:
 
             folders = [str(f) for f in (cfg.get("vault_watcher.watch_folders", []) or []) if f]
             if not folders:
-                msg = ("감시할 폴더가 설정되지 않았습니다. [설정] → '고급: 전체 설정(JSON)'에서 "
-                       "vault_watcher.watch_folders 에 폴더 경로를 추가하세요.")
+                msg = ("감시할 폴더가 설정되지 않았습니다. [설정] 하단 '폴더 자동 감시' "
+                       "카드에서 [폴더 추가]로 지정하세요.")
                 return {"ok": False, "running": False, "message": msg, "folders": []}
 
             missing = [f for f in folders if not Path(f).is_dir()]
@@ -200,8 +202,13 @@ class _PlanAutomationManager:
                     for f in pw._scan(watch_root):
                         if self._stop.is_set():
                             break
-                        if pw._process_file(f, llm, obs):
-                            self.notes += 1
+                        # 노트 1건의 실패가 스레드를 죽여 자동화 전체가 조용히 멈추지
+                        # 않도록 파일 단위로 격리한다(오디오 패스와 동일한 정책).
+                        try:
+                            if pw._process_file(f, llm, obs):
+                                self.notes += 1
+                        except Exception as e:
+                            print(f"[plan-auto] 노트 처리 오류(건너뜀): {f} — {e}")
                         try:
                             seen[str(f)] = f.stat().st_mtime
                         except OSError:
@@ -222,8 +229,11 @@ class _PlanAutomationManager:
                             if seen.get(str(f)) == mt:
                                 continue
                             seen[str(f)] = mt
-                            if pw._process_file(f, llm, obs):
-                                self.notes += 1
+                            try:
+                                if pw._process_file(f, llm, obs):
+                                    self.notes += 1
+                            except Exception as e:
+                                print(f"[plan-auto] 노트 처리 오류(건너뜀): {f} — {e}")
                         try:
                             self.audio += pw._audio_pass(root, notes_subdir)
                         except Exception as e:
@@ -265,6 +275,28 @@ class _PlanAutomationManager:
 
 
 _plan = _PlanAutomationManager()
+
+
+def autostart_from_config() -> None:
+    """앱 시작 시 config 플래그 기준으로 백그라운드 자동화를 재개한다.
+
+    exe 사용자는 앱을 껐다 켜는 게 일상이라, 버튼으로 켠 감시가 재시작 후
+    사라지면 '자동 처리가 안 된다'로 체감된다. enabled 플래그가 켜져 있으면
+    시작 시 자동으로 다시 켠다(실패해도 부팅은 계속).
+    """
+    from meeting_minutes_app.common import config_loader as cfg
+    try:
+        if bool(cfg.get("vault_watcher.enabled", False)):
+            r = _manager.start()
+            print(f"[watcher] 자동 시작: {r.get('message', '')}")
+    except Exception as e:
+        print(f"[watcher] 자동 시작 실패(무시): {e}")
+    try:
+        if bool(cfg.get("plan_watcher.enabled", False)):
+            r = _plan.start()
+            print(f"[plan-auto] 자동 시작: {r.get('message', '')}")
+    except Exception as e:
+        print(f"[plan-auto] 자동 시작 실패(무시): {e}")
 
 
 @router.get("/plan/status")

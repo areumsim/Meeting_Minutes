@@ -96,6 +96,24 @@ FALLBACK_STT_MODEL = _c("models.stt_fallback", "gpt-4o-transcribe") or "gpt-4o-t
 MINUTES_MODEL      = _c("models.minutes_model", "gpt-4o") or "gpt-4o"
 SUMMARY_MODEL      = _c("models.summary_model", "gpt-4o") or "gpt-4o"
 
+
+def _refresh_config_globals() -> None:
+    """config_loader.reload() 훅 — 웹 UI 설정 저장 시 재시작 없이 반영.
+    llm_client 훅이 먼저 등록·실행되므로 키/SSL은 갱신된 값을 그대로 복사한다."""
+    global DEFAULT_STT_MODEL, FALLBACK_STT_MODEL, MINUTES_MODEL, SUMMARY_MODEL
+    global OPENAI_API_KEY, SSL_VERIFY
+    DEFAULT_STT_MODEL  = _c("models.stt",          "gpt-4o-mini-transcribe") or "gpt-4o-mini-transcribe"
+    FALLBACK_STT_MODEL = _c("models.stt_fallback", "gpt-4o-transcribe") or "gpt-4o-transcribe"
+    MINUTES_MODEL      = _c("models.minutes_model", "gpt-4o") or "gpt-4o"
+    SUMMARY_MODEL      = _c("models.summary_model", "gpt-4o") or "gpt-4o"
+    from meeting_minutes_app.common import llm_client as _llm
+    OPENAI_API_KEY = _llm.OPENAI_API_KEY
+    SSL_VERIFY = _llm.SSL_VERIFY
+
+
+if _cfg_ok:
+    _cfg.on_reload(_refresh_config_globals)
+
 # ffmpeg/ffprobe 경로 — 번들(vendor/ffmpeg) 우선, 없으면 PATH fallback
 from meeting_minutes_app.common import app_paths as _app_paths
 FFMPEG = _app_paths.get_ffmpeg_path()

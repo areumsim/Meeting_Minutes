@@ -19,11 +19,13 @@
 | `python run_meeting.py prep-brief --title "..."` | `wiki_knowledge.py` | 회의 준비 브리프 생성 — LLM 없이 Vault 검색 + Registry |
 
 > **웹/모바일 프론트엔드 아키텍처 주의**  
-> `web/frontend/`는 Capacitor 기반 모바일 앱이다. 브라우저/앱에서 마이크 녹음 시  
-> FastAPI의 `/ws/realtime`을 거치지 않고 **OpenAI Realtime API에 직접 연결**한다.  
-> (`web/frontend/src/lib/api.ts` — `wss://api.openai.com/v1/realtime` 직접 호출)  
-> FastAPI의 `/ws/realtime`은 **서버가 오디오 파이프라인을 제어해야 하는 프록시형 옵션**이다.  
-> 장기 보안 목표는 프론트엔드 장기 API Key 저장을 제거하고, FastAPI가 브라우저/모바일용 ephemeral credential을 발급한 뒤 WebRTC로 직접 연결하는 구조다.
+> `web/frontend/`는 Capacitor 기반 모바일 앱(iOS, SPM)이며 두 가지 모드로 동작한다.  
+> - **단독 모드**: 앱이 `FastAPI`를 거치지 않고 **OpenAI Realtime API에 직접 연결**한다  
+>   (`web/frontend/src/lib/api.ts` — `wss://api.openai.com/v1/realtime`). 키는 기기에만 저장.  
+> - **PC 연결 모드**: 앱 [설정]에서 PC(exe) 주소를 지정하면 `api.ts`의 `apiFetch`/WS가  
+>   그 백엔드(`/api/*`, `/ws/realtime`)로 향해 **서버 파이프라인(2-pass·위키·그래프)**을 그대로 쓴다.  
+>   exe는 `server.lan_access=true`일 때만 0.0.0.0에 바인딩한다(`run_ui_exe.py`).  
+> 장기 보안 목표는 프론트엔드 장기 API Key 저장을 제거하고, FastAPI가 ephemeral credential을 발급한 뒤 WebRTC로 직접 연결하는 구조다.
 
 ---
 
@@ -218,7 +220,7 @@ flowchart LR
 
 ## 실시간 파이프라인 (Realtime)
 
-기본 웹/모바일 경로는 `web/frontend/src/lib/api.ts`가 OpenAI Realtime API에 직접 연결한다. 현재 코드는 직접 WebSocket을 사용하지만, 목표 구조는 WebRTC + ephemeral credential이다. `web/backend/api/realtime.py · BrowserRealtimeSession`은 서버 프록시형 옵션이며, 중앙 로깅·회사망 통제·서버 측 오디오 파이프라인이 필요한 경우에 사용한다.
+웹/모바일 단독 모드는 `web/frontend/src/lib/api.ts`가 OpenAI Realtime API에 직접 연결한다(직접 WebSocket, 목표 구조는 WebRTC + ephemeral credential). `web/backend/api/realtime.py · BrowserRealtimeSession`은 서버 경로이며, exe가 프런트를 서빙할 때(PC 브라우저)와 **모바일 PC 연결 모드**에서 사용된다 — 기본 전사 방식은 config `realtime.mode`(기본 `http`, 2단계 보정 포함)를 따르고, `auto`/`ws`면 OpenAI Realtime WS로 포워딩 후 실패 시 http로 폴백한다.
 
 ```mermaid
 flowchart TD
@@ -722,8 +724,8 @@ LLM은 다음 고정 답변 구조를 반드시 따르도록 강제된다:
 
 | 키 | 기본값 | 설명 |
 |---|---|---|
-| `models.llm` | `"claude"` | LLM 선호 (claude / gpt) |
-| `models.stt` | `"gpt-4o-transcribe-diarize"` | 배치 파일 STT 모델. diarize는 `/v1/audio/transcriptions` 전용이며 Realtime 미지원 |
+| `models.llm` | `"gpt"` | LLM 선호 (gpt / claude) |
+| `models.stt` | `"gpt-4o-mini-transcribe"` | STT 모델(저렴·빠름). 고정확은 `gpt-4o-transcribe`, 화자분리 배치는 `gpt-4o-transcribe-diarize`(Realtime 미지원) |
 | `obsidian.enabled` | `false` | Obsidian REST 연동 활성화 |
 | `obsidian.meetings_path` | `""` | 회의록 저장 경로 (`{year}`/`{month}`/`{project}` 토큰 지원 — `{project}`로 다중 도메인 분리) |
 | `obsidian.project` / `project_domains` | `""` / `{}` | 현재 도메인 + 도메인→폴더 매핑. `--project` CLI로 세션 단위 오버라이드 가능 |

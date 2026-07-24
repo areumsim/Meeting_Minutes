@@ -79,6 +79,26 @@ def _find_free_port(preferred: int) -> int:
         return s.getsockname()[1]
 
 
+def _lan_ipv4_addrs() -> list:
+    """이 PC의 LAN IPv4 주소 목록(모바일 앱 접속 안내용). loopback 제외."""
+    ips = []
+    try:
+        # 기본 라우트로 나가는 소켓의 로컬 주소 → 실제 사용 중인 LAN IP
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("8.8.8.8", 80))
+            ips.append(s.getsockname()[0])
+    except Exception:
+        pass
+    try:
+        for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+            ip = info[4][0]
+            if ip and not ip.startswith("127.") and ip not in ips:
+                ips.append(ip)
+    except Exception:
+        pass
+    return ips
+
+
 def open_browser_when_ready(port: int, timeout: float = 30.0):
     """/api/health 가 응답할 때까지 폴링한 뒤 브라우저를 연다."""
     def _wait_and_open():
@@ -123,10 +143,32 @@ def main():
 
     port = _find_free_port(args.port)
 
+    # LAN 접속 허용(config server.lan_access=true) 시 0.0.0.0 으로 바인딩해
+    # 같은 WiFi의 아이폰·태블릿 앱이 접속할 수 있게 한다. 기본은 localhost 전용(안전).
+    host = args.host
+    lan_access = False
+    try:
+        from meeting_minutes_app.common import config_loader as _cfg
+        lan_access = bool(_cfg.get("server.lan_access", False))
+    except Exception:
+        lan_access = False
+    if lan_access and host in ("127.0.0.1", "localhost"):
+        host = "0.0.0.0"
+
+    lan_ips = _lan_ipv4_addrs() if lan_access else []
+
     print(f"\n{'='*60}")
     print(f"  Meeting Minutes Web UI")
     print(f"  {'-'*56}")
     print(f"  서버 실행 중...  http://localhost:{port}")
+    if lan_access:
+        if lan_ips:
+            print(f"  {'-'*56}")
+            print(f"  모바일 앱(같은 WiFi)에서 접속할 주소:")
+            for ip in lan_ips:
+                print(f"    http://{ip}:{port}")
+        else:
+            print(f"  (LAN 접속 허용됨 — PC의 ipconfig IPv4 주소 + :{port} 로 접속)")
     print(f"  데이터 위치: {data_base}")
     print(f"  {'-'*56}")
     print(f"  브라우저가 자동으로 열립니다.")
@@ -139,7 +181,7 @@ def main():
     import uvicorn
     uvicorn.run(
         "web.backend.app:app",
-        host=args.host,
+        host=host,
         port=port,
         log_level="info",
     )

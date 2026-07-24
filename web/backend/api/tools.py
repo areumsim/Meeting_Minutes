@@ -25,10 +25,11 @@ def _llm(preferred: str | None = None):
 
 
 def _make_output_dir(title: str) -> str:
-    from meeting_minutes_app.meeting_pipeline import meeting_minutes as mm
+    # 상대 output_dir 은 CWD가 아닌 데이터 베이스 기준으로 해석(공용 로직)
+    from meeting_minutes_app.common.app_paths import get_output_dir as _god
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     safe = "".join(c for c in (title or "text") if c.isalnum() or c in " _-").strip()[:50] or "text"
-    out = os.path.join(mm._c("output_dir", "./output") or "./output", f"{ts}_{safe}")
+    out = str(_god() / f"{ts}_{safe}")
     os.makedirs(out, exist_ok=True)
     return out
 
@@ -52,14 +53,28 @@ def _run_text(session_id: str, text: str, title: str, topic: str, doc_type: str)
 
         db.import_output_files(session_id, out)
         db.update_session_status(session_id, "completed")
-    except Exception:
+    except Exception as e:
         traceback.print_exc()
-        db.update_session_status(session_id, "error")
+        db.update_session_status(session_id, "error",
+                                 error_detail=f"{type(e).__name__}: {e}"[:500])
+
+
+def _require_llm_key():
+    """LLM 호출 전 사전 점검 — 키가 하나도 없으면 백그라운드 실패 대신
+    시작 시점에 명확한 한국어 오류로 거절해 설정 화면으로 안내한다."""
+    from meeting_minutes_app.common import config_loader as _cfg
+    if not (_cfg.get_api_key("api.openai_api_key", "OPENAI_API_KEY")
+            or _cfg.get_api_key("api.anthropic_api_key", "ANTHROPIC_API_KEY")):
+        raise HTTPException(
+            status_code=400,
+            detail="AI API 키가 설정되지 않았습니다. [설정] → API 키에서 입력한 뒤 다시 시도하세요.",
+        )
 
 
 @router.post("/process-text")
 def process_text(payload: dict, background_tasks: BackgroundTasks):
     """붙여넣은 텍스트를 회의록/요약/액션으로 변환(서버 처리, 키 미노출)."""
+    _require_llm_key()
     text = (payload.get("text") or "").strip()
     if not text:
         raise HTTPException(status_code=422, detail="텍스트가 비어 있습니다.")
@@ -82,7 +97,9 @@ def _run_regenerate(session_id: str, notes: str):
         sess = db.get_session(session_id) or {}
         out = sess.get("output_dir")
         if not out or not os.path.isdir(out):
-            db.update_session_status(session_id, "error")
+            db.update_session_status(
+                session_id, "error",
+                error_detail="원본 결과 폴더를 찾을 수 없어 재생성할 수 없습니다.")
             return
         db.update_session_status(session_id, "processing")
 
@@ -102,14 +119,16 @@ def _run_regenerate(session_id: str, notes: str):
             )
         db.import_output_files(session_id, out)
         db.update_session_status(session_id, "completed")
-    except Exception:
+    except Exception as e:
         traceback.print_exc()
-        db.update_session_status(session_id, "error")
+        db.update_session_status(session_id, "error",
+                                 error_detail=f"{type(e).__name__}: {e}"[:500])
 
 
 @router.post("/sessions/{session_id}/regenerate")
 def regenerate(session_id: str, payload: dict, background_tasks: BackgroundTasks):
     """기존 세션의 전사를 재사용해 노트를 반영, 회의록을 다시 생성."""
+    _require_llm_key()
     sess = db.get_session(session_id)
     if not sess:
         raise HTTPException(status_code=404, detail="세션을 찾을 수 없습니다.")

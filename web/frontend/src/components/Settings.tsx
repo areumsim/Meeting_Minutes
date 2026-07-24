@@ -10,15 +10,20 @@ import {
   getProfiles, createProfile, deleteProfile, clearSessions,
   getApiKey, setApiKey, getAnthropicKey, setAnthropicKey,
   getWatcherStatus, startWatcher, stopWatcher, obsidianDiagnose, pickFolder,
+  getBackendUrl, setBackendUrl, testBackendUrl,
 } from "../lib/api";
+import { Capacitor } from "@capacitor/core";
 import type { Profile } from "../lib/types";
 import type { WatcherStatus, DiagnoseResult } from "../lib/api";
+
+// 네이티브 앱(iOS/Android)에서만 'PC 서버 연결' 카드를 노출한다.
+const IS_NATIVE = Capacitor.isNativePlatform();
 
 interface Field {
   section: string;
   key: string;
   label: string;
-  type: "text" | "password" | "bool" | "select" | "number";
+  type: "text" | "password" | "bool" | "select" | "number" | "list";
   default?: any;
   desc?: string;
   options?: (string | { value: string; label: string })[];
@@ -59,6 +64,87 @@ const CLIENT_FALLBACK_SCHEMA: Group[] = [
 ];
 
 const pathOf = (f: Field) => (f.key ? `${f.section}.${f.key}` : f.section);
+
+// ── PC 서버 연결 카드 (네이티브 앱 전용) ─────────────────────────
+// 같은 WiFi의 PC(exe)에 연결하면 서버 파이프라인(2-pass 보정·위키·그래프)을
+// 그대로 쓴다. 비우면 단독 모드(기기에 저장된 OpenAI 키로 직접 전사).
+function BackendConnectionCard({ onChanged }: { onChanged: () => void }) {
+  const [url, setUrl] = useState(getBackendUrl());
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<{ ok: boolean; message: string } | null>(null);
+  const connected = !!getBackendUrl();
+
+  const doTest = async () => {
+    setBusy(true); setResult(null);
+    setResult(await testBackendUrl(url));
+    setBusy(false);
+  };
+  const doConnect = async () => {
+    setBusy(true);
+    const r = await testBackendUrl(url);
+    setResult(r);
+    if (r.ok) { setBackendUrl(url); onChanged(); }
+    setBusy(false);
+  };
+  const doDisconnect = () => {
+    setUrl(""); setBackendUrl(""); setResult(null); onChanged();
+  };
+
+  return (
+    <section className="bg-white border border-brand-200 rounded-2xl mb-3 shadow-sm overflow-hidden">
+      <div className="px-4 md:px-5 py-4">
+        <div className="flex items-center gap-2 mb-1">
+          <Plug size={16} className="text-brand-500 shrink-0" />
+          <span className="text-base font-bold text-brand-900">PC 서버 연결</span>
+          <span className={`ml-auto text-[11px] font-bold px-2 py-0.5 rounded-full ${connected ? "bg-emerald-100 text-emerald-700" : "bg-zinc-100 text-zinc-500"}`}>
+            {connected ? "연결됨 (서버 모드)" : "단독 모드"}
+          </span>
+        </div>
+        <p className="text-xs text-brand-500 mb-3">
+          같은 WiFi에 있는 PC에서 <b>MeetingMinutes.exe</b>를 켠 뒤 그 주소를 넣으면,
+          PC의 고품질 전사(2단계 보정)·위키·그래프를 아이폰에서 그대로 씁니다.
+          비워 두면 이 기기의 OpenAI 키로 직접 처리합니다(단독 모드).
+        </p>
+        <div className="flex flex-col sm:flex-row gap-2">
+          <input
+            type="url"
+            inputMode="url"
+            autoCapitalize="none"
+            autoCorrect="off"
+            value={url}
+            onChange={(e) => setUrl(e.target.value)}
+            placeholder="예: http://192.168.0.10:8501"
+            className="flex-1 px-4 py-2.5 bg-zinc-50 border border-zinc-200 rounded-xl outline-none focus:ring-2 focus:ring-brand-900 font-mono text-sm"
+          />
+          <div className="flex gap-2">
+            <button onClick={doTest} disabled={busy}
+              className="px-4 py-2.5 bg-brand-50 text-brand-700 rounded-xl text-sm font-semibold hover:bg-brand-100 transition-all disabled:opacity-50">
+              {busy ? <Loader2 size={16} className="animate-spin" /> : "테스트"}
+            </button>
+            <button onClick={doConnect} disabled={busy || !url.trim()}
+              className="px-4 py-2.5 bg-brand-950 text-white rounded-xl text-sm font-bold hover:bg-brand-900 transition-all disabled:opacity-50">
+              연결
+            </button>
+            {connected && (
+              <button onClick={doDisconnect} disabled={busy}
+                className="px-4 py-2.5 bg-red-50 text-red-600 rounded-xl text-sm font-semibold hover:bg-red-100 transition-all disabled:opacity-50">
+                해제
+              </button>
+            )}
+          </div>
+        </div>
+        {result && (
+          <div className={`mt-2 flex items-center gap-2 text-sm ${result.ok ? "text-emerald-600" : "text-red-600"}`}>
+            {result.ok ? <CheckCircle size={14} /> : <XCircle size={14} />} {result.message}
+          </div>
+        )}
+        <p className="text-[11px] text-brand-400 mt-2">
+          PC 주소 확인: exe 실행 후 브라우저에 표시되는 주소, 또는 PC에서 <b>ipconfig</b>의 IPv4 주소 + <b>:8501</b>.
+        </p>
+      </div>
+    </section>
+  );
+}
 
 export default function SettingsView() {
   const [schema, setSchema] = useState<Group[] | null>(null);
@@ -378,6 +464,10 @@ export default function SettingsView() {
           ? "모든 설정은 이 PC의 config.json 에 저장됩니다. 잘 모르는 항목은 그대로 두세요."
           : "설정은 이 기기(브라우저)에만 저장됩니다."}
       </p>
+
+      {/* PC 서버 연결 (네이티브 앱 전용) — 연결/해제 시 전체 설정을 다시 로드해
+          서버 모드 ↔ 단독 모드 전환을 즉시 반영한다. */}
+      {IS_NATIVE && <BackendConnectionCard onChanged={load} />}
 
       {/* 필수 그룹 */}
       {essential.map(renderGroup)}
@@ -722,6 +812,43 @@ function FieldRow({ field, value, onChange, packaged }: { field: Field; value: a
     if (r.ok && r.path) onChange(r.path);
     setPicking(false);
   };
+
+  if (field.type === "list") {
+    // 저장된 값은 배열, 편집 중에는 줄바꿈 구분 문자열 — 서버가 저장 시 배열로 정규화한다.
+    const text = Array.isArray(value) ? value.join("\n") : (value ?? "");
+    const doPickAppend = async () => {
+      setPicking(true);
+      const r = await pickFolder("");
+      if (r.ok && r.path) onChange(text.trim() ? `${text.replace(/\s+$/, "")}\n${r.path}` : r.path);
+      setPicking(false);
+    };
+    return (
+      <div className="space-y-2">
+        <label className="text-sm font-medium text-brand-900">
+          {field.label}
+          {field.required && <span className="text-red-500 ml-0.5">*</span>}
+        </label>
+        <div className="flex items-stretch gap-2">
+          <textarea
+            value={text}
+            onChange={(e) => onChange(e.target.value)}
+            placeholder={field.placeholder || ""}
+            rows={3}
+            className="flex-1 px-3 py-2 bg-zinc-50 border border-zinc-200 rounded-lg outline-none focus:ring-2 focus:ring-brand-500 text-sm font-mono tracking-wide resize-y"
+          />
+          {showPicker && (
+            <button type="button" onClick={doPickAppend} disabled={picking}
+              className="flex items-center gap-1.5 px-3 bg-brand-50 text-brand-700 rounded-lg text-sm font-semibold hover:bg-brand-100 transition-all shrink-0 self-stretch"
+              title="폴더 추가">
+              {picking ? <Loader2 size={16} className="animate-spin" /> : <FolderOpen size={16} />}
+              <span className="hidden md:inline">폴더 추가</span>
+            </button>
+          )}
+        </div>
+        {field.desc && <p className="text-xs text-brand-400">{field.desc}</p>}
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-2">

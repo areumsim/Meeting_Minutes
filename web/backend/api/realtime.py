@@ -1,12 +1,18 @@
 """
-api/realtime.py — WebSocket 실시간 STT API
+api/realtime.py — 실시간 STT API (WebSocket 오디오 입력)
 
-브라우저에서 PCM16 24kHz 오디오를 WebSocket으로 전송하면,
-서버가 OpenAI Realtime WebSocket API로 포워딩하고
-트랜스크립트 결과를 실시간으로 돌려보냄.
+브라우저가 PCM16 24kHz 오디오를 WebSocket(/ws/realtime)으로 보내면 서버가 전사해
+결과를 실시간으로 돌려준다. 전사 경로는 config realtime.mode 로 결정된다:
+  - "http"(기본): 오디오를 청크로 잘라 stt.transcribe_chunk 로 전사(_run_http_fallback).
+      + 2단계 보정(two_pass): 빠른 패스로 조각을 즉시 표시하고, revise 워커가 윈도
+        단위로 재전사해 문장으로 교체. 빠른 패스는 stt_concurrency 만큼 병렬(순서 보장).
+  - "auto"/"ws": OpenAI Realtime WebSocket API로 포워딩(_run_ws_realtime).
+      실패 시 같은 오디오 스트림으로 http 청크 전사에 자동 폴백.
+안정·저비용이 기본(http)이며, 저지연이 필요하면 auto/ws 를 쓴다.
 """
 
 import os
+import re
 import json
 import asyncio
 import base64
@@ -28,6 +34,75 @@ router = APIRouter(tags=["realtime"])
 
 from meeting_minutes_app.common.text_filters import is_cjk_hallucination as _is_cjk_hallucination
 from meeting_minutes_app.common.realtime_ws_session import build_ws_session_config
+
+
+def _norm_tokens(s: str) -> List[str]:
+    """에코 비교용 정규화 토큰: 소문자 + 단어문자만(구두점 무시)."""
+    out = []
+    for w in (s or "").split():
+        t = re.sub(r"[^\w']+", "", w).lower()
+        if t:
+            out.append(t)
+    return out
+
+
+def _strip_prompt_echo(text: str, prompt: str, min_tokens: int = 3) -> str:
+    """전사 결과 앞머리가 문맥 prompt 꼬리를 그대로 반복(에코)하면 잘라낸다.
+
+    gpt-4o-transcribe 계열은 prompt 로 준 직전 문장을 출력에 되풀이하는 경우가
+    있어, 청크/보정 윈도마다 직전 내용이 중복 표시되는 원인이 된다. 구두점·
+    대소문자를 무시한 토큰열로 text 접두부와 prompt 접미부의 최장 일치를 찾아
+    제거한다(min_tokens 미만의 짧은 우연 일치는 무시). 전체가 에코면 "" 반환.
+    """
+    if not text or not prompt:
+        return text
+    t_words = text.split()
+    t_norm = _norm_tokens(text)
+    p_norm = _norm_tokens(prompt)
+    if len(t_norm) != len([w for w in t_words if _norm_tokens(w)]):
+        # 정규화로 사라지는 토큰(순수 구두점 단어)이 있으면 인덱스 매핑이 틀어짐 —
+        # 안전하게 원문 단어 기준으로 재구성한다.
+        t_words = [w for w in t_words if _norm_tokens(w)]
+    best = 0
+    for k in range(min(len(t_norm), len(p_norm)), min_tokens - 1, -1):
+        if t_norm[:k] == p_norm[-k:]:
+            best = k
+            break
+    if best == 0:
+        return text
+    return " ".join(t_words[best:]).strip()
+
+
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?。！？])\s+")
+
+
+def _split_sentences(text: str) -> List[str]:
+    """보정 윈도 텍스트를 문장 단위로 분할(에코 제거 후 재분할용)."""
+    return [s.strip() for s in _SENTENCE_SPLIT_RE.split(text or "") if s.strip()]
+
+
+def _allocate_timestamps(segs: List[Dict], t0: float, t1: float) -> None:
+    """보정 패스 문장들에 [t0, t1) 구간을 문자수 비례로 단조 배분(in-place).
+
+    _parse_json_simple 은 start=end=offset 만 주므로, 화면 정렬·구간 교체(revise)에
+    필요한 타임스탬프를 근사로 만든다. 정밀할 필요는 없고 단조 증가 + 경계 일치만
+    보장하면 된다(프런트 정렬·다음 윈도와의 경계 계산 용도).
+    """
+    if not segs:
+        return
+    if t1 <= t0:
+        for s in segs:
+            s["start"], s["end"] = t0, t0
+        return
+    total = sum(max(1, len(s.get("text") or "")) for s in segs)
+    pos = t0
+    span = t1 - t0
+    for s in segs:
+        w = max(1, len(s.get("text") or "")) / total
+        end = min(t1, pos + span * w)
+        s["start"], s["end"] = round(pos, 3), round(end, 3)
+        pos = end
+    segs[-1]["end"] = round(t1, 3)
 
 
 class BrowserRealtimeSession:
@@ -72,6 +147,11 @@ class BrowserRealtimeSession:
         # 메모리(약 173MB/시간)·STT 재호출 비용이 있어 기본 꺼짐.
         self._diarize_pp = False
         self._pcm = bytearray()
+        # 2-pass 보정(HTTP 청크 모드): 빠른 패스 조각을 윈도 단위로 재전사해 문장으로
+        # 교체한다. _pcm_base_sec 는 _pcm[0]이 세션 타임라인에서 갖는 시각(보정 완료
+        # 구간을 폐기하며 전진).
+        self._two_pass = False
+        self._pcm_base_sec = 0.0
 
     async def run(self):
         """메인 실행 루프."""
@@ -145,7 +225,7 @@ class BrowserRealtimeSession:
             # realtime.mode를 존중한다. "http"로 명시했으면(비용/지연/방화벽 등 이유로
             # WS를 쓰지 않으려는 의도) WS 시도 자체를 건너뛴다 — 과거엔 이 설정을
             # 무시하고 항상 WS부터 시도해 CLI와 다르게 동작했다.
-            realtime_mode = cfg.get("realtime.mode", "auto")
+            realtime_mode = cfg.get("realtime.mode", "http")
             if realtime_mode == "http":
                 await self._run_http_fallback(
                     openai_client, language, translate, translate_model,
@@ -401,21 +481,24 @@ class BrowserRealtimeSession:
                     start_sec, elapsed,
                 )
 
-            # 번역
-            if translate and language == "en" and final_text.strip():
+            # 영어(원문)를 번역 대기 없이 즉시 전송 — HTTP 경로와 동일하게 확정 문장을
+            # 먼저 보여주고 번역은 translation 이벤트로 뒤따라 붙는다.
+            # (과거엔 번역 완료까지 확정 세그먼트 전송을 미뤄 표시가 LLM 왕복만큼 늦었다)
+            self._send_to_browser({
+                "type": "segment",
+                "itemId": item_id,
+                "text": final_text,
+                "speaker": "",
+                "start": start_sec,
+                "end": elapsed,
+            })
+            # 번역 게이트: `language == "en"` 정확 일치는 auto 등에서 번역을 통째로
+            # 건너뛰었다 — HTTP 경로와 동일하게 '한국어만 아니면' 시도한다.
+            if translate and (language or "").strip().lower() != "ko" and final_text.strip():
                 self._translator_pool.submit(
                     self._translate_segment,
                     final_text, seg, openai_client, translate_model, topic,
                 )
-            else:
-                self._send_to_browser({
-                    "type": "segment",
-                    "itemId": item_id,
-                    "text": final_text,
-                    "speaker": "",
-                    "start": start_sec,
-                    "end": elapsed,
-                })
 
             # 실시간 Vault/웹 검색 (설정된 경우, 비차단)
             # vault 검색 게이트/스로틀은 RealtimeVaultSearcher 내부에서 처리
@@ -458,34 +541,83 @@ class BrowserRealtimeSession:
         )
         return r.choices[0].message.content.strip()
 
+    def _apply_revision(self, t0: float, t1: float, new_segs: List[Dict]) -> None:
+        """[t0, t1) 구간(start 기준)의 세그먼트를 보정본으로 교체(메모리).
+
+        빠른 패스 조각과 보정 문장의 경계가 정확히 일치하지 않아도 되도록
+        구간 시간 기반으로 걸러낸다. finalize 는 self.segments 를 그대로 쓰므로
+        여기서 교체해 두면 회의록도 보정본 기준이 된다.
+        """
+        with self._event_lock:
+            kept = [s for s in self.segments if not (t0 <= s.get("start", 0) < t1)]
+            self.segments = sorted(kept + list(new_segs), key=lambda s: s.get("start", 0))
+
+    def _translate_batch(self, texts: List[str], openai_client, translate_model, topic) -> List[str]:
+        """보정 윈도의 문장들을 chat 1회로 일괄 번역(문맥 일관·저비용).
+
+        반환 리스트 길이는 입력과 동일하게 맞춘다(부족분은 "" 패딩).
+        조각별 _translate_text N회 호출 대비 문장 간 문맥이 유지되고 호출 수가 준다.
+        """
+        from meeting_minutes_app.meeting_pipeline.json_utils import parse_json_loose
+        topic_hint = f"\n주제 맥락: {topic}" if topic else ""
+        numbered = "\n".join(f"{i + 1}. {t}" for i, t in enumerate(texts))
+        r = openai_client.chat.completions.create(
+            model=translate_model,
+            temperature=0.2,
+            messages=[
+                {"role": "system",
+                 "content": (f"전문 영한 번역가. 아래 번호 매긴 발화 각각을 자연스러운 한국어로 번역.{topic_hint}\n"
+                             "JSON 배열로만 출력: [\"번역1\", \"번역2\", ...] — 입력과 같은 개수·순서.\n"
+                             "반드시 한국어로만 출력.")},
+                {"role": "user", "content": numbered},
+            ],
+        )
+        raw = (r.choices[0].message.content or "").strip()
+        arr = parse_json_loose(raw, expect="list", default=None)
+        if not isinstance(arr, list):
+            raise ValueError("번역 응답 파싱 실패")
+        out = [str(x).strip() for x in arr][:len(texts)]
+        out += [""] * (len(texts) - len(out))
+        # LLM이 개수를 못 맞춰 비는 항목은 건별 번역으로 보충 — 과거엔 "" 패딩으로
+        # 일부 문장만 번역이 조용히 누락됐다. (이 함수는 워커 스레드에서 실행됨)
+        for i, (src, ko) in enumerate(zip(texts, out)):
+            if not ko and src.strip():
+                try:
+                    out[i] = self._translate_text(src, openai_client, translate_model, topic)
+                except Exception as _e:
+                    print(f"[translate-batch] 건별 보충 실패(영문 유지): {_e}")
+        return out
+
     def _translate_segment(self, text, seg, openai_client, translate_model, topic):
         """세그먼트 번역 (백그라운드 스레드).
 
         주의: 이는 실시간 '스트리밍' 번역(발화 1건씩 즉시)로, 배치용
-        meeting_minutes.translate_segments(전체 세그먼트를 컨텍스트 윈도우로 일괄 번역)와는
+        stt.translate_segments(전체 세그먼트를 컨텍스트 윈도우로 일괄 번역)와는
         실행 맥락이 다른 **의도된 별도 구현**이다. 둘을 통합하면 실시간 지연·스트리밍이 깨지므로
         합치지 말 것. (회의록 본문 생성 LLM은 config.models.llm을 따름 — 번역만 OpenAI 고정)
         """
         try:
             ko_text = self._translate_text(text, openai_client, translate_model, topic)
             seg["translated_text"] = ko_text
+            # DB에도 반영 — 과거엔 메모리/화면에만 채워져 세션을 다시 열면 번역이 사라졌다
+            if self.session_id:
+                try:
+                    db.update_segment_translation(self.session_id, seg["start"], ko_text)
+                except Exception as _de:
+                    print(f"[realtime] 번역 DB 반영 실패(표시는 유지): {_de}")
+            # 영어 세그먼트는 이미 전송됨 — 번역만 뒤따라 채운다(HTTP 경로와 동일 이벤트)
             self._send_to_browser({
-                "type": "segment",
-                "itemId": seg.get("item_id", ""),
-                "text": text,
-                "translatedText": ko_text,
-                "speaker": seg.get("speaker", ""),
+                "type": "translation",
                 "start": seg["start"],
                 "end": seg["end"],
+                "translatedText": ko_text,
             })
         except Exception as e:
             self._send_to_browser({
-                "type": "segment",
-                "itemId": seg.get("item_id", ""),
-                "text": text,
-                "speaker": seg.get("speaker", ""),
+                "type": "translation",
                 "start": seg["start"],
                 "end": seg["end"],
+                "translatedText": "",
                 "translateError": str(e),
             })
 
@@ -534,10 +666,18 @@ class BrowserRealtimeSession:
         loop = self._loop
         if loop is None or loop.is_closed():
             return
+
+        def _put():
+            # QueueFull은 콜백 안(루프 스레드)에서 발생한다 — call_soon_threadsafe 는
+            # 예약만 하므로 바깥 except 로는 절대 잡히지 않는다(과거 사문 코드 + 포화
+            # 시 이벤트마다 'Exception in callback' 트레이스백 스팸).
+            try:
+                self._send_queue.put_nowait(data)
+            except asyncio.QueueFull:
+                pass  # 큐 포화 시 최신 데이터 드롭 (오래된 데이터 유지가 더 나쁨)
+
         try:
-            loop.call_soon_threadsafe(self._send_queue.put_nowait, data)
-        except asyncio.QueueFull:
-            pass  # 큐 포화 시 최신 데이터 드롭 (오래된 데이터 유지가 더 나쁨)
+            loop.call_soon_threadsafe(_put)
         except Exception as e:
             print(f"[realtime] _send_to_browser 실패: {e}")
 
@@ -551,106 +691,516 @@ class BrowserRealtimeSession:
         self, openai_client, language, translate, translate_model,
         doc_type, topic, title, speakers, cfg,
     ):
-        """WebSocket 연결 실패 시 HTTP 청크 방식 폴백."""
-        stt_model = cfg.get("models.stt", "gpt-4o-mini-transcribe") or "gpt-4o-mini-transcribe"
+        """WebSocket 연결 실패 시(또는 config realtime.mode='http') HTTP 청크 방식 폴백.
+
+        전사는 배치와 동일한 공유 경로(stt.transcribe_chunk)를 재사용해 모델별로 올바른
+        response_format/파싱을 자동 적용한다 — 과거엔 여기만 별도 ad-hoc 호출
+        (response_format='text')이라 diarize 등 일부 모델에서 매 청크가 조용히 실패해
+        화면에 아무것도 안 뜨는 버그가 반복됐다. 실시간 청크에는 스트리밍 적합 평문
+        모델을 쓰고(화자분리는 종료 후 _diarize_postprocess가 담당), WS 경로와 동일한
+        normalize_ws_model 정책으로 정규화한다.
+        """
+        from meeting_minutes_app.common.realtime_ws_session import normalize_ws_model
+        from meeting_minutes_app.meeting_pipeline import stt
+
+        raw_model = cfg.get("models.stt", "gpt-4o-mini-transcribe") or "gpt-4o-mini-transcribe"
+        stt_model, _norm_reason = normalize_ws_model(raw_model)
+        if _norm_reason:
+            print(f"[http-stt] 모델 정규화: {raw_model} → {stt_model} ({_norm_reason})")
         await self.ws.send_json({"type": "fallback_http", "model": stt_model})
 
-        import io
         import wave
+        import tempfile
+        import array
+
+        SR = 24000
+        BYTES_PER_SEC = SR * 2          # int16 mono
+        MIN_CHUNK_SEC = 1.5             # 너무 잘게 자르지 않기 위한 하한
+        try:                            # 무음이 없어도 이 길이에서 강제 분할(지연 상한)
+            MAX_CHUNK_SEC = float(cfg.get("realtime.fast_max_chunk_sec", 5.0) or 5.0)
+        except (TypeError, ValueError):
+            MAX_CHUNK_SEC = 5.0
+        MAX_CHUNK_SEC = min(max(MAX_CHUNK_SEC, MIN_CHUNK_SEC), 30.0)
+        SILENCE_HOLD_SEC = 0.5          # 이만큼 조용하면 발화 경계로 보고 분할
+        try:                            # int16 RMS 임계값(이하=무음) — 마이크 게인이 낮으면
+            SILENCE_RMS = float(cfg.get("realtime.silence_rms", 300) or 300)
+        except (TypeError, ValueError):  # 발화도 무음 판정돼 1.5초 조각으로 잘게 잘리므로 조정 가능
+            SILENCE_RMS = 300.0
+        # 빠른 패스 STT 동시 실행 상한 — 1이면 완전 직렬(과거 동작). STT 왕복이 청크
+        # 길이보다 느린 환경(프록시 등)에서 직렬 처리는 지연이 세션 내내 누적된다.
+        # 전사는 병렬로 돌리되 화면 발행(emit)은 이벤트 체인으로 순서를 보장한다.
+        try:
+            STT_CONCURRENCY = int(cfg.get("realtime.stt_concurrency", 2) or 2)
+        except (TypeError, ValueError):
+            STT_CONCURRENCY = 2
+        STT_CONCURRENCY = min(max(STT_CONCURRENCY, 1), 4)
 
         audio_buffer = bytearray()
-        CHUNK_SAMPLES = 24000 * 5  # 5초 분량 (24kHz)
-        CHUNK_BYTES = CHUNK_SAMPLES * 2  # int16 = 2 bytes
+        audio_pos_sec = 0.0             # 큐로 보낸 오디오 누적 길이(세그먼트 타임스탬프 기준)
+        silence_sec = 0.0               # 현재 버퍼 끝의 연속 무음 길이
+        stt_fail_streak = 0             # 연속 STT 실패 카운트 (조용한 실패 방지)
+        stt_notified = False            # 사용자 통지는 1회만
+        prompt_tail = ""                # 직전 전사 꼬리 — 청크 STT의 문맥 prompt(환각·경계 유실 감소)
+
+        # STT는 단일 소비자 태스크에서만 수행한다 → 수신 루프가 STT로 절대 막히지 않아
+        # 연속 발화 중에도 오디오를 계속 받아들인다(과거엔 수신 루프에서 STT를 await해
+        # 처리 중 들어온 소리가 밀리고 5초 하드 컷으로 경계 단어가 누락됐다).
+        stt_queue: asyncio.Queue = asyncio.Queue(maxsize=32)
+        emitted_pos_sec = 0.0           # 빠른 패스가 emit 완료한 오디오 시각(보정 순서 보장용)
+        consumer_done = False
+
+        # ── 2-pass 보정 설정 ──
+        # 빠른 패스는 조각을 즉시 표시하고(provisional), 보정 패스가 윈도 단위로
+        # 재전사해 문장으로 교체한다("최종 STT는 수정 한 번").
+        self._two_pass = bool(cfg.get("realtime.two_pass", True))
+        try:
+            REVISE_WINDOW_SEC = float(cfg.get("realtime.revise_window_sec", 25.0) or 25.0)
+        except (TypeError, ValueError):
+            REVISE_WINDOW_SEC = 25.0
+        REVISE_WINDOW_SEC = min(max(REVISE_WINDOW_SEC, 10.0), 120.0)
+        _revise_raw = cfg.get("realtime.revise_model", "gpt-4o-transcribe") or "gpt-4o-transcribe"
+        revise_model, _rv_reason = normalize_ws_model(_revise_raw)  # diarize 등 부적합 모델 방지
+        revise_pos_sec = 0.0            # 여기까지 보정 윈도 발행됨
+        revise_queue: asyncio.Queue = asyncio.Queue(maxsize=4)
+        # 번역 게이트: 기존 `language == "en"` 정확 일치는 auto 등에서 번역을 통째로
+        # 건너뛰었다. 한국어 발화만 아니면 시도한다(_translate_text 는 한국어만 출력).
+        translate_enabled = bool(translate) and (language or "").strip().lower() != "ko"
+        translate_sem = asyncio.Semaphore(2)  # 빠른 패스 번역 동시 실행 상한
+        fast_tr_tasks: set = set()            # 진행 중 번역 태스크(종료 시 드레인)
+
+        def _frame_rms(b: bytes) -> float:
+            n = (len(b) // 2) * 2
+            if n <= 0:
+                return 0.0
+            a = array.array("h")
+            a.frombytes(bytes(b[:n]))
+            if not a:
+                return 0.0
+            return (sum(v * v for v in a) / len(a)) ** 0.5
+
+        def _write_wav(chunk_bytes: bytes) -> str:
+            tmp_wav = tempfile.NamedTemporaryFile(
+                prefix="mm_rt_chunk_", suffix=".wav", delete=False)
+            tmp_path = tmp_wav.name
+            tmp_wav.close()
+            with wave.open(tmp_path, "wb") as wf:
+                wf.setnchannels(1)
+                wf.setsampwidth(2)
+                wf.setframerate(SR)
+                wf.writeframes(chunk_bytes)
+            return tmp_path
+
+        async def _translate_fast(seg: dict):
+            """빠른 패스 세그먼트의 비동기 번역 — 완료되면 translation 이벤트로 갱신.
+
+            과거엔 번역을 이벤트 루프에서 동기 호출해 번역이 도는 동안 수신·STT까지
+            전부 멈췄고, 영어 표시도 번역 완료까지 지연됐다. 이제 영어를 먼저 보내고
+            번역은 뒤따라 붙인다. 실패해도 영어 표시는 유지(보정 패스가 재번역).
+            """
+            async with translate_sem:
+                for attempt in (1, 2):
+                    try:
+                        ko = await asyncio.to_thread(
+                            self._translate_text, seg["text"],
+                            openai_client, translate_model, topic)
+                        seg["translated_text"] = ko
+                        await self.ws.send_json({
+                            "type": "translation",
+                            "start": seg["start"], "end": seg["end"],
+                            "translatedText": ko,
+                        })
+                        return
+                    except Exception as _te:
+                        if attempt == 2:
+                            print(f"[fast-translate] 포기(영어 표시 유지): {_te}")
+
+        async def _transcribe_chunk_bytes(chunk_bytes: bytes, c_start: float) -> str:
+            """청크 STT — 병렬 실행 가능 구간(emit 은 별도 순서 보장).
+
+            배치와 동일한 model-aware 전사 경로 재사용(blocking → to_thread).
+            직전 전사 꼬리를 prompt 로 전달해 경계 오인식·언어 환각을 줄인다.
+            (동시 실행 중엔 문맥이 한 청크 전 것일 수 있다 — 힌트 용도라 무해.)
+            """
+            tmp_path = _write_wav(chunk_bytes)
+            used_prompt = prompt_tail
+            try:
+                try:
+                    segs = await asyncio.to_thread(
+                        stt.transcribe_chunk,
+                        openai_client, tmp_path, stt_model,
+                        language if language != "auto" else None,
+                        None, c_start, prompt=used_prompt or None,
+                    )
+                except Exception as _e1:
+                    # 폴백 모델 1회 재시도 — 과거엔 청크 예외 시 텍스트가 조용히
+                    # 소실됐다(run_stt 의 폴백 로직을 우회하는 경로라서).
+                    fb = stt.FALLBACK_STT_MODEL
+                    if fb and fb != stt_model:
+                        print(f"[http-stt] {stt_model} 실패 → {fb} 재시도: {_e1}")
+                        segs = await asyncio.to_thread(
+                            stt.transcribe_chunk,
+                            openai_client, tmp_path, fb,
+                            language if language != "auto" else None,
+                            None, c_start, prompt=used_prompt or None,
+                        )
+                    else:
+                        raise
+                text = " ".join(
+                    (s.get("text") or "").strip() for s in segs
+                    if (s.get("text") or "").strip()
+                ).strip()
+                # 모델이 prompt(직전 문장)를 출력에 되풀이하면 그 부분을 제거 —
+                # 화면에 같은 문장이 청크마다 중복되는 원인.
+                return _strip_prompt_echo(text, used_prompt)
+            finally:
+                try:
+                    os.remove(tmp_path)
+                except OSError:
+                    pass
+
+        async def _emit_text(text: str, c_start: float, c_end: float):
+            """전사 결과 발행 — 메모리/DB 기록, 화면 전송, 번역·vault 검색 트리거."""
+            nonlocal prompt_tail
+            if not text or _is_cjk_hallucination(text):
+                return
+            seg = {
+                "start": c_start, "end": c_end, "text": text,
+                "text_original": text, "speaker": "",
+            }
+            with self._event_lock:
+                self.segments.append(seg)
+            if self.session_id:
+                db.add_segment(self.session_id, "", text, c_start, c_end)
+            prompt_tail = f"{prompt_tail} {text}"[-200:]
+            # 영어(원문)를 번역 대기 없이 즉시 전송 — provisional 은 보정 패스가
+            # 나중에 문장으로 교체할 수 있음을 프런트에 알린다(흐린 표시).
+            await self.ws.send_json({
+                "type": "segment", "text": text, "translatedText": "",
+                "speaker": "", "start": c_start, "end": c_end,
+                "provisional": bool(self._two_pass),
+            })
+            if translate_enabled:
+                _t = asyncio.create_task(_translate_fast(seg))
+                fast_tr_tasks.add(_t)
+                _t.add_done_callback(fast_tr_tasks.discard)
+            if self._searcher is not None:
+                self._searcher.offer_segment(text)
+
+        stt_sem = asyncio.Semaphore(STT_CONCURRENCY)
+        stt_workers: set = set()
+
+        async def _stt_worker(chunk_bytes: bytes, c_start: float, c_end: float,
+                              prev_ev: Optional[asyncio.Event], my_ev: asyncio.Event):
+            """전사는 즉시(병렬), emit 은 직전 청크 완료 후(이벤트 체인) 수행.
+
+            과거엔 소비자 1개가 전사→emit 을 직렬 수행해, STT 왕복이 청크 길이보다
+            느린 환경에선 큐가 계속 쌓여 화면 표시가 세션 내내 뒤로 밀렸다.
+            """
+            nonlocal stt_fail_streak, stt_notified, emitted_pos_sec
+            text: Optional[str] = None
+            err: Optional[Exception] = None
+            # 직전 청크가 곧 끝나면 잠깐 기다려 그 문맥(prompt)을 그대로 잇는다 —
+            # STT가 빠른 평시엔 직렬과 동일하게 문맥이 이어지고, STT가 밀리는 환경에선
+            # 문맥 없이 병렬 전사한다(문맥은 정확도 힌트일 뿐, 지연 누적 방지가 우선).
+            if prev_ev is not None and not prev_ev.is_set():
+                try:
+                    await asyncio.wait_for(prev_ev.wait(), timeout=0.75)
+                except asyncio.TimeoutError:
+                    pass
+            try:
+                text = await _transcribe_chunk_bytes(chunk_bytes, c_start)
+            except Exception as e:
+                err = e
+            # 직전 청크가 emit 을 끝낸 뒤에만 발행 — 화면/문맥/보정 순서 보장
+            if prev_ev is not None:
+                await prev_ev.wait()
+            try:
+                if err is not None:
+                    stt_fail_streak += 1
+                    print(f"[http-stt] error: {err}")
+                    if stt_fail_streak >= 2 and not stt_notified:
+                        stt_notified = True
+                        try:
+                            await self.ws.send_json(
+                                {"type": "error", "message": f"전사 실패: {err}"})
+                        except Exception:
+                            pass
+                else:
+                    stt_fail_streak = 0
+                    await _emit_text(text or "", c_start, c_end)
+            except Exception:
+                traceback.print_exc()
+            finally:
+                # 실패해도 전진 — 보정 워커가 이 시각을 기다린다(영구 대기 방지)
+                emitted_pos_sec = c_end
+                my_ev.set()
+
+        async def _consumer():
+            nonlocal consumer_done
+            prev_ev: Optional[asyncio.Event] = None
+            while True:
+                item = await stt_queue.get()
+                try:
+                    if item is None:
+                        # 진행 중인 워커가 모두 emit 을 끝낼 때까지 대기
+                        if prev_ev is not None:
+                            await prev_ev.wait()
+                        consumer_done = True
+                        return
+                    await stt_sem.acquire()
+                    ev = asyncio.Event()
+                    t = asyncio.create_task(_stt_worker(item[0], item[1], item[2], prev_ev, ev))
+                    t.add_done_callback(lambda _t: stt_sem.release())
+                    stt_workers.add(t)
+                    t.add_done_callback(stt_workers.discard)
+                    prev_ev = ev
+                finally:
+                    stt_queue.task_done()
+
+        async def _flush_chunk():
+            nonlocal audio_buffer, audio_pos_sec, silence_sec
+            if not audio_buffer:
+                return
+            dur = len(audio_buffer) / BYTES_PER_SEC
+            c_start = audio_pos_sec
+            audio_pos_sec += dur
+            await stt_queue.put((bytes(audio_buffer), c_start, audio_pos_sec))
+            audio_buffer = bytearray()
+            silence_sec = 0.0
+
+        def _maybe_queue_revision():
+            """flush 경계(=세그먼트 경계)에서 보정 윈도가 찼으면 발행.
+
+            큐 포화 시 발행을 미룬다(revise_pos_sec 유지) → 다음 flush 에서 더 큰
+            윈도로 재시도되어 구간이 누락되지 않는다.
+            """
+            nonlocal revise_pos_sec
+            if not self._two_pass:
+                return
+            if (audio_pos_sec - revise_pos_sec) >= REVISE_WINDOW_SEC:
+                try:
+                    revise_queue.put_nowait((revise_pos_sec, audio_pos_sec))
+                    revise_pos_sec = audio_pos_sec
+                except asyncio.QueueFull:
+                    pass
+
+        async def _revise_worker():
+            """보정 패스: 윈도 [t0,t1) PCM 을 풀 모델+문맥 prompt 로 재전사해
+            빠른 패스 조각을 문장 세그먼트로 제자리 교체(메모리+DB+화면)."""
+            nonlocal prompt_tail
+            revise_tail = ""  # 보정 패스 전용 문맥(보정 텍스트가 더 정확)
+            while True:
+                item = await revise_queue.get()
+                try:
+                    if item is None:
+                        return
+                    t0, t1 = item
+                    # 빠른 패스가 이 구간을 다 emit할 때까지 대기 — 교체 후에 조각이
+                    # 다시 append 되는 역전 방지. consumer 종료 시엔 즉시 진행.
+                    while emitted_pos_sec < t1 and not consumer_done:
+                        await asyncio.sleep(0.2)
+                    b0 = max(0, int((t0 - self._pcm_base_sec) * BYTES_PER_SEC)) & ~1
+                    b1 = max(0, int((t1 - self._pcm_base_sec) * BYTES_PER_SEC)) & ~1
+                    chunk = bytes(self._pcm[b0:b1])
+                    if len(chunk) < BYTES_PER_SEC:  # 1초 미만은 보정 실익 없음
+                        continue
+                    tmp_path = _write_wav(chunk)
+                    try:
+                        segs = await asyncio.to_thread(
+                            stt.transcribe_chunk,
+                            openai_client, tmp_path, revise_model,
+                            language if language != "auto" else None,
+                            None, t0, prompt=revise_tail or None,
+                        )
+                    except Exception as e:
+                        print(f"[revise] STT 실패(빠른 패스 결과 유지): {e}")
+                        continue
+                    finally:
+                        try:
+                            os.remove(tmp_path)
+                        except OSError:
+                            pass
+                    joined = " ".join(
+                        (s.get("text") or "").strip() for s in segs
+                        if (s.get("text") or "").strip()
+                    ).strip()
+                    # prompt(직전 윈도 문장) 에코 제거 후 문장 단위로 재분할 —
+                    # 에코가 남으면 보정 결과가 이전 윈도 내용까지 중복 포함한다.
+                    joined = _strip_prompt_echo(joined, revise_tail)
+                    sentences = [t for t in _split_sentences(joined)
+                                 if not _is_cjk_hallucination(t)]
+                    if not sentences:
+                        continue  # 빈/환각/전체-에코 결과면 교체하지 않음(안전)
+                    segs = [{"text": t} for t in sentences]
+                    _allocate_timestamps(segs, t0, t1)
+                    revise_tail = " ".join(s["text"] for s in segs)[-200:]
+                    prompt_tail = revise_tail  # 빠른 패스 문맥도 보정 텍스트로 갱신
+                    new_segs = [{
+                        "start": s["start"], "end": s["end"],
+                        "text": s["text"], "text_original": s["text"],
+                        "speaker": "",
+                    } for s in segs]
+                    self._apply_revision(t0, t1, new_segs)
+                    if self.session_id:
+                        db.replace_segments_range(self.session_id, t0, t1, new_segs)
+                    await self.ws.send_json({
+                        "type": "revise", "fromTime": t0, "toTime": t1,
+                        "segments": [{"text": s["text"], "translatedText": "",
+                                      "speaker": "", "start": s["start"], "end": s["end"]}
+                                     for s in new_segs],
+                    })
+                    # 보정 문장 기준 번역(윈도당 chat 1회) → 번역 포함 revise 재전송
+                    if translate_enabled:
+                        try:
+                            kos = await asyncio.to_thread(
+                                self._translate_batch,
+                                [s["text"] for s in new_segs],
+                                openai_client, translate_model, topic)
+                            for s, ko in zip(new_segs, kos):
+                                s["translated_text"] = ko
+                            if self.session_id:
+                                db.replace_segments_range(self.session_id, t0, t1, new_segs)
+                            await self.ws.send_json({
+                                "type": "revise", "fromTime": t0, "toTime": t1,
+                                "segments": [{"text": s["text"],
+                                              "translatedText": s.get("translated_text", ""),
+                                              "speaker": "", "start": s["start"], "end": s["end"]}
+                                             for s in new_segs],
+                            })
+                        except Exception as e:
+                            print(f"[revise-translate] 실패(영문 유지): {e}")
+                    # 메모리 관리: diarize 후처리가 전체 PCM 을 쓰지 않는 한, 보정이
+                    # 끝난 구간은 폐기(유지량 ≈ 윈도 2개, 수 MB).
+                    if not self._diarize_pp:
+                        drop = max(0, int((t1 - self._pcm_base_sec) * BYTES_PER_SEC)) & ~1
+                        del self._pcm[:drop]
+                        self._pcm_base_sec = t1
+                except Exception:
+                    traceback.print_exc()  # 워커는 어떤 예외에도 죽지 않는다
+                finally:
+                    revise_queue.task_done()
+
+        consumer_task = asyncio.create_task(_consumer())
+        revise_task = asyncio.create_task(_revise_worker()) if self._two_pass else None
+        cancelled = False  # 사용자가 '저장 안 하고 취소'를 눌렀는지
 
         try:
             while not self._stop:
                 try:
                     data = await asyncio.wait_for(self.ws.receive(), timeout=1.0)
                 except asyncio.TimeoutError:
+                    # 수신이 잠시 끊긴(일시정지 등) 동안 남은 버퍼가 있으면 flush
+                    if audio_buffer and (len(audio_buffer) / BYTES_PER_SEC) >= MIN_CHUNK_SEC:
+                        await _flush_chunk()
+                        _maybe_queue_revision()
                     continue
                 except WebSocketDisconnect:
                     break
 
+                _b = None
                 if "bytes" in data and data["bytes"]:
-                    audio_buffer.extend(data["bytes"])
-                    if self._diarize_pp:
-                        self._pcm.extend(data["bytes"])
+                    _b = data["bytes"]
                 elif "text" in data and data["text"]:
                     msg = json.loads(data["text"])
                     if msg.get("type") == "stop":
                         break
+                    elif msg.get("type") == "cancel":
+                        cancelled = True
+                        break
                     elif msg.get("type") == "audio":
                         _b = base64.b64decode(msg["data"])
-                        audio_buffer.extend(_b)
-                        if self._diarize_pp:
-                            self._pcm.extend(_b)
 
-                # 충분한 오디오가 모이면 STT 호출
-                if len(audio_buffer) >= CHUNK_BYTES:
-                    chunk = bytes(audio_buffer[:CHUNK_BYTES])
-                    audio_buffer = audio_buffer[CHUNK_BYTES:]
+                if _b:
+                    audio_buffer.extend(_b)
+                    if self._diarize_pp or self._two_pass:
+                        self._pcm.extend(_b)
+                    # 무음 지속시간 추적(발화 경계 감지)
+                    fsec = (len(_b) // 2) / SR
+                    silence_sec = silence_sec + fsec if _frame_rms(_b) < SILENCE_RMS else 0.0
 
-                    # PCM16 → WAV 변환
-                    wav_buf = io.BytesIO()
-                    with wave.open(wav_buf, "wb") as wf:
-                        wf.setnchannels(1)
-                        wf.setsampwidth(2)
-                        wf.setframerate(24000)
-                        wf.writeframes(chunk)
-                    wav_buf.seek(0)
-                    wav_buf.name = "chunk.wav"
-
-                    try:
-                        result = openai_client.audio.transcriptions.create(
-                            model=stt_model,
-                            file=wav_buf,
-                            language=language if language != "auto" else None,
-                            response_format="text",
-                        )
-                        text = result.strip() if isinstance(result, str) else result.text.strip()
-                        if text and not _is_cjk_hallucination(text):
-                            elapsed = time.time() - self._session_start
-                            seg = {
-                                "start": max(0, elapsed - 5),
-                                "end": elapsed,
-                                "text": text,
-                                "text_original": text,
-                                "speaker": "",
-                            }
-                            self.segments.append(seg)
-                            if self.session_id:
-                                db.add_segment(self.session_id, "", text, seg["start"], seg["end"])
-                            # 실시간 번역(영→한): WS 경로와 동일 게이트. HTTP 청크 모드도
-                            # 청크마다 번역해 한국어를 즉시 함께 보낸다(과거엔 번역이 최종
-                            # 회의록에만 있고 실시간 화면엔 영어만 떴다).
-                            translated = ""
-                            if translate and language == "en":
-                                try:
-                                    translated = self._translate_text(
-                                        text, openai_client, translate_model, topic)
-                                    seg["translated_text"] = translated
-                                except Exception as _te:
-                                    print(f"[http-translate] error: {_te}")
-                            await self.ws.send_json({
-                                "type": "segment",
-                                "text": text,
-                                "translatedText": translated,
-                                "speaker": "",
-                                "start": seg["start"],
-                                "end": seg["end"],
-                            })
-                            # 실시간 vault 검색 (WS 모드와 동일 게이트/스로틀)
-                            if self._searcher is not None:
-                                self._searcher.offer_segment(text)
-                    except Exception as e:
-                        print(f"[http-stt] error: {e}")
-
+                    buf_sec = len(audio_buffer) / BYTES_PER_SEC
+                    # 발화 경계(무음)에서 자르거나, 무음이 없어도 최대 길이에서 강제 분할
+                    if buf_sec >= MAX_CHUNK_SEC or (
+                        buf_sec >= MIN_CHUNK_SEC and silence_sec >= SILENCE_HOLD_SEC
+                    ):
+                        await _flush_chunk()
+                        _maybe_queue_revision()
         except WebSocketDisconnect:
             pass
+
+        if cancelled:
+            # 취소: 회의록을 만들지 않고 세션·진행물을 버린다(새 녹음 즉시 시작용).
+            _cancel_targets = [consumer_task, revise_task,
+                               *list(fast_tr_tasks), *list(stt_workers)]
+            for t in _cancel_targets:
+                if t is not None:
+                    t.cancel()
+            await asyncio.gather(
+                *[t for t in _cancel_targets if t is not None],
+                return_exceptions=True,
+            )
+            # HTTP 경로 전용 종료 — 스레드풀을 여기서도 정리(과거 WS 경로만 정리해 누수)
+            self._translator_pool.shutdown(wait=False, cancel_futures=True)
+            self._web_pool.shutdown(wait=False, cancel_futures=True)
+            if self.session_id:
+                try:
+                    db.delete_session(self.session_id)
+                except Exception:
+                    db.update_session_status(self.session_id, "error",
+                                             error_detail="사용자 취소")
+                self.session_id = None
+            if self._searcher is not None:
+                try:
+                    self._searcher.shutdown(wait=False)
+                except Exception:
+                    pass
+            try:
+                await self.ws.send_json({
+                    "type": "cancelled",
+                    "message": "녹음을 저장하지 않고 종료했습니다.",
+                })
+            except Exception:
+                pass
+            print("[realtime] 세션 취소 — 저장 없이 종료")
+            return
+
+        # 종료: 남은 버퍼를 반드시 마지막 청크로 flush한 뒤 소비자를 드레인한다
+        # (과거엔 5초 미만 잔여분이 버려져 발화 끝이 누락됐다).
+        await _flush_chunk()
+        await stt_queue.put(None)
+        try:
+            await consumer_task
+        except Exception:
+            traceback.print_exc()
+
+        # 빠른 패스 번역 잔여 태스크 드레인 — 종료 직전 세그먼트의 번역 유실 방지
+        if fast_tr_tasks:
+            await asyncio.gather(*list(fast_tr_tasks), return_exceptions=True)
+
+        # 보정 패스 드레인: 아직 보정되지 않은 꼬리 구간(>0.5s)을 마지막 윈도로 발행하고
+        # 워커가 남은 윈도·번역까지 끝내길 기다린다 — 회의록은 보정본 기준이어야 하므로.
+        if revise_task is not None:
+            tail_pending = (audio_pos_sec - revise_pos_sec) > 0.5
+            if tail_pending or not revise_queue.empty():
+                try:
+                    await self.ws.send_json({"type": "status", "message": "전사 보정 중..."})
+                except Exception:
+                    pass
+            if tail_pending:
+                await revise_queue.put((revise_pos_sec, audio_pos_sec))
+            await revise_queue.put(None)
+            try:
+                await revise_task
+            except Exception:
+                traceback.print_exc()
 
         # vault 검색 drain — _finalize()의 collected_notes() 완결성 보장 (WS 경로와 동일)
         if self._searcher is not None:
             self._searcher.shutdown(wait=True)
+
+        # 스레드풀 정리 — 과거엔 WS 경로만 shutdown 해 HTTP 세션마다 유휴 스레드가 누적됐다
+        self._translator_pool.shutdown(wait=True, cancel_futures=False)
+        self._web_pool.shutdown(wait=True, cancel_futures=False)
 
         await self._finalize(
             openai_client, language, translate, doc_type, topic, title,
@@ -709,6 +1259,15 @@ class BrowserRealtimeSession:
         if not segments_snapshot or not self.session_id:
             # 세그먼트가 하나도 없는 세션(연결만 하고 발화 없이 종료)은 문서·전사가
             # 전혀 없어 대시보드에 빈 행으로만 남는다 → 'completed'로 두지 말고 삭제.
+            # 단, 반드시 종료 이벤트를 먼저 보낸다 — 안 그러면 프런트가 completed만
+            # 기다리며 영구 대기('문서 생성 중')한다(이동 안 됨 버그의 한 원인).
+            try:
+                await self.ws.send_json({
+                    "type": "empty",
+                    "message": "음성이 감지되지 않아 저장할 내용이 없습니다.",
+                })
+            except Exception:
+                pass  # 소켓이 이미 죽었어도 아래 정리는 진행
             if self.session_id:
                 try:
                     db.delete_session(self.session_id)
@@ -737,7 +1296,12 @@ class BrowserRealtimeSession:
             except Exception as e:
                 print(f"[diarize-pp] 실패(원본 유지): {e}")
 
-        await self.ws.send_json({"type": "generating", "message": "회의록 생성 중..."})
+        # 클라이언트가 '백그라운드로 두고 새 녹음'으로 이미 떠났어도(소켓 닫힘)
+        # 생성은 계속돼야 한다 — 전송 실패로 finalize 가 중단되지 않게 감싼다.
+        try:
+            await self.ws.send_json({"type": "generating", "message": "회의록 생성 중..."})
+        except Exception:
+            pass
 
         # 본 큐 소비자는 stop 시 취소됨 — finalize 동안 상태 이벤트를 흘려보내기
         # 위해 소비자를 재가동한다 (run_post_session은 워커 스레드에서 실행).
@@ -775,11 +1339,10 @@ class BrowserRealtimeSession:
                     f"- {f['result'][:200]}" for f in _web_findings[:3]))
 
             # 산출물 폴더: output/web_realtime_{session_id}
-            from meeting_minutes_app.common import config_loader as _rc2
-            out_root = Path(str(_rc2.get("output_dir", "output") or "output"))
-            if not out_root.is_absolute():
-                out_root = Path.cwd() / out_root
-            session_out = out_root / f"web_realtime_{self.session_id}"
+            # (상대경로를 CWD가 아닌 데이터 베이스 기준으로 해석하는 공용 로직 사용 —
+            # 다른 엔트리포인트로 실행돼 CWD가 다르면 산출물이 엉뚱한 곳에 생겼다)
+            from meeting_minutes_app.common.app_paths import get_output_dir as _god
+            session_out = _god() / f"web_realtime_{self.session_id}"
 
             class _WebEvents(fz.FinalizeEvents):
                 """finalize 산출물 → SQLite documents + WS 이벤트."""
@@ -824,17 +1387,25 @@ class BrowserRealtimeSession:
             await asyncio.to_thread(fz.run_post_session, inputs, options, _WebEvents())
 
             duration = self.segments[-1]["end"] - self.segments[0]["start"] if self.segments else 0
+            # output_dir 기록 필수 — 없으면 startup 폴더 스캐너가 web_realtime_{id}/ 를
+            # '미등록 CLI 산출물'로 보고 재시작마다 중복 세션을 만들어냈다.
             db.update_session_status(
                 self.session_id, "completed",
                 duration_sec=duration,
+                output_dir=str(session_out),
             )
 
-            await self.ws.send_json({
-                "type": "completed",
-                "sessionId": self.session_id,
-                "segmentCount": len(self.segments),
-                "duration": duration,
-            })
+            # 소켓이 이미 닫혔어도 세션은 방금 completed 로 저장 완료 — 전송 실패가
+            # except 로 흘러 성공한 세션을 error 로 뒤집지 않게 별도로 감싼다.
+            try:
+                await self.ws.send_json({
+                    "type": "completed",
+                    "sessionId": self.session_id,
+                    "segmentCount": len(self.segments),
+                    "duration": duration,
+                })
+            except Exception:
+                pass
 
         except Exception as e:
             traceback.print_exc()

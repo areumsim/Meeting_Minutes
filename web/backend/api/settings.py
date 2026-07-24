@@ -21,7 +21,7 @@ CONFIG_PATH = Path(EXE_DIR) / "config.json"
 #  해당 섹션 저장이 422로 막히는 버그가 반복됐다. 새 기능 섹션은 example 에만 추가하면 됨.)
 _ALLOWED_FALLBACK = {
     "api", "models", "realtime", "email", "obsidian",
-    "indexing", "wiki", "wiki_knowledge", "notify", "ssl",
+    "indexing", "wiki", "wiki_knowledge", "notify", "ssl", "server",
     "output_dir", "vault_watcher", "mcp", "supermemory", "analysis",
 }
 
@@ -84,6 +84,14 @@ def _coerce_value(field: dict, value):
         if valid and value not in valid:
             raise ValueError(f"'{label}' 에 허용되지 않는 값: {value!r} (허용: {sorted(valid)})")
         return value
+    if ftype == "list":
+        # 폼은 줄바꿈 구분 문자열로 보낼 수 있다(예: 감시할 폴더 목록 textarea).
+        # 빈 줄/공백은 걸러 문자열 리스트로 정규화한다.
+        if isinstance(value, list):
+            return [str(x).strip() for x in value if str(x).strip()]
+        if isinstance(value, str):
+            return [p.strip() for p in value.replace("\r", "").split("\n") if p.strip()]
+        raise ValueError(f"'{label}' 값은 목록(또는 줄바꿈 구분 문자열)이어야 합니다.")
     return value
 
 
@@ -239,6 +247,17 @@ def update_config(data: dict):
     return {"success": True}
 
 
+def _conn_fail_message(e: Exception) -> str:
+    """연결 테스트 실패 메시지 — SSL 검증 실패면 비개발자용 해결 안내를 덧붙인다."""
+    msg = str(e)
+    if "CERTIFICATE_VERIFY_FAILED" in msg or "certificate verify failed" in msg.lower():
+        return ("연결 실패: 회사망 SSL 검사로 인증서 확인이 실패했습니다. "
+                "PC에 회사 인증서가 설치돼 있으면 앱을 재시작해 보세요. "
+                "그래도 안 되면 [설정] → API 키 → 'SSL 인증서 검증'을 끄고 다시 시도하세요. "
+                f"(상세: {msg[:120]})")
+    return f"연결 실패: {msg}"
+
+
 @router.post("/config/test/openai")
 def test_openai():
     """저장된 OpenAI 키의 유효성을 가볍게 확인(모델 목록 조회). 키는 응답에 포함하지 않음."""
@@ -266,7 +285,7 @@ def test_openai():
             return {"ok": False, "message": "API 키가 유효하지 않습니다 (401 인증 실패)."}
         return {"ok": False, "message": f"OpenAI 응답 오류 ({resp.status_code})."}
     except Exception as e:
-        return {"ok": False, "message": f"연결 실패: {e}"}
+        return {"ok": False, "message": _conn_fail_message(e)}
 
 
 @router.post("/config/test/anthropic")
@@ -297,7 +316,7 @@ def test_anthropic():
             return {"ok": False, "message": "API 키가 유효하지 않습니다 (401 인증 실패)."}
         return {"ok": False, "message": f"Anthropic 응답 오류 ({resp.status_code})."}
     except Exception as e:
-        return {"ok": False, "message": f"연결 실패: {e}"}
+        return {"ok": False, "message": _conn_fail_message(e)}
 
 
 @router.post("/config/test/email")

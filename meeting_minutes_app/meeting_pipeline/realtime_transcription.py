@@ -173,6 +173,20 @@ STT_MODELS = [
 DEFAULT_STT_MODEL       = _c("models.stt",            "gpt-4o-mini-transcribe") or "gpt-4o-mini-transcribe"
 DEFAULT_TRANSLATE_MODEL = _c("models.translate_model", "gpt-4o-mini") or "gpt-4o-mini"
 
+
+def _refresh_config_globals() -> None:
+    """config_loader.reload() 훅 — 웹 UI 설정 저장 시 재시작 없이
+    모델/키/SSL 전역을 갱신한다(meeting_minutes 훅이 먼저 실행됨)."""
+    global DEFAULT_STT_MODEL, DEFAULT_TRANSLATE_MODEL, OPENAI_API_KEY, SSL_VERIFY
+    DEFAULT_STT_MODEL       = _c("models.stt",            "gpt-4o-mini-transcribe") or "gpt-4o-mini-transcribe"
+    DEFAULT_TRANSLATE_MODEL = _c("models.translate_model", "gpt-4o-mini") or "gpt-4o-mini"
+    OPENAI_API_KEY = _mm.OPENAI_API_KEY
+    SSL_VERIFY = _mm.SSL_VERIFY
+
+
+if _cfg_ok:
+    _cfg_mod.on_reload(_refresh_config_globals)
+
 # 비용 단가 — common/pricing.py 단일 소스 사용 (과거 이 파일에만 2벌 복사돼 있었음)
 from meeting_minutes_app.common.pricing import (
     STT_PRICE_PER_MIN as _STT_PRICE_TABLE,
@@ -2071,7 +2085,7 @@ def main():
     )
     parser.add_argument("--type", default=_c("realtime.type", "meeting"),
                         choices=["meeting", "seminar", "lecture"])
-    parser.add_argument("--language", default=_c("realtime.language", "ko"),
+    parser.add_argument("--language", default=_c("realtime.language", "en"),
                         choices=["en", "ko"],
                         help="입력 언어 (en=영어, ko=한국어)")
     parser.add_argument("--model", default=DEFAULT_STT_MODEL, choices=STT_MODELS)

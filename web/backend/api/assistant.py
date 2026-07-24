@@ -232,6 +232,9 @@ _va = _VaultAudioState()
 class VaultAudioReq(BaseModel):
     dry_run: bool = False
     only_audio: str = ""
+    # 완료 알림 채널("email"/"slack"/"teams"). 비우면 notify.on_finish 설정을 따른다.
+    # run_vault_audio_email.bat(`vault-audio --notify email`)과 동등 기능.
+    notify: str = ""
 
 
 @router.post("/vault-audio")
@@ -256,9 +259,20 @@ def assistant_vault_audio(req: VaultAudioReq):
         if _va.is_running():
             return {"ok": True, "running": True, "message": "이미 처리 중입니다."}
 
+        # 요청에 채널이 없으면 전역 완료 알림 설정(notify.on_finish)을 따른다.
+        notify = (req.notify or "").strip().lower()
+        if not notify:
+            try:
+                from meeting_minutes_app.common import config_loader as _cfg
+                ch = (_cfg.get("notify.on_finish", "none") or "none").lower()
+                notify = "" if ch == "none" else ch
+            except Exception:
+                notify = ""
+
         def _run():
             try:
-                n = va.process_vault(vault, sub, only_audio=req.only_audio, dry_run=False)
+                n = va.process_vault(vault, sub, only_audio=req.only_audio, dry_run=False,
+                                     notify=notify)
                 _va.done = n
                 _va.message = f"처리 완료: {n}건"
             except Exception as e:

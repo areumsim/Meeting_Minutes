@@ -30,6 +30,23 @@ from meeting_minutes_app.meeting_pipeline.meeting_minutes import (
 )
 
 
+def _refresh_config_globals() -> None:
+    """config_loader.reload() 훅 — 위 from-import 로 복사된 키/모델 전역을
+    웹 UI 설정 저장 시 재시작 없이 갱신한다(원본 모듈 훅이 먼저 실행됨)."""
+    global OPENAI_API_KEY, DEFAULT_STT_MODEL, FALLBACK_STT_MODEL
+    from meeting_minutes_app.common import llm_client as _llm
+    OPENAI_API_KEY = _llm.OPENAI_API_KEY
+    DEFAULT_STT_MODEL = _mm.DEFAULT_STT_MODEL
+    FALLBACK_STT_MODEL = _mm.FALLBACK_STT_MODEL
+
+
+try:
+    from meeting_minutes_app.common import config_loader as _cfg_mod
+    _cfg_mod.on_reload(_refresh_config_globals)
+except ImportError:
+    pass
+
+
 # ──────────────────────────────────────────────
 #  오디오 준비
 # ──────────────────────────────────────────────
@@ -105,6 +122,7 @@ def transcribe_chunk(
     offset: float = 0.0,
     debug_dir: Optional[str] = None,
     chunk_index: int = 0,
+    prompt: Optional[str] = None,
 ) -> List[Dict]:
     use_diarize = "diarize" in model
     use_whisper = model.startswith("whisper")
@@ -130,6 +148,11 @@ def transcribe_chunk(
         # language 가 "auto"/빈값이면 파라미터 생략 → 모델이 자동 감지(한국어·영어 모두 처리)
         if language and str(language).strip().lower() != "auto":
             params["language"] = language
+
+        # 직전 전사 꼬리를 문맥으로 전달 — 청크 경계 단어 오인식·언어 환각을 줄인다.
+        # (whisper-1·gpt-4o-(mini-)transcribe 지원, diarize 계열은 미지원이라 제외)
+        if prompt and not use_diarize:
+            params["prompt"] = prompt[:800]
 
         t0   = time.time()
         resp = client.audio.transcriptions.create(**params)

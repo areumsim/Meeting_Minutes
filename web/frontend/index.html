@@ -3,18 +3,20 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0, user-scalable=no" />
+    <!-- 외부 폰트(Google Fonts) 의존 제거 — 오프라인/사내망에서도 로딩 지연·실패 없이
+         시스템 폰트로 동작한다(비개발자 배포 exe 전제). -->
+    <!-- connect-src: OpenAI 직접(단독 모드) + 같은 WiFi의 PC(exe) 백엔드(서버 모드,
+         http/ws LAN 주소는 사용자가 설정에서 입력)를 모두 허용한다. 로컬 전용 도구라
+         LAN 대역(http/ws)까지 연다. -->
     <meta http-equiv="Content-Security-Policy"
       content="default-src 'self' https: data: blob:;
-               connect-src 'self' https://api.openai.com wss://api.openai.com https://fonts.googleapis.com https://fonts.gstatic.com;
-               style-src 'self' 'unsafe-inline' https://fonts.googleapis.com;
-               font-src 'self' https://fonts.gstatic.com;
+               connect-src 'self' https://api.openai.com wss://api.openai.com http: https: ws: wss:;
+               style-src 'self' 'unsafe-inline';
+               font-src 'self';
                img-src 'self' data: blob:;
                media-src 'self' blob: mediastream:;
                script-src 'self' 'unsafe-inline' 'unsafe-eval';" />
     <title>AI Meeting Minutes</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com" />
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
   </head>
   <body>
     <div id="root"></div>

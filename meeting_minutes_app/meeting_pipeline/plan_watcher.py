@@ -53,7 +53,7 @@ def _build_clients():
     obs = None
     try:
         from meeting_minutes_app.meeting_pipeline import meeting_minutes as mm
-        llm = mm.LLMClient(preferred=_c("models.llm", "claude"))
+        llm = mm.LLMClient(preferred=_c("models.llm", "gpt"))
     except Exception as e:
         print(f"[plan_watcher] LLM 초기화 실패: {e}")
     try:

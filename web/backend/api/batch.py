@@ -10,7 +10,7 @@ import traceback
 from pathlib import Path
 from datetime import datetime
 
-from fastapi import APIRouter, UploadFile, File, Form, BackgroundTasks
+from fastapi import APIRouter, UploadFile, File, Form, BackgroundTasks, HTTPException
 
 from web.backend import database as db
 from web.backend.schemas import MODE_PRESETS
@@ -97,8 +97,10 @@ def _run_batch_processing(session_id: str, file_path: str, args: argparse.Namesp
 
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         safe_title = "".join(c for c in (title or "upload") if c.isalnum() or c in " _-").strip()[:50]
-        output_dir = os.path.join(mm._c("output_dir", "./output") or "./output",
-                                  f"{ts}_{safe_title}")
+        # 상대 output_dir 은 CWD가 아닌 데이터 베이스 기준으로 해석(공용 로직) —
+        # 엔트리포인트에 따라 CWD가 달라지면 산출물·스캐너 위치가 어긋난다.
+        from meeting_minutes_app.common.app_paths import get_output_dir as _god
+        output_dir = str(_god() / f"{ts}_{safe_title}")
         os.makedirs(output_dir, exist_ok=True)
 
         db.update_session_status(session_id, "processing", output_dir=output_dir)
@@ -170,10 +172,14 @@ def _run_batch_processing(session_id: str, file_path: str, args: argparse.Namesp
         except Exception:
             db.update_session_status(session_id, "error")
         _PROGRESS.pop(session_id, None)
-    except Exception:
+    except Exception as e:
         traceback.print_exc()
-        db.update_session_status(session_id, "error")
-        _PROGRESS[session_id] = {**_PROGRESS.get(session_id, {}), "stage": "오류로 중단됨"}
+        # 실패 원인을 세션·진행상태에 보존 — 비개발자가 로그 파일을 열지 않아도
+        # 대시보드/진행 표시에서 무엇이 문제였는지(키 누락, 결제 한도 등) 알 수 있게.
+        reason = f"{type(e).__name__}: {e}".strip()
+        db.update_session_status(session_id, "error", error_detail=reason[:500])
+        _PROGRESS[session_id] = {**_PROGRESS.get(session_id, {}),
+                                 "stage": f"오류로 중단됨 — {reason[:200]}"}
     finally:
         _CANCELLED.discard(session_id)
 
@@ -219,13 +225,26 @@ async def upload_file(
     speakers: str = Form(""),
     mode: int = Form(2),
 ):
+    # 사전 점검: OpenAI 키(STT 필수)가 없으면 백그라운드에서 실패해 원인이 로그에만
+    # 남는다. 시작 전에 명확한 한국어 오류로 거절해 설정 화면으로 안내한다.
+    from meeting_minutes_app.common import config_loader as _cfg
+    if not _cfg.get_api_key("api.openai_api_key", "OPENAI_API_KEY"):
+        raise HTTPException(
+            status_code=400,
+            detail="OpenAI API 키가 설정되지 않았습니다. [설정] → API 키에서 입력한 뒤 다시 시도하세요.",
+        )
+
     safe_name = file.filename or "upload.mp3"
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     save_path = str(UPLOADS_DIR / f"{ts}_{safe_name}")
 
+    # 스트리밍 저장 — 수백 MB 녹음 파일을 통째로 RAM에 올리지 않는다
     with open(save_path, "wb") as f:
-        content = await file.read()
-        f.write(content)
+        while True:
+            chunk = await file.read(4 * 1024 * 1024)
+            if not chunk:
+                break
+            f.write(chunk)
 
     do_translate = translate.lower() in ("true", "1", "yes")
     args = _build_args(

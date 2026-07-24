@@ -1359,11 +1359,13 @@ def main() -> None:
 
     # meeting_workflow import (best-effort)
     try:
-        from meeting_minutes_app.wiki_core.vault_retrieval import load_vault_indexer, load_obsidian_client
+        # load_vault_client: REST(obsidian.enabled+ping) 우선, 없으면 폴더(.md) FS 폴백 —
+        # 폴더만 연결해도 prep-brief가 볼트 폴더에 저장되도록(REST 전용 load_obsidian_client 대체).
+        from meeting_minutes_app.wiki_core.vault_retrieval import load_vault_indexer, load_vault_client
     except ImportError as e:
         print(f"[wiki] meeting_workflow 없음 — Vault 검색 건너뜀: {e}")
         load_vault_indexer = lambda: None  # noqa: E731
-        load_obsidian_client = lambda: None  # noqa: E731
+        load_vault_client = lambda project="": None  # noqa: E731
 
     indexer = None
     obs = None
@@ -1380,7 +1382,7 @@ def main() -> None:
 
         try:
             if not args.no_obsidian:
-                obs = load_obsidian_client(project=args.project)
+                obs = load_vault_client(project=args.project)
         except Exception as e:
             print(f"[wiki] Obsidian 연결 실패 (무시): {e}")
             obs = None

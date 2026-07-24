@@ -146,6 +146,23 @@ async def lifespan(app: FastAPI):
                 threading.Thread(target=_graph_backfill_bg, name="graph-autobackfill", daemon=True).start()
     except Exception as e:
         print(f"[startup] 그래프 자동 백필 확인 경고: {e}")
+    # Obsidian REST가 가리키는 볼트와 설정한 .md 폴더가 다르면, 저장은 REST 볼트로 가고
+    # 검색 인덱스는 설정 폴더를 읽어 서로 갈라진다(새 노트가 검색에 안 잡힘). 조용한 사고라
+    # 시작 시 1회 경고만 남긴다(파일 기반 감지 — API 호출 없음). 감지 실패는 무시.
+    try:
+        from meeting_minutes_app.common import config_loader as _cfg
+        if bool(_cfg.get("obsidian.enabled", False)):
+            _vp = str(_cfg.get("obsidian.vault_path", "") or _cfg.get("indexing.vault_path", "") or "").strip()
+            if _vp:
+                from meeting_minutes_app.wiki_core.obsidian import _detect_obsidian_config
+                _det = str((_detect_obsidian_config() or {}).get("vault_path", "") or "").strip()
+                import os as _os
+                if _det and _os.path.normcase(_os.path.abspath(_det)) != _os.path.normcase(_os.path.abspath(_vp)):
+                    print(f"[obsidian] ⚠ REST 볼트({_det})와 설정 노트 폴더({_vp})가 다릅니다 — "
+                          "저장(REST)과 검색 인덱스(폴더)가 갈라질 수 있습니다. 같은 볼트를 가리키게 하세요.")
+    except Exception as e:
+        print(f"[startup] Obsidian 볼트 경로 점검 경고(무시): {e}")
+
     if _mcp_app is not None:
         async with _mcp_app.lifespan(app):
             yield

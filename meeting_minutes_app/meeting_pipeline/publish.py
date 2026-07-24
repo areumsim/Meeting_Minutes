@@ -319,30 +319,23 @@ def enrich_and_publish(
     project_override = route.get("project", "") if route and route.get("mode") == "domain" else ""
     output_folder = route.get("output_folder", "") if route and route.get("mode") == "folder" else ""
 
-    # Obsidian 클라이언트 (REST 우선, 실패 시 폴더-only 파일 기록으로 폴백)
+    # Obsidian 클라이언트 — 선택 로직은 vault_retrieval.load_vault_client 한 곳으로 통일
+    # (REST 우선, 실패 시 폴더-only 파일 기록으로 폴백). 저장은 이 단일 클라이언트로만 이뤄짐.
     obs = None
     try:
-        from meeting_minutes_app.wiki_core.obsidian import ObsidianClient
-        obs = ObsidianClient.from_config(project_override=project_override)
-        if obs is not None and not obs.ping():
-            warn("Obsidian REST 연결 실패 → 폴더-only 기록으로 전환")
-            obs.close(); obs = None
-    except Exception as e:
-        logger.warning(f"[publish] Obsidian REST 초기화 실패: {e}")
-        obs = None
-
-    # REST 클라이언트가 없으면 vault 폴더(.md)에 직접 기록(folder-only). 폴더 미설정 시 None.
-    if obs is None:
-        try:
+        from meeting_minutes_app.wiki_core.vault_retrieval import load_vault_client
+        obs = load_vault_client(project_override)
+        if obs is not None:
             from meeting_minutes_app.wiki_core.obsidian_fs import FilesystemObsidianClient
-            fs = FilesystemObsidianClient.from_config(project_override=project_override)
-            if fs is not None:
-                obs = fs
-                info(f"Obsidian 볼트 폴더에 직접 기록(folder-only): {fs.vault_root}")
+            if isinstance(obs, FilesystemObsidianClient):
+                info(f"Obsidian 볼트 폴더에 직접 기록(folder-only): {obs.vault_root}")
             else:
-                info("Obsidian 볼트 폴더 미설정 → 볼트 기록 건너뜀(output 파일만 저장)")
-        except Exception as e:
-            logger.warning(f"[publish] 폴더 writer 초기화 실패: {e}")
+                info("Obsidian REST 연결됨")
+        else:
+            info("Obsidian 볼트(REST/폴더) 미설정 → 볼트 기록 건너뜀(output 파일만 저장)")
+    except Exception as e:
+        logger.warning(f"[publish] Obsidian 클라이언트 초기화 실패: {e}")
+        obs = None
 
     # 1) 용어 보완
     enr = {"glossary_md": "", "related_notes": [], "sources": []}
@@ -484,13 +477,12 @@ def enrich_and_publish(
 #  계획(planned) 회의 매칭 및 사전 컨텍스트 주입
 # ──────────────────────────────────────────────
 def _lookup_plan(title: str, session_dt: str):
-    """계획(planned) 노트를 1회만 탐색해 match dict(or None) 반환. Obsidian 미연결시 None."""
+    """계획(planned) 노트를 1회만 탐색해 match dict(or None) 반환. 볼트(REST/폴더) 미연결시 None.
+    find_planned_note는 파일 나열(_list_files/get_note) 기반이라 폴더-only(FS)에서도 동작한다."""
     try:
-        from meeting_minutes_app.wiki_core.obsidian import ObsidianClient
-        obs = ObsidianClient.from_config()
-        if obs is None or not obs.ping():
-            if obs:
-                obs.close()
+        from meeting_minutes_app.wiki_core.vault_retrieval import load_vault_client
+        obs = load_vault_client()
+        if obs is None:
             return None
         try:
             return obs.find_planned_note(title, session_dt)

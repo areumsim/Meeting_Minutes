@@ -276,6 +276,36 @@ def load_vault_indexer():
     return None
 
 
+def load_vault_client(project: str = ""):
+    """볼트에 '쓰기·매칭'용 통합 클라이언트를 반환한다.
+
+    REST(obsidian.enabled + ping 성공) 우선, 안 되면 노트 폴더(.md) 파일 클라이언트로
+    폴백, 둘 다 없으면 None. '어떤 볼트 클라이언트를 쓸지' 선택 로직을 한 곳으로 모아
+    publish/prep-brief/계획매칭이 REST·폴더 어느 쪽이든 동일 코드로 동작하게 한다
+    (이원화 방지 + 폴더-only 기능 동등). load_obsidian_client(REST 전용)을 재사용하므로
+    REST 판정 로직도 단일 소스다. 저장은 항상 이 한 클라이언트로만 이뤄져 이중 저장은 없다."""
+    obs = load_obsidian_client(project)  # REST(obsidian.enabled 게이트 + ping)
+    if obs is not None:
+        return obs
+    try:
+        from meeting_minutes_app.wiki_core.obsidian_fs import FilesystemObsidianClient
+        return FilesystemObsidianClient.from_config(project_override=project)
+    except Exception:
+        return None
+
+
+def _norm_note_title(text: str) -> str:
+    """노트 제목 정규화(공백/구분자/대소문자 무시) — 계층 간 중복 제거용."""
+    import re as _re
+    return _re.sub(r"[\s_\-./\\]+", "", (text or "").lower())
+
+
+def _title_already_in(note_title: str, titles: list) -> bool:
+    """정규화 기준으로 이미 담긴 제목인지(프론트매터 title≠파일명이어도 같은 노트로 인식)."""
+    nt = _norm_note_title(note_title)
+    return any(_norm_note_title(t) == nt for t in titles)
+
+
 def search_related_notes_rest(
     obs,
     *,
@@ -493,7 +523,7 @@ def build_obsidian_context_memo(
                     note_title, content, query_for_score, note_path=hit.get("path", "")
                 ) < 1.0:
                     continue
-                if note_title not in related_titles:
+                if not _title_already_in(note_title, related_titles):
                     related_titles.append(note_title)
                     evidence.append({"note": note_title, "heading": None})
         if obs:
@@ -506,7 +536,7 @@ def build_obsidian_context_memo(
                     note_title, content, query_for_score, note_path=note_path
                 ) < 1.0:
                     continue
-                if note_title not in related_titles:
+                if not _title_already_in(note_title, related_titles):
                     related_titles.append(note_title)
                     evidence.append({"note": note_title, "heading": None})
         related_titles = related_titles[:limit]

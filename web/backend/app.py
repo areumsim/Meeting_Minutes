@@ -94,6 +94,32 @@ async def lifespan(app: FastAPI):
             threading.Thread(target=_reindex_bg, name="auto-reindex", daemon=True).start()
     except Exception as e:
         print(f"[startup] 자동 재인덱스 확인 경고: {e}")
+    # 폴더-only 위키: 노트 폴더가 지정돼 있고 지식 그래프가 아직 비어 있으면(최초 실행)
+    # 배경 스레드로 1회 자동 백필한다 — 사용자가 scripts/graph_backfill.py를 수동 실행하지
+    # 않아도 지식 그래프가 "그냥" 채워진다. 그래프가 이미 있으면 건너뛰고(멱등·중복 작업 방지),
+    # 이후 갱신은 [검색 인덱스·그래프 재빌드] 버튼이나 세션 finalize 동기화가 담당한다.
+    try:
+        from meeting_minutes_app.common import config_loader as _cfg
+        _graph_on = bool(_cfg.get("wiki_knowledge.graph_enabled", True))
+        _vault = _cfg.get("indexing.vault_path", "") or _cfg.get("obsidian.vault_path", "")
+        if _graph_on and _vault:
+            from meeting_minutes_app.wiki_core import graph_db as _gdb
+            if not _gdb.list_nodes(limit=1):
+                import threading
+
+                def _graph_backfill_bg():
+                    try:
+                        from meeting_minutes_app.wiki_core import graph_sync
+                        graph_sync.backfill_from_registries()
+                        vc = graph_sync.backfill_from_vault()
+                        print(f"[graph] 폴더 자동 백필 완료 — 노트 {vc.get('notes_found', 0)}, "
+                              f"노드 {vc.get('nodes_would_add', 0)}, 엣지 {vc.get('edges_would_add', 0)}")
+                    except Exception as e:
+                        print(f"[graph] 폴더 자동 백필 실패(무시): {e}")
+
+                threading.Thread(target=_graph_backfill_bg, name="graph-autobackfill", daemon=True).start()
+    except Exception as e:
+        print(f"[startup] 그래프 자동 백필 확인 경고: {e}")
     if _mcp_app is not None:
         async with _mcp_app.lifespan(app):
             yield

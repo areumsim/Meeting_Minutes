@@ -8,7 +8,7 @@ import {
 
 export default function Assistant() {
   return (
-    <div className="max-w-3xl mx-auto px-1 md:px-0 space-y-3">
+    <div className="max-w-4xl mx-auto px-1 md:px-0 space-y-3">
       <h2 className="text-2xl font-bold tracking-tight mb-1 flex items-center gap-2">
         <CalendarClock size={22} /> 회의 비서
       </h2>

@@ -161,6 +161,32 @@ def get_config():
     return safe
 
 
+def _is_local_client(request: Request) -> bool:
+    """요청이 이 PC(localhost)에서 왔는지 — LAN/모바일 클라이언트와 구분."""
+    host = (request.client.host if request.client else "") or ""
+    return host in ("127.0.0.1", "::1", "localhost")
+
+
+@router.get("/config/reveal")
+def reveal_secret(path: str, request: Request):
+    """민감 값(키·비번)의 실제 평문을 반환 — 단, 이 PC(localhost)에서만.
+
+    같은 WiFi의 iOS/태블릿 등 LAN 클라이언트에는 거부한다(폰이 PC의 실제 키를
+    빼가지 못하도록). 웹 [설정]의 '보이기'가 이 엔드포인트로 실제 값을 가져온다.
+    """
+    if not _is_local_client(request):
+        raise HTTPException(status_code=403,
+                            detail="실제 키는 이 PC에서만 볼 수 있습니다.")
+    if path not in set(_sensitive_paths()):
+        raise HTTPException(status_code=400, detail="허용되지 않은 경로입니다.")
+    if not CONFIG_PATH.exists():
+        return {"value": ""}
+    with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+        cfg = json.load(f)
+    v = _dget(cfg, path)
+    return {"value": v if isinstance(v, str) else ""}
+
+
 @router.get("/config/schema")
 def get_config_schema():
     """웹 Settings 자동 렌더링용 스키마(그룹/필드) 반환."""

@@ -23,6 +23,7 @@ export default function App() {
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [ffmpegMissing, setFfmpegMissing] = useState(false);
   const [showOnboarding, setShowOnboarding] = useState(false);
+  const [graphQuery, setGraphQuery] = useState("");   // 위키링크로 지식그래프 진입 시 초기 검색어
 
   const view = viewState;
   const setView = (v: View) => {
@@ -74,6 +75,17 @@ export default function App() {
     setView("detail");
   };
 
+  // 위키링크/노드 클릭 → 지식 그래프로 이동(해당 대상을 자동 검색·펼침).
+  const navigateToGraph = (query?: string) => {
+    setGraphQuery(query || "");
+    setView("graph");
+  };
+  // 사이드바에서 '지식그래프'를 직접 누른 경우: 이전 검색어를 비우고 상위 노드 목록부터.
+  const openGraphNav = () => {
+    setGraphQuery("");
+    setView("graph");
+  };
+
   return (
     <div className="min-h-[100dvh] bg-brand-50 text-brand-950 font-sans selection:bg-emerald-100 flex flex-col md:flex-row pb-[calc(env(safe-area-inset-bottom,0px)+4rem)] md:pb-0">
 
@@ -98,7 +110,7 @@ export default function App() {
             <NavItem icon={<MessageCircleQuestion size={18} />} label="위키 질문" active={view === "wiki"} onClick={() => setView("wiki")} />
             <NavItem icon={<ClipboardList size={18} />} label="회의 준비" active={view === "prep"} onClick={() => setView("prep")} />
             <NavItem icon={<CalendarClock size={18} />} label="회의 비서" active={view === "assistant"} onClick={() => setView("assistant")} />
-            <NavItem icon={<Network size={18} />} label="지식그래프" active={view === "graph"} onClick={() => setView("graph")} />
+            <NavItem icon={<Network size={18} />} label="지식그래프" active={view === "graph"} onClick={openGraphNav} />
             <NavItem icon={<HelpCircle size={18} />} label="도움말" active={view === "help"} onClick={() => setView("help")} />
           </div>
         </div>
@@ -143,11 +155,11 @@ export default function App() {
               {view === "wiki" && <WikiAsk />}
               {view === "prep" && <PrepBrief onSaved={navigateToDetail} />}
               {view === "assistant" && <Assistant />}
-              {view === "graph" && <GraphExplorer />}
-              {view === "help" && <Help />}
+              {view === "graph" && <GraphExplorer initialQuery={graphQuery} />}
+              {view === "help" && <Help onNavigate={setView} />}
               {view === "settings" && <SettingsView />}
               {view === "detail" && selectedSessionId && (
-                <SessionDetail id={selectedSessionId} onBack={() => setView("dashboard")} />
+                <SessionDetail id={selectedSessionId} onBack={() => setView("dashboard")} onOpenGraph={navigateToGraph} />
               )}
             </Suspense>
           </motion.div>

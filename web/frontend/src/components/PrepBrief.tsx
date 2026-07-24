@@ -49,7 +49,7 @@ export default function PrepBrief({ onSaved }: { onSaved?: (id: string) => void 
   };
 
   return (
-    <div className="max-w-3xl mx-auto px-1 md:px-0">
+    <div className="max-w-4xl mx-auto px-1 md:px-0">
       <h2 className="text-2xl font-bold tracking-tight mb-1">회의 준비 브리핑</h2>
       <p className="text-brand-500 mb-4 text-sm">제목/주제로 볼트의 관련 노트·이전 결정·미완료 액션을 모아 준비 자료를 만듭니다. 저장하면 대시보드에서 다시 볼 수 있습니다.</p>
 

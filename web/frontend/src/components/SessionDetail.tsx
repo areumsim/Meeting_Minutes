@@ -4,6 +4,7 @@ import { Share as ShareIcon, ArrowLeft, Copy, Download, Loader2, CheckCircle, Cl
 } from "lucide-react";
 import { motion } from "motion/react";
 import Markdown from "./Markdown";
+import MiniGraph from "./MiniGraph";
 import { Share } from '@capacitor/share';
 import { getSession, getSessionStatus, generateSummaryForSession, getTargetEmail,
   getSessionGraph, getNodeNeighbors, getUploadProgress, getSessionCost, cancelUpload,
@@ -14,6 +15,7 @@ import type { Session, Segment, Document as Doc, SessionGraph, GraphNeighbors } 
 interface Props {
   id: string;
   onBack: () => void;
+  onOpenGraph?: (query?: string) => void;   // 위키링크/노드 클릭 시 지식 그래프로 이동
 }
 
 type Tab = "script" | "minutes" | "summary" | "actions" | "fact_check" | "wiki_context" | "wiki_proposal" | "refined_script" | "graph";
@@ -29,7 +31,7 @@ const GRAPH_TYPE_LABELS: Record<string, string> = {
   note: "노트",
 };
 
-export default function SessionDetail({ id, onBack }: Props) {
+export default function SessionDetail({ id, onBack, onOpenGraph }: Props) {
   const [session, setSession] = useState<Session | null>(null);
   const [segments, setSegments] = useState<Segment[]>([]);
   const [documents, setDocuments] = useState<Doc[]>([]);
@@ -263,7 +265,7 @@ export default function SessionDetail({ id, onBack }: Props) {
   }
 
   return (
-    <div className="max-w-5xl mx-auto">
+    <div className="max-w-4xl mx-auto">
       {/* Header */}
       <div className="flex items-center gap-4 mb-8">
         <button onClick={onBack} className="p-2 hover:bg-brand-100 rounded-xl transition-colors">
@@ -370,6 +372,22 @@ export default function SessionDetail({ id, onBack }: Props) {
             {activeTab === "graph" ? (
               graph ? (
                 <div className="space-y-8 max-h-[600px] overflow-y-auto">
+                  {/* 시각적 그래프 개요 — 아래 타입별 목록과 함께 제공 */}
+                  {(() => {
+                    const allNodes = Object.values(graph.nodes).flat();
+                    const meetingId = (graph.nodes.meeting?.[0])?.id;
+                    return allNodes.length > 0 ? (
+                      <div className="rounded-xl border border-brand-100 bg-brand-50/40">
+                        <MiniGraph
+                          nodes={allNodes}
+                          edges={graph.edges}
+                          centerId={meetingId}
+                          activeId={expandedNodeId}
+                          onNodeClick={(n) => handleToggleNeighbors(n.id)}
+                        />
+                      </div>
+                    ) : null;
+                  })()}
                   {Object.entries(graph.nodes).map(([type, nodes]) => (
                     <div key={type}>
                       <h4 className="text-xs font-black uppercase tracking-[0.2em] text-brand-400 mb-3">
@@ -471,7 +489,7 @@ export default function SessionDetail({ id, onBack }: Props) {
                         {(() => { try { return JSON.stringify(JSON.parse(activeDoc.content), null, 2); } catch { return activeDoc.content; } })()}
                       </pre>
                     ) : (
-                      <Markdown content={activeDoc.content} />
+                      <Markdown content={activeDoc.content} onWikiLink={onOpenGraph} />
                     )}
                   </div>
                 )}

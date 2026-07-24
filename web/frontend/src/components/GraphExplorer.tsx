@@ -1,7 +1,8 @@
 import { useState, useEffect } from "react";
 import { Search, Loader2, ChevronRight, Network, ArrowLeft, X } from "lucide-react";
 import { listGraphNodes, getNodeNeighbors } from "../lib/api";
-import type { GraphNode, GraphNeighbors } from "../lib/types";
+import type { GraphNode, GraphEdge, GraphNeighbors } from "../lib/types";
+import MiniGraph from "./MiniGraph";
 
 // 노드 타입별 색상 (라벨 배지)
 const TYPE_TONE: Record<string, string> = {
@@ -28,8 +29,8 @@ function NodeBadge({ node, onClick }: { node: GraphNode; onClick?: () => void })
   );
 }
 
-export default function GraphExplorer() {
-  const [q, setQ] = useState("");
+export default function GraphExplorer({ initialQuery = "" }: { initialQuery?: string }) {
+  const [q, setQ] = useState(initialQuery);
   const [results, setResults] = useState<GraphNode[]>([]);
   const [searching, setSearching] = useState(false);
   const [searched, setSearched] = useState(false);
@@ -40,20 +41,70 @@ export default function GraphExplorer() {
   const [focus, setFocus] = useState<GraphNeighbors | null>(null);
   const [loadingNode, setLoadingNode] = useState(false);
 
+  // 검색 결과 "개요 그래프" — 클릭해 들어가지 않아도 결과가 어떻게 연결돼 있는지 바로 보여준다.
+  const [overview, setOverview] = useState<{ nodes: GraphNode[]; edges: GraphEdge[] } | null>(null);
+  const [overviewLoading, setOverviewLoading] = useState(false);
+
+  // 결과 상위 노드들의 1-hop 이웃/엣지를 모아 하나의 그래프로 합친다(중복 제거).
+  const loadOverview = async (res: GraphNode[]) => {
+    if (!res.length) { setOverview(null); return; }
+    setOverviewLoading(true);
+    try {
+      const seeds = res.slice(0, 7);   // 요청 수 제한(로컬 백엔드 부담·가독성)
+      const parts = await Promise.all(
+        seeds.map((n) => getNodeNeighbors(n.id, { depth: 1, limit: 24 }).catch(() => null))
+      );
+      const nodeMap = new Map<string, GraphNode>();
+      const edgeMap = new Map<string, GraphEdge>();
+      for (const n of res) nodeMap.set(n.id, n);   // 결과 노드는 이웃이 없어도 항상 포함
+      for (const p of parts) {
+        if (!p) continue;
+        if (p.node) nodeMap.set(p.node.id, p.node);
+        for (const nb of p.neighbors) nodeMap.set(nb.id, nb);
+        for (const e of p.edges) edgeMap.set(e.id, e);
+      }
+      setOverview({ nodes: [...nodeMap.values()], edges: [...edgeMap.values()] });
+    } catch {
+      setOverview(null);
+    }
+    setOverviewLoading(false);
+  };
+
   const runSearch = async () => {
     setSearching(true); setError(""); setSearched(true);
+    setFocus(null); setStack([]);   // 새 검색 시 상세에서 결과 개요로 복귀
     try {
       const nodes = await listGraphNodes({ q: q.trim() || undefined, limit: 50 });
       setResults(nodes);
+      void loadOverview(nodes);
     } catch (e: any) {
       setError(e?.message || "검색 실패");
-      setResults([]);
+      setResults([]); setOverview(null);
     }
     setSearching(false);
   };
 
-  // 초기 진입 시 상위 노드 목록 표시
-  useEffect(() => { runSearch(); /* eslint-disable-next-line */ }, []);
+  // 초기 진입: initialQuery(위키링크 클릭 등)가 있으면 그 대상을 검색하고
+  // 정확히 일치하는 노드를 자동으로 펼쳐 보여준다. 없으면 상위 노드 목록 표시.
+  useEffect(() => {
+    const term = (initialQuery || "").trim();
+    if (!term) { runSearch(); return; }
+    (async () => {
+      setSearching(true); setError(""); setSearched(true);
+      try {
+        const nodes = await listGraphNodes({ q: term, limit: 50 });
+        setResults(nodes);
+        const exact = nodes.find((n) => n.label.toLowerCase() === term.toLowerCase());
+        const target = exact || nodes[0];
+        if (target) await openNode(target);
+      } catch (e: any) {
+        setError(e?.message || "검색 실패");
+        setResults([]);
+      }
+      setSearching(false);
+    })();
+    /* eslint-disable-next-line */
+  }, []);
 
   const openNode = async (node: GraphNode, pushStack = true) => {
     setLoadingNode(true); setError("");
@@ -91,7 +142,7 @@ export default function GraphExplorer() {
   }
 
   return (
-    <div className="max-w-3xl mx-auto px-1 md:px-0">
+    <div className="max-w-4xl mx-auto px-1 md:px-0">
       <h2 className="text-2xl font-bold tracking-tight mb-1 flex items-center gap-2">
         <Network size={22} /> 지식 그래프 탐색
       </h2>
@@ -151,6 +202,19 @@ export default function GraphExplorer() {
             </div>
           )}
 
+          {/* 시각적 그래프 개요 (배지 리스트와 함께 제공) */}
+          {focus.neighbors.length > 0 && (
+            <div className="mt-3 mb-4 rounded-xl border border-brand-100 bg-brand-50/40">
+              <MiniGraph
+                nodes={[focus.node, ...focus.neighbors]}
+                edges={focus.edges}
+                centerId={focus.node.id}
+                activeId={focus.node.id}
+                onNodeClick={(n) => { if (n.id !== focus.node?.id) openNode(n); }}
+              />
+            </div>
+          )}
+
           {/* 이웃 (관계별) */}
           {Object.keys(grouped).length > 0 ? (
             <div className="space-y-4 mt-2">
@@ -168,16 +232,39 @@ export default function GraphExplorer() {
           )}
         </section>
       ) : (
-        /* 검색 결과 목록 */
+        /* 검색 결과: 개요 그래프 + 목록 */
         <section>
           {searching ? (
             <div className="flex items-center gap-2 text-brand-400 text-sm py-8 justify-center">
               <Loader2 size={18} className="animate-spin" /> 불러오는 중...
             </div>
           ) : results.length > 0 ? (
-            <div className="flex flex-wrap gap-2">
-              {results.map((n) => <NodeBadge key={n.id} node={n} onClick={() => openNode(n)} />)}
-            </div>
+            <>
+              {/* 검색 즉시 보이는 연결 개요 그래프 — 노드를 클릭하면 그 노드로 들어간다. */}
+              {overview && overview.nodes.length > 0 && (
+                <div className="mb-4 rounded-2xl border border-brand-200 bg-white shadow-sm overflow-hidden">
+                  <div className="flex items-center gap-2 px-4 pt-3 text-xs font-bold text-brand-400 uppercase tracking-widest">
+                    <Network size={13} /> 연결 개요
+                    {overviewLoading && <Loader2 size={12} className="animate-spin" />}
+                  </div>
+                  <MiniGraph
+                    nodes={overview.nodes}
+                    edges={overview.edges}
+                    onNodeClick={(n) => openNode(n)}
+                    height={420}
+                    maxNodes={28}
+                  />
+                </div>
+              )}
+              {overviewLoading && !overview && (
+                <div className="mb-4 flex items-center gap-2 text-brand-400 text-xs py-6 justify-center">
+                  <Loader2 size={14} className="animate-spin" /> 연결 관계를 그리는 중...
+                </div>
+              )}
+              <div className="flex flex-wrap gap-2">
+                {results.map((n) => <NodeBadge key={n.id} node={n} onClick={() => openNode(n)} />)}
+              </div>
+            </>
           ) : searched && !error ? (
             <p className="text-sm text-brand-400 py-8 text-center">검색 결과가 없습니다.</p>
           ) : null}

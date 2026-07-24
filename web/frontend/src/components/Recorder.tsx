@@ -868,7 +868,7 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
   const soundDetected = isRecording && !isPaused && volume > SOUND_THRESHOLD;
 
   return (
-      <div className="bg-white border md:border-zinc-200 md:rounded-3xl md:shadow-xl overflow-hidden min-h-[calc(100dvh-5rem)] md:min-h-0 flex flex-col">
+      <div className="w-full max-w-4xl mx-auto bg-white border md:border-zinc-200 md:rounded-3xl md:shadow-xl overflow-hidden min-h-[calc(100dvh-5rem)] md:min-h-0 flex flex-col">
         {/* Status Header (컴팩트) */}
         <div className="bg-zinc-900 text-white px-4 py-3 md:px-5 md:py-4 shrink-0">
           <div className="flex flex-row items-center justify-between gap-3">

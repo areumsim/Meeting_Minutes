@@ -63,7 +63,7 @@ export default function FileUpload({ onComplete }: { onComplete: (id: string) =>
   };
 
   return (
-    <div className="max-w-3xl mx-auto px-1 md:px-0">
+    <div className="max-w-4xl mx-auto px-1 md:px-0">
       <h2 className="text-2xl font-bold tracking-tight mb-1">파일 업로드</h2>
       <p className="text-brand-500 mb-4 text-sm">오디오/영상 파일을 올리면 전사·번역·회의록을 자동 생성합니다.</p>
 

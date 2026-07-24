@@ -63,11 +63,11 @@ SCHEMA: List[Dict[str, Any]] = [
     },
     {
         "id": "obsidian",
-        "label": "Obsidian 연동 (선택)",
-        "desc": "볼트 폴더만 지정하면 REST API 없이도 회의록이 그 폴더의 .md로 저장되고 위키 검색에 쓰입니다. Local REST API는 Obsidian 앱에 실시간 반영이 필요할 때만 켜세요.",
+        "label": "노트 폴더 (내부 위키) · Obsidian 연동",
+        "desc": "회의록·검색·지식 그래프의 바탕이 되는 .md 노트 폴더입니다. Obsidian 앱이 없어도 폴더만 지정하면 됩니다 — 회의록이 그 폴더에 .md로 저장되고, 위키 검색·지식 그래프가 그 폴더의 노트([[위키링크]] 포함)에서 자동으로 만들어집니다. 아래 REST API 항목은 Obsidian 앱에 실시간 반영이 필요할 때만 켜세요.",
         "fields": [
-            {"section": "obsidian", "key": "enabled", "label": "Obsidian REST 저장 사용", "type": "bool", "default": False, "desc": "켜면 Local REST API로 Obsidian 앱에 직접 기록. 꺼도 볼트 폴더가 있으면 .md로 저장됨."},
-            {"section": "obsidian", "key": "vault_path", "label": "Obsidian 볼트 폴더", "type": "text", "default": "", "placeholder": r"D:\Obsidian\MyVault", "picker": True, "desc": "회의록을 저장할 볼트 루트. 검색 인덱스 경로에도 함께 반영됩니다.", "mirror": [["indexing", "vault_path"]]},
+            {"section": "obsidian", "key": "vault_path", "label": "노트 폴더 (.md) — 위키·그래프의 원천", "type": "text", "default": "", "placeholder": r"D:\Notes  또는  D:\Obsidian\MyVault", "picker": True, "desc": "Markdown(.md) 노트가 들어 있는 폴더를 지정하세요. Obsidian 볼트든 일반 폴더든 상관없습니다. 지정하면 회의록 저장·위키 질문·지식 그래프가 이 폴더만으로 동작합니다(REST API 불필요). 저장 후 [검색 인덱스·그래프 재빌드]를 한 번 눌러 최신화하세요.", "mirror": [["indexing", "vault_path"]]},
+            {"section": "obsidian", "key": "enabled", "label": "Obsidian REST 저장 사용 (선택)", "type": "bool", "default": False, "desc": "대부분 꺼 두면 됩니다. 켜면 Local REST API로 실행 중인 Obsidian 앱에 실시간 기록합니다. 꺼도 위 노트 폴더가 있으면 .md로 저장·검색·그래프가 모두 동작합니다."},
             {"section": "obsidian", "key": "api_url", "label": "Local REST API 주소", "type": "text", "default": "https://127.0.0.1:27124"},
             {"section": "obsidian", "key": "api_key", "label": "Local REST API 키", "type": "password", "sensitive": True, "default": "", "desc": "Obsidian → 설정 → Local REST API 에서 발급."},
             {"section": "obsidian", "key": "verify_ssl", "label": "REST SSL 검증", "type": "bool", "default": False},

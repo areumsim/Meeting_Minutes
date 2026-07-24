@@ -101,6 +101,20 @@ export const updateConfig = async (data: any) => {
   return { success: true };
 };
 
+// 민감 값(키·비번)의 실제 평문을 서버에서 가져온다 — '보이기'용.
+// 서버는 이 PC(localhost)에서 온 요청에만 실제 값을 준다. 모바일 PC연결 등 LAN
+// 클라이언트는 403 → null 반환(계속 마스킹 표시). 실패/미지원도 null.
+export async function revealSecret(path: string): Promise<string | null> {
+  try {
+    const res = await apiFetch(`/api/config/reveal?path=${encodeURIComponent(path)}`);
+    if (!res.ok) return null;
+    const d = await res.json();
+    return typeof d?.value === "string" ? d.value : null;
+  } catch {
+    return null;
+  }
+}
+
 // config 스키마(웹 Settings 자동 렌더링용) — 백엔드가 있을 때만 제공.
 // 백엔드는 { version, groups } 형태로 주므로 groups 배열만 반환한다.
 export const getConfigSchema = async (): Promise<any[] | null> => {

@@ -53,7 +53,7 @@ export default function TextInput({ onComplete }: { onComplete: (id: string) => 
   };
 
   return (
-    <div className="max-w-3xl mx-auto px-1 md:px-0 pb-20 md:pb-0">
+    <div className="max-w-4xl mx-auto px-1 md:px-0 pb-20 md:pb-0">
       <h2 className="text-2xl font-bold tracking-tight mb-1">텍스트 분석</h2>
       <p className="text-brand-500 mb-4 text-sm">기존 회의록이나 전사 텍스트를 붙여넣으면 AI가 정리합니다.</p>
 

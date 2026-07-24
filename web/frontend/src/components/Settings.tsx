@@ -10,7 +10,7 @@ import {
   getProfiles, createProfile, deleteProfile, clearSessions,
   getApiKey, setApiKey, getAnthropicKey, setAnthropicKey,
   getWatcherStatus, startWatcher, stopWatcher, obsidianDiagnose, pickFolder,
-  getBackendUrl, setBackendUrl, testBackendUrl,
+  getBackendUrl, setBackendUrl, testBackendUrl, revealSecret,
 } from "../lib/api";
 import { Capacitor } from "@capacitor/core";
 import type { Profile } from "../lib/types";
@@ -64,6 +64,10 @@ const CLIENT_FALLBACK_SCHEMA: Group[] = [
 ];
 
 const pathOf = (f: Field) => (f.key ? `${f.section}.${f.key}` : f.section);
+
+// 서버가 내려준 마스킹 값인지(예: "sk-proj-...Ab3X" 또는 "***"). 실제 키/비번엔
+// 보통 "..."/"***"가 없으므로 편집·저장 판단에 쓴다.
+const looksMasked = (v: any) => typeof v === "string" && (v.includes("...") || v.includes("***"));
 
 // ── PC 서버 연결 카드 (네이티브 앱 전용) ─────────────────────────
 // 같은 WiFi의 PC(exe)에 연결하면 서버 파이프라인(2-pass 보정·위키·그래프)을
@@ -234,6 +238,15 @@ export default function SettingsView() {
     const key = val("api.openai_api_key");
     if (key && !key.includes("...") && !key.startsWith("sk-")) {
       warnings.push("OpenAI 키는 보통 'sk-' 로 시작합니다. 올바른 키인지 확인하세요.");
+    }
+    // 마스킹된 채 부분 수정된 민감 필드는 서버가 '변경 안 됨'으로 보고 조용히 무시한다
+    // (settings.py: '...'/'***' 포함 값 스킵). 저장 전에 막아 사용자 혼란 방지.
+    for (const g of schema) {
+      for (const f of g.fields) {
+        if (f.sensitive && dirty[pathOf(f)] && looksMasked(values[pathOf(f)])) {
+          errors.push(`'${f.label}' 에 마스킹 기호(…/***)가 남아 있어 저장되지 않습니다. 눈 아이콘('보이기')으로 실제 값을 확인 후 전체를 다시 입력하거나, 바꿀 게 없으면 원래대로 두세요.`);
+        }
+      }
     }
     return { errors, warnings };
   };
@@ -423,9 +436,9 @@ export default function SettingsView() {
             )}
             {packaged && group.id === "obsidian" && (
               <>
-                <TestRow label="Obsidian 경로 확인" busy={testing === "obsidian"} result={testMsg.obsidian} onClick={() => runTest("obsidian")} />
-                <TestRow label="검색 인덱스 재빌드" busy={testing === "reindex"} result={testMsg.reindex} onClick={handleReindex} />
-                <p className="text-xs text-brand-400 mt-1">볼트(.md 폴더)를 바꾸거나 노트를 추가한 뒤 눌러 검색·위키를 최신화하세요.</p>
+                <TestRow label="노트 폴더 경로 확인" busy={testing === "obsidian"} result={testMsg.obsidian} onClick={() => runTest("obsidian")} />
+                <TestRow label="검색 인덱스·그래프 재빌드" busy={testing === "reindex"} result={testMsg.reindex} onClick={handleReindex} />
+                <p className="text-xs text-brand-400 mt-1">노트 폴더(.md)를 바꾸거나 노트를 추가한 뒤 눌러 검색·위키·지식 그래프를 최신화하세요. (Obsidian 앱은 필요 없습니다.)</p>
                 <div className="mt-5">
                   <button onClick={handleDiagnose} disabled={testing === "diagnose"} className="flex items-center gap-2 px-5 py-2.5 bg-brand-50 text-brand-700 rounded-xl text-sm font-semibold hover:bg-brand-100 transition-all w-fit">
                     {testing === "diagnose" ? <Loader2 size={16} className="animate-spin" /> : <Plug size={16} />} Obsidian 전체 진단
@@ -450,7 +463,7 @@ export default function SettingsView() {
   };
 
   return (
-    <div className="max-w-3xl mx-auto px-1 md:px-0">
+    <div className="max-w-4xl mx-auto px-1 md:px-0">
       <div className="flex items-start justify-between gap-3 mb-1">
         <h2 className="text-2xl font-bold tracking-tight">설정</h2>
         {packaged && (
@@ -792,6 +805,25 @@ function Stat({ label, value, tone }: { label: string; value: number; tone: stri
 function FieldRow({ field, value, onChange, packaged }: { field: Field; value: any; onChange: (v: any) => void; packaged: boolean }) {
   const [reveal, setReveal] = useState(false);
   const [picking, setPicking] = useState(false);
+  // 민감 필드 '보이기': 서버에서 실제 값을 받아 화면에만 덮어씌운다(부모 value는
+  // 마스킹 그대로 유지 → 수정 안 하면 저장 시 서버가 기존 값 보존). shown!==null 이면
+  // 그 값을 입력창에 표시한다. revealNote는 LAN(모바일)에서 실제값 거부됐을 때 안내.
+  const [shown, setShown] = useState<string | null>(null);
+  const [revealBusy, setRevealBusy] = useState(false);
+  const [revealNote, setRevealNote] = useState("");
+
+  const toggleReveal = async () => {
+    if (reveal) { setReveal(false); return; }
+    const cur = shown ?? (value ?? "");
+    if (looksMasked(cur)) {
+      setRevealBusy(true);
+      const real = await revealSecret(pathOf(field));
+      setRevealBusy(false);
+      if (real !== null) { setShown(real); setRevealNote(""); }
+      else { setRevealNote("실제 키는 이 PC에서만 볼 수 있어요. 변경하려면 새 값을 전부 입력하세요."); }
+    }
+    setReveal(true);
+  };
 
   if (field.type === "bool") {
     return (
@@ -869,16 +901,16 @@ function FieldRow({ field, value, onChange, packaged }: { field: Field; value: a
           <div className="relative flex-1">
             <input
               type={field.type === "password" && !reveal ? "password" : field.type === "number" ? "number" : "text"}
-              value={value ?? ""}
-              onChange={(e) => onChange(e.target.value)}
-              placeholder={field.placeholder || ""}
+              value={field.type === "password" && shown !== null ? shown : (value ?? "")}
+              onChange={(e) => { if (shown !== null) setShown(null); setRevealNote(""); onChange(e.target.value); }}
+              placeholder={field.placeholder || (field.type === "password" && looksMasked(value) ? "변경하려면 새 값 입력 (그대로 두면 기존 유지)" : "")}
               className={`w-full px-3 py-2 bg-zinc-50 border border-zinc-200 rounded-lg outline-none focus:ring-2 focus:ring-brand-500 text-sm font-mono tracking-wide ${field.type === "password" ? "pr-10" : ""}`}
             />
             {field.type === "password" && (
-              <button type="button" onClick={() => setReveal((s) => !s)} tabIndex={-1}
-                className="absolute right-2 top-1/2 -translate-y-1/2 text-brand-400 hover:text-brand-700 p-1"
+              <button type="button" onClick={toggleReveal} tabIndex={-1} disabled={revealBusy}
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-brand-400 hover:text-brand-700 p-1 disabled:opacity-50"
                 title={reveal ? "숨기기" : "표시"}>
-                {reveal ? <EyeOff size={16} /> : <Eye size={16} />}
+                {revealBusy ? <Loader2 size={16} className="animate-spin" /> : reveal ? <EyeOff size={16} /> : <Eye size={16} />}
               </button>
             )}
           </div>
@@ -892,6 +924,7 @@ function FieldRow({ field, value, onChange, packaged }: { field: Field; value: a
           )}
         </div>
       )}
+      {revealNote && <p className="text-xs text-amber-600">{revealNote}</p>}
       {field.desc && <p className="text-xs text-brand-400">{field.desc}</p>}
     </div>
   );

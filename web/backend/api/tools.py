@@ -138,17 +138,41 @@ def regenerate(session_id: str, payload: dict, background_tasks: BackgroundTasks
     return {"sessionId": session_id, "status": "processing"}
 
 
-# ── 3) 볼트 인덱스 재빌드 ─────────────────────────
+# ── 3) 볼트 인덱스 + 지식 그래프 재빌드 ───────────
+def _rebuild_graph_from_vault() -> str:
+    """설정된 노트 폴더(+registry)에서 지식 그래프를 다시 파생한다.
+
+    graph_sync 백필은 멱등(upsert)이며 wiki_graph.db에만 쓰고 원본 .md/registry는
+    건드리지 않는다. graph_enabled가 꺼져 있으면 아무것도 하지 않는다. 실패는 호출부에서
+    삼켜 인덱스 재빌드 자체를 실패시키지 않는다(폴더-only 위키의 부가 단계).
+    """
+    from meeting_minutes_app.common import config_loader as _cfg
+    if not bool(_cfg.get("wiki_knowledge.graph_enabled", True)):
+        return ""
+    from meeting_minutes_app.wiki_core import graph_sync
+    graph_sync.backfill_from_registries()
+    vc = graph_sync.backfill_from_vault()
+    return (f", 그래프 노드 {vc.get('nodes_would_add', 0)}·엣지 "
+            f"{vc.get('edges_would_add', 0)} 반영")
+
+
 @router.post("/reindex")
 def reindex():
-    """Obsidian 볼트(.md 폴더) 검색 인덱스를 다시 만든다. 폴더-only 위키에 필수."""
+    """노트 폴더(.md) 검색 인덱스와 지식 그래프를 다시 만든다. 폴더-only 위키에 필수."""
     try:
         from meeting_minutes_app.wiki_core.vault_indexer import VaultIndexer
         idx = VaultIndexer.from_config()
         if not idx:
-            return {"ok": False, "message": "볼트 폴더가 설정되지 않았습니다. 설정에서 Obsidian 볼트 폴더를 지정하세요."}
+            return {"ok": False, "message": "노트 폴더가 설정되지 않았습니다. 설정에서 노트 폴더(.md)를 지정하세요."}
         n = idx.build(verbose=False)
-        return {"ok": True, "message": f"인덱스 재빌드 완료 — 노트 {n}개"}
+        msg = f"인덱스 재빌드 완료 — 노트 {n}개"
+        # 같은 .md 폴더에서 지식 그래프도 함께 최신화(부가 단계 — 실패해도 인덱스는 성공).
+        try:
+            msg += _rebuild_graph_from_vault()
+        except Exception as ge:
+            traceback.print_exc()
+            msg += f" (그래프 갱신 건너뜀: {ge})"
+        return {"ok": True, "message": msg}
     except Exception as e:
         traceback.print_exc()
         return {"ok": False, "message": f"재빌드 실패: {e}"}

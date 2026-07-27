@@ -255,6 +255,8 @@
     "query_planner_enabled": true,
     "_min_context_score_comment": "컨텍스트에 넣을 노트의 최소 TF-IDF 관련도(의미매치는 별도 유지). 무관 노트가 섞여 LLM이 환각하는 것 방지. 0=필터 끔(기존 동작), 0.03 정도부터 노이즈 컷.",
     "min_context_score": 0.0,
+    "_verify_citations_comment": "답변의 [출처: [[노트]]] 인용이 실제 컨텍스트 노트를 가리키는지 검증. 컨텍스트에 없는 노트를 근거로 들면(환각 인용) 말미에 경고를 덧붙임(추가 LLM 호출 없음). 답변 본문은 바꾸지 않음.",
+    "verify_citations": true,
     "max_context_notes": 10,
     "unverified_marker": "확인 불가",
     "conflict_marker": "⚠️ 충돌",

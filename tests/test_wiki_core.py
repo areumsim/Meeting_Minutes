@@ -868,3 +868,48 @@ class TestGatherContextTemporal:
         out = eng._gather_context("6월에 뭐 했지", 10, plan)
         titles = [n["title"] for n in out]
         assert titles == ["6월 세미나"]  # 기간 밖 회의·무날짜 노트 모두 제외
+
+
+class TestVerifyCitations:
+    """인용 근거 검증(P3-6): [출처: [[X]]]가 컨텍스트에 없으면 환각 인용으로 잡는다."""
+
+    _CTX = [{"title": "최신 회의"}, {"title": "양자 세미나"}]
+
+    def test_valid_citation_not_flagged(self):
+        ans = "결론입니다 [출처: [[최신 회의]]]."
+        assert wa._verify_citations(ans, self._CTX) == []
+
+    def test_heading_anchor_matches_title(self):
+        ans = "…[출처: [[최신 회의#결정/합의]]]"
+        assert wa._verify_citations(ans, self._CTX) == []
+
+    def test_hallucinated_citation_flagged(self):
+        ans = "양자회의가 열렸습니다 [출처: [[requirements.txt]]]."
+        assert wa._verify_citations(ans, self._CTX) == ["requirements.txt"]
+
+    def test_lenient_partial_match_not_flagged(self):
+        # 컨텍스트 '양자 세미나'와 부분 포함되면 정당 인용으로 관대하게 인정.
+        ans = "…[출처: [[양자]]]"
+        assert wa._verify_citations(ans, self._CTX) == []
+
+    def test_non_citation_wikilinks_ignored(self):
+        # [출처:] 형식이 아닌 본문 위키링크는 검증 대상이 아니다.
+        ans = "관련해서 [[아무노트]] 를 참고. [출처: [[최신 회의]]]"
+        assert wa._verify_citations(ans, self._CTX) == []
+
+    def test_ask_appends_warning_and_sets_unverified(self, monkeypatch):
+        monkeypatch.setattr(wa, "_c", lambda k, d=None: d)  # verify_citations 기본 true
+        qa = wa.WikiQA.__new__(wa.WikiQA)
+        qa._online = False
+        qa._max_notes = 10
+        qa._unverified = "확인 불가"
+        qa._conflict = "⚠️ 충돌"
+        qa._llm = _FakeLLM("## 요약 답변\n양자회의 열림 [출처: [[requirements.txt]]]")
+        monkeypatch.setattr(qa, "_ensure_clients", lambda: None)
+        monkeypatch.setattr(qa, "_plan_query", lambda q: {})
+        monkeypatch.setattr(qa, "_gather_context",
+                            lambda q, lim, plan=None: [{"title": "최신 회의"}])
+        res = qa.ask("최근 회의?")
+        assert res["citation_issues"] == ["requirements.txt"]
+        assert res["unverified"] is True
+        assert "인용 검증" in res["answer"]

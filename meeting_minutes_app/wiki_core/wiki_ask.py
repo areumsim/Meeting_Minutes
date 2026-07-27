@@ -197,11 +197,27 @@ class WikiQA:
         if self._online and unverified:
             answer = self._supplement_online(question, answer, context_notes)
 
+        # 인용 근거 검증(기본 켜짐, wiki.verify_citations) — 답변이 [출처: [[X]]]로 든
+        # 노트가 실제로 제공된 컨텍스트에 있는지 확인한다. 컨텍스트에 없는 노트를 근거로
+        # 들면(환각 인용) 본문은 건드리지 않고 말미에 검증 경고만 덧붙인다(추가 LLM 호출 없음).
+        citation_issues: List[str] = []
+        if _c("wiki.verify_citations", True):
+            citation_issues = _verify_citations(answer, context_notes)
+            if citation_issues:
+                unverified = True
+                answer += (
+                    "\n\n---\n⚠️ 인용 검증: 다음 출처는 제공된 컨텍스트 노트에 없어 근거를 "
+                    "확인할 수 없습니다 — "
+                    + ", ".join(f"[[{s}]]" for s in citation_issues)
+                    + ". 해당 주장은 노트로 뒷받침되지 않았을 수 있습니다."
+                )
+
         return {
             "answer": answer,
             "sources": context_notes,
             "has_conflict": has_conflict,
             "unverified": unverified,
+            "citation_issues": citation_issues,
         }
 
     def _plan_query(self, question: str) -> Dict[str, Any]:
@@ -597,6 +613,34 @@ def _fname_iso(path: str) -> str:
         return parse_iso_date_from_text(path)
     except Exception:
         return ""
+
+
+_CITATION_RE = re.compile(r"\[출처:\s*\[\[([^\]]+?)\]\]\]")
+
+
+def _verify_citations(answer: str, context_notes: List[Dict[str, Any]]) -> List[str]:
+    """답변의 [출처: [[제목(#헤딩)]]] 인용이 실제 컨텍스트 노트를 가리키는지 검증한다.
+
+    컨텍스트에 없는 노트를 근거로 든 인용(환각 인용)만 목록으로 반환한다. 답변 본문은
+    바꾸지 않는다(호출부에서 경고만 덧붙임). 오탐(정당한 인용을 거짓으로 표기)을 막기 위해
+    매칭은 관대하게 한다 — 정규화 제목이 컨텍스트 제목과 완전일치하거나 서로 부분 포함이면
+    근거 있음으로 본다. 검증 대상은 명시적 [출처:] 인용뿐(본문에 인용된 관련 노트는 제외)."""
+    if not answer:
+        return []
+    ctx_norms = {t for n in context_notes for t in [_norm_title(n.get("title", ""))] if t}
+    issues: List[str] = []
+    seen: set = set()
+    for m in _CITATION_RE.finditer(answer):
+        raw = m.group(1).strip()
+        title = raw.split("#", 1)[0].strip()
+        nt = _norm_title(title)
+        if not nt or nt in seen:
+            continue
+        seen.add(nt)
+        if any(nt == c or nt in c or c in nt for c in ctx_norms):
+            continue
+        issues.append(title)
+    return issues
 
 
 def _note_anchor(note: Dict[str, Any]) -> str:

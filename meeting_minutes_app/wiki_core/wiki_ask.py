@@ -19,7 +19,7 @@ from __future__ import annotations
 import re
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 for _s in (sys.stdout, sys.stderr):
     if getattr(_s, "encoding", None) and _s.encoding.lower() in ("cp949", "euc-kr", "ansi"):
@@ -44,6 +44,10 @@ _UNVERIFIED_MARKER = "확인 불가"
 _CONFLICT_MARKER = "⚠️ 충돌"
 
 _SYSTEM_PROMPT_TEMPLATE = """당신은 Obsidian 볼트의 지식을 기반으로 정확하게 답변하는 개인 LLM Wiki 어시스턴트입니다.
+
+오늘 날짜는 {today} 입니다. 아래 각 노트 블록 제목 옆의 "(작성일: YYYY-MM-DD)"이 그 노트의 날짜입니다.
+"최근·최신·요즘·지난·언제·며칠 전" 같은 시점 표현은 오늘 날짜와 각 노트의 작성일을 비교해 판단하고,
+날짜를 물으면 해당 노트의 작성일을 근거로 명시하세요. 작성일이 없는 노트는 날짜 추정을 하지 마세요.
 
 규칙:
 1. 아래 노트 컨텍스트(제목·헤딩·본문 전부)를 근거로 답하세요. 컨텍스트에 문장으로 똑같이
@@ -93,7 +97,7 @@ class WikiQA:
         self._indexer = indexer
         self._unverified = _c("wiki.unverified_marker", _UNVERIFIED_MARKER)
         self._conflict = _c("wiki.conflict_marker", _CONFLICT_MARKER)
-        self._max_notes = int(_c("wiki.max_context_notes", 5))
+        self._max_notes = int(_c("wiki.max_context_notes", 10))
         self._max_chars = int(_c("wiki.context_max_chars", 2000))
         self._online = bool(_c("wiki.online_search_enabled", False))
 
@@ -249,9 +253,10 @@ class WikiQA:
                     "heading": heading,
                     "path": hit.get("note_path", ""),
                     "snippet": hit.get("snippet", ""),
-                    "content": _truncate_note(sec_body, self._max_chars),
+                    "content": _truncate_note(sec_body, self._max_chars, terms=terms),
                     "score": hit.get("score", 0),
                     "rank_score": rank_score,
+                    "date": hit.get("date", ""),
                     "source": "index_section",
                 })
             # 섹션으로 이미 확보한 노트는 whole-note 레이어에서 제외 (섹션 근거 우선)
@@ -282,9 +287,10 @@ class WikiQA:
                     "heading": None,
                     "path": r.get("path", ""),
                     "snippet": r.get("snippet", ""),
-                    "content": _truncate_note(content, self._max_chars),
+                    "content": _truncate_note(content, self._max_chars, terms=terms),
                     "score": r.get("score", 0),
                     "rank_score": rank_score,
+                    "date": r.get("date", ""),
                     "source": "index",
                 })
 
@@ -331,9 +337,10 @@ class WikiQA:
                         "heading": None,
                         "path": fname,
                         "snippet": snippet,
-                        "content": _truncate_note(content, self._max_chars),
+                        "content": _truncate_note(content, self._max_chars, terms=terms),
                         "score": r.get("score", 0),
                         "rank_score": rank_score,
+                        "date": _fname_iso(fname),
                         "source": "obsidian",
                     })
             except Exception:
@@ -341,25 +348,34 @@ class WikiQA:
 
         # raw score는 index/REST 간 스케일이 달라 자체 랭킹으로 정렬
         results.sort(key=lambda x: -x.get("rank_score", 0))
+        # "최근/최신/지난/언제" 등 시점 질의는 관련 후보 중 최신 노트가 컨텍스트에
+        # 포함되도록 작성일 내림차순을 1순위로 재정렬한다(동점은 관련도 유지).
+        if _is_recency_query(question):
+            results.sort(key=lambda x: (str(x.get("date") or ""), x.get("rank_score", 0)),
+                         reverse=True)
         return results[:max_notes]
 
     def _build_prompt(
         self, question: str, context_notes: List[Dict]
     ) -> Tuple[str, str]:
         """system + user 프롬프트를 구성한다."""
-        # 컨텍스트 블록 구성
+        # 컨텍스트 블록 구성 — 블록 제목 옆에 노트 작성일을 명시해 LLM이 시점/최근 판단에 쓰게 한다.
         context_blocks = []
         for note in context_notes:
             anchor = _note_anchor(note)
+            date = str(note.get("date") or "").strip()
+            date_tag = f" (작성일: {date})" if date else ""
             content = note.get("content") or note.get("snippet") or ""
-            block = f"### [[{anchor}]]\n{content.strip()}"
+            block = f"### [[{anchor}]]{date_tag}\n{content.strip()}"
             context_blocks.append(block)
         context_str = "\n\n".join(context_blocks)
 
+        from datetime import datetime as _dt
         system = _SYSTEM_PROMPT_TEMPLATE.format(
             unverified=self._unverified,
             conflict=self._conflict,
             context=context_str,
+            today=_dt.now().strftime("%Y-%m-%d"),
         )
         # wiki.citation_required=false 시 출처 인용 강제를 완화 (기본 true)
         if not _c("wiki.citation_required", True):
@@ -408,6 +424,26 @@ class WikiQA:
         return answer
 
 
+_RECENCY_PAT = re.compile(
+    r"최근|최신|요즘|근래|지난|언제|며칠|얼마\s*전|latest|recent|when|last\s+meeting",
+    re.IGNORECASE,
+)
+
+
+def _is_recency_query(text: str) -> bool:
+    """질문이 시점/최근성을 묻는지 여부 — 맞으면 컨텍스트를 작성일 내림차순 우선 정렬한다."""
+    return bool(_RECENCY_PAT.search(str(text or "")))
+
+
+def _fname_iso(path: str) -> str:
+    """파일명/경로에서 YYYY-MM-DD 추출(Obsidian REST 결과처럼 인덱스 날짜가 없을 때 폴백)."""
+    try:
+        from meeting_minutes_app.meeting_pipeline.date_utils import parse_iso_date_from_text
+        return parse_iso_date_from_text(path)
+    except Exception:
+        return ""
+
+
 def _note_anchor(note: Dict[str, Any]) -> str:
     """노트 dict → 'Title#Heading' 또는 'Title' 앵커 문자열 (heading 있을 때만 붙임)."""
     title = note.get("title", "")
@@ -415,14 +451,41 @@ def _note_anchor(note: Dict[str, Any]) -> str:
     return f"{title}#{heading}" if heading else title
 
 
-def _truncate_note(content: str, max_chars: int) -> str:
-    """frontmatter 제거 후 max_chars로 자른다."""
+def _truncate_note(content: str, max_chars: int, terms: Optional[List[str]] = None) -> str:
+    """frontmatter 제거 후 max_chars로 자른다.
+
+    terms(질문 키워드)가 주어지고 정답 후보가 본문 뒤쪽에 있어 앞부분만 자르면 잘려나가는
+    경우, 첫 질문어 등장 위치를 중심으로 발췌한다(+ 노트 앞부분 일부는 맥락용으로 유지).
+    질문어가 앞부분(head 범위)에 있거나 못 찾으면 기존처럼 앞부분을 자른다."""
     m = re.match(r'^---\s*\n.*?\n---\s*\n', content, re.DOTALL)
     body = content[m.end():] if m else content
     body = body.strip()
     if len(body) <= max_chars:
         return body
-    return body[:max_chars] + "\n...(truncated)"
+
+    # 질문어 첫 등장 위치(대소문자 무시). 여러 어절 중 가장 앞선 위치 사용.
+    pos = -1
+    if terms:
+        low = body.lower()
+        for t in terms:
+            t = str(t or "").strip().lower()
+            if len(t) < 2:
+                continue
+            i = low.find(t)
+            if i != -1 and (pos == -1 or i < pos):
+                pos = i
+
+    # 정답 후보가 head 범위 안이거나 못 찾으면 앞부분 유지(기존 동작).
+    if pos < 0 or pos < max_chars:
+        return body[:max_chars] + "\n...(truncated)"
+
+    # 정답이 뒤쪽 → 앞부분 일부(맥락) + 질문어 주변 창을 함께 넘긴다.
+    head_keep = min(600, max_chars // 4)
+    win = max_chars - head_keep
+    start = max(0, pos - win // 4)
+    excerpt = body[start:start + win]
+    tail_more = "\n...(truncated)" if start + win < len(body) else ""
+    return (body[:head_keep].strip() + "\n\n...(중략)...\n\n" + excerpt.strip() + tail_more)
 
 
 def _obs_matches_snippet(matches: Any) -> str:

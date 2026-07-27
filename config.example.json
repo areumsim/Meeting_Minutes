@@ -20,6 +20,11 @@
     "_lan_access_comment": "아이폰·태블릿 앱에서 이 PC에 접속하려면 true. 기본 false(localhost 전용, 안전). true면 0.0.0.0으로 바인딩해 같은 WiFi의 기기가 접속 가능 — 신뢰된 네트워크에서만 켜세요. 변경 후 앱 재시작 필요.",
     "lan_access": false
   },
+  "cost": {
+    "_comment": "API 지출 한도(USD). 0이면 무제한(끔). 업로드 시 예상 비용을 계산해 한도를 넘으면 처리를 거절합니다. 예상치는 대략값이라 실제 청구액과 다를 수 있습니다.",
+    "monthly_cap_usd": 0,
+    "per_file_cap_usd": 0
+  },
   "models": {
     "_comment": "아래 _options 목록에서 선택해 값을 변경하세요.",
     "_stt_options": [
@@ -37,13 +42,12 @@
     ],
     "llm": "gpt",
     "_gpt_model_options": [
-      "gpt-4o",
       "gpt-4o-mini",
+      "gpt-4o",
       "o1",
-      "o1-mini",
       "o3-mini"
     ],
-    "_gpt_model_note": "o1/o3 계열은 reasoning 모델 — 품질은 높으나 느리고 비용 높음",
+    "_gpt_model_note": "config_schema.py models.gpt_model 옵션과 동일하게 유지. o1/o3 계열은 reasoning 모델 — 품질은 높으나 느리고 비용 높음",
     "gpt_model": "gpt-4o-mini",
     "_minutes_model_comment": "회의록 생성 모델 — 미설정 시 gpt_model 사용 (상세 기록이므로 고성능 모델 권장)",
     "minutes_model": "gpt-4o",
@@ -62,6 +66,15 @@
       "gpt-4o"
     ],
     "translate_model": "gpt-4o-mini"
+  },
+  "stt": {
+    "_comment": "STT 오디오 전처리(stt.py prepare_audio). 업로드·배치 처리에 적용.",
+    "_preprocess_audio_comment": "음량 정규화(loudnorm). 마이크가 작아도 인식률↑. 타임스탬프 불변. 기본 켜짐.",
+    "preprocess_audio": true,
+    "_trim_silence_comment": "무음 제거(silenceremove). 파일↓·환각↓이나 무음을 지워 타임스탬프가 실제 시간과 어긋남. 기본 꺼짐.",
+    "trim_silence": false,
+    "_translation_review_comment": "번역(EN→KR) 후 원문·번역을 병치해 주제 맥락으로 오역·누락을 재검토·교정. 별도 LLM 호출로 비용↑. 기본 켜짐.",
+    "translation_review": true
   },
   "realtime": {
     "_comment": "실시간 녹취(realtime_transcription.py) 기본값",
@@ -230,15 +243,15 @@
     "enabled": true,
     "index_path": "data/vault_index.json",
     "auto_reindex_on_start": false,
-    "_auto_reindex_after_write_comment": "true 시 prep-brief 등 Obsidian 저장 직후 전체 인덱스 자동 재빌드. 기본 false (재빌드 비용 수 초). 수동: python run_meeting.py reindex",
-    "auto_reindex_after_write": false,
+    "_auto_reindex_after_write_comment": "true 시 회의 처리·노트 저장 직후 검색 인덱스+지식 그래프를 자동 재빌드해 위키/그래프가 항상 최신. 기본 true(임베딩은 증분이라 새 노트만 재계산 → 저렴, 후처리라 대기 없음). 대용량 볼트에서 매번 수 초가 부담이면 false. 수동: python run_meeting.py reindex",
+    "auto_reindex_after_write": true,
     "_vault_path_comment": "비우면 obsidian.vault_path 를 공유. 직접 파일시스템 접근 경로이며 Local REST API 볼트와 같아야 검색/저장 경로가 어긋나지 않습니다.",
     "vault_path": ""
   },
   "wiki": {
     "_comment": "LLM Wiki Q&A 및 실시간 사실 검증 설정.",
     "citation_required": true,
-    "max_context_notes": 8,
+    "max_context_notes": 10,
     "unverified_marker": "확인 불가",
     "conflict_marker": "⚠️ 충돌",
     "context_max_chars": 6000,
@@ -308,8 +321,8 @@
     "max_context_chars": 12000,
     "_registry_context_comment": "생성 프롬프트에 주입되는 이전 결정사항/미완료 액션(registry) 섹션 글자 수 제한",
     "registry_context_max_chars": 4000,
-    "_embedding_comment": "임베딩 하이브리드 검색 — TF-IDF와 의미 검색을 RRF로 융합. reindex 시 OpenAI 임베딩 API 사용(증분, 콘텐츠 해시 캐시). 실패 시 자동으로 TF-IDF 단독 폴백.",
-    "embedding_enabled": false,
+    "_embedding_comment": "임베딩 하이브리드 검색 — TF-IDF(글자 매칭)와 의미 검색을 RRF로 융합해 표현이 달라도 정답 노트를 회수. 기본 켜짐(true). reindex 시 OpenAI 임베딩 API 사용(증분, 콘텐츠 해시 캐시 — 변경분만 재계산, 비용 소액). OpenAI 키가 없거나 호출 실패 시 자동으로 TF-IDF 단독으로 폴백하므로 켜 둬도 안전. 끄려면 false.",
+    "embedding_enabled": true,
     "embedding_model": "text-embedding-3-small",
     "embedding_dims": 256,
     "_embedding_min_cosine_comment": "의미 검색 결과로 인정할 최소 코사인 유사도 (노이즈 컷)",

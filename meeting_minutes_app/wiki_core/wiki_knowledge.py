@@ -536,6 +536,18 @@ def _is_paper_note(note_type: str, title: str) -> bool:
     return False
 
 
+def _note_date_from(content: str, wiki_title: str) -> str:
+    """노트 날짜(YYYY-MM-DD): frontmatter date/session_date 우선, 없으면 파일명에서 추출."""
+    m = re.search(r'(?m)^\s*(?:date|session_date)\s*:\s*"?(\d{4}-\d{2}-\d{2})', content or "")
+    if m:
+        return m.group(1)
+    try:
+        from meeting_minutes_app.meeting_pipeline.date_utils import parse_iso_date_from_text
+        return parse_iso_date_from_text(wiki_title)
+    except Exception:
+        return ""
+
+
 def _get_brief_related_notes(
     title: str,
     topic: str,
@@ -543,7 +555,7 @@ def _get_brief_related_notes(
     obs,
     limit: int = 5,
     memo: str = "",
-) -> Tuple[List[Tuple[str, str]], List[Tuple[str, str]]]:
+) -> Tuple[List[Tuple[str, str, str]], List[Tuple[str, str, str]]]:
     """Vault에서 관련 노트를 검색하고 일반/논문으로 분류한다.
 
     Returns:
@@ -571,8 +583,8 @@ def _get_brief_related_notes(
         print(f"[wiki] meeting_workflow import 실패: {e}")
         return [], []
 
-    regular: List[Tuple[str, str]] = []
-    papers: List[Tuple[str, str]] = []
+    regular: List[Tuple[str, str, str]] = []
+    papers: List[Tuple[str, str, str]] = []
     # 자기참조 방지: 같은 제목으로 prep-brief를 재실행하면 직전에 저장된 브리프 자신이
     # vault 검색에 걸려 "관련 노트"로 다시 포함되고, 그 안에 자기 자신의 이전 관련 노트
     # 요약까지 통째로 중첩 인용되는 문제가 있었다(실전 재실행 중 확인).
@@ -585,11 +597,12 @@ def _get_brief_related_notes(
         if nn in seen_norms:
             return
         seen_norms.add(nn)
+        date = _note_date_from(content, wiki_title)
         body = strip_frontmatter(content).strip()[:2000]
         if _is_paper_note(note_type, wiki_title):
-            papers.append((wiki_title, body))
+            papers.append((wiki_title, body, date))
         else:
-            regular.append((wiki_title, body))
+            regular.append((wiki_title, body, date))
 
     query = " ".join(filter(None, [title, topic, memo]))
 
@@ -680,7 +693,7 @@ def _get_brief_related_notes(
     # 찾은 노트 제목을 Wiki Knowledge Graph로 확장해 연결된 인물/조직/주제를 추가한다.
     try:
         from meeting_minutes_app.meeting_pipeline.meeting_workflow import graph_expand_titles
-        found_titles = [t for t, _ in regular] + [t for t, _ in papers]
+        found_titles = [t for t, *_ in regular] + [t for t, *_ in papers]
         for wiki_title in graph_expand_titles(found_titles, max_extra=limit):
             if norm_title(wiki_title) in seen_norms:
                 continue
@@ -706,8 +719,8 @@ def build_prep_brief(
     topic: str,
     yymmdd: str,
     full_date: str,
-    regular_notes: List[Tuple[str, str]],
-    paper_notes: List[Tuple[str, str]],
+    regular_notes: List[Tuple[str, str, str]],
+    paper_notes: List[Tuple[str, str, str]],
     open_actions: List[dict],
     recent_decisions: List[dict],
     attendees: Optional[List[str]] = None,
@@ -749,7 +762,7 @@ def build_prep_brief(
     # 관련 Wiki 노트 (일반)
     lines.append("## 관련 Wiki 노트")
     if regular_notes:
-        lines.append(", ".join(f"[[{t}]]" for t, _ in regular_notes))
+        lines.append(", ".join(f"[[{t}]]" for t, *_ in regular_notes))
     else:
         lines.append("관련 노트 없음 (Vault 인덱스 미연결 또는 검색 결과 없음)")
     lines.append("")
@@ -757,22 +770,24 @@ def build_prep_brief(
     # 관련 논문·학술자료 (있을 때만 섹션 출력)
     if paper_notes:
         lines.append("## 관련 논문·학술자료")
-        lines.append(", ".join(f"[[{t}]]" for t, _ in paper_notes))
+        lines.append(", ".join(f"[[{t}]]" for t, *_ in paper_notes))
         lines.append("")
 
     # 관련 노트 요약
     if regular_notes:
         lines.append("## 관련 노트 요약")
-        for note_title, body in regular_notes:
-            lines.append(f"### [[{note_title}]]")
+        for note_title, body, date in regular_notes:
+            date_tag = f" (작성일: {date})" if date else ""
+            lines.append(f"### [[{note_title}]]{date_tag}")
             lines.append(body.strip() if body.strip() else "(내용 없음)")
             lines.append("")
 
     # 논문 요약
     if paper_notes:
         lines.append("## 논문 요약")
-        for note_title, body in paper_notes:
-            lines.append(f"### [[{note_title}]]")
+        for note_title, body, date in paper_notes:
+            date_tag = f" (작성일: {date})" if date else ""
+            lines.append(f"### [[{note_title}]]{date_tag}")
             lines.append(body.strip() if body.strip() else "(내용 없음)")
             lines.append("")
 
@@ -910,6 +925,14 @@ def _reindex_if_configured(indexer, force: bool = False) -> None:
         print(f"[wiki] 인덱스 갱신 완료: {n}개 노트")
     except Exception as e:
         print(f"[wiki] 인덱스 재빌드 실패 (무시): {e}")
+    # 인덱스만 갱신하면 지식 그래프가 새 회의를 반영하지 못한다 — 그래프도 함께 백필한다
+    # (실패해도 인덱스 갱신은 유효하므로 무시). 그래프는 인덱스의 파생 뷰라 원본을 건드리지 않음.
+    try:
+        from meeting_minutes_app.wiki_core import graph_sync
+        graph_sync.backfill_from_vault()
+        print("[wiki] 지식 그래프 백필 완료")
+    except Exception as e:
+        print(f"[wiki] 그래프 백필 건너뜀 (무시): {e}")
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

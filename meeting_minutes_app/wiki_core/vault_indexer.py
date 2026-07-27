@@ -36,6 +36,23 @@ def _c(key: str, default: Any = None) -> Any:
     return _cfg.get(key, default) if _cfg_ok else default
 
 
+def _resolve_note_date(meta: Dict[str, Any], rel_path: str) -> str:
+    """노트 날짜(YYYY-MM-DD 문자열)를 결정한다.
+
+    우선순위: frontmatter date > session_date > 파일명/경로에서 추출(YYMMDD 등).
+    회의록·전사 노트는 frontmatter에 date가 있지만, 손으로 만든 노트는 파일명
+    ("260707 ...")에만 날짜가 있는 경우가 많아 파일명 폴백으로 견고화한다."""
+    for k in ("date", "session_date"):
+        v = str(meta.get(k) or "").strip().strip('"')
+        if v:
+            return v
+    try:
+        from meeting_minutes_app.meeting_pipeline.date_utils import parse_iso_date_from_text
+        return parse_iso_date_from_text(rel_path)
+    except Exception:
+        return ""
+
+
 # 한국어 조사·어미 bigram 제거용 불용어 (음절 bigram 레벨)
 _KO_STOPWORD_BIGRAMS: set = {
     "이다", "있다", "없다", "하다", "되다", "이고", "하고", "이며", "하며",
@@ -230,7 +247,7 @@ class VaultIndexer:
                 "title": title,
                 "wikilink_title": wikilink_title,
                 "tags": meta.get("tags") or [],
-                "date": str(meta.get("date") or ""),
+                "date": _resolve_note_date(meta, rel),
                 "type": str(meta.get("type") or ""),
                 "snippet": snippet,
                 "tf": {},
@@ -373,7 +390,7 @@ class VaultIndexer:
 
     @staticmethod
     def _emb_enabled() -> bool:
-        return bool(_c("wiki_knowledge.embedding_enabled", False))
+        return bool(_c("wiki_knowledge.embedding_enabled", True))
 
     def _emb_model(self) -> str:
         return str(_c("wiki_knowledge.embedding_model", "text-embedding-3-small"))
@@ -668,6 +685,7 @@ class VaultIndexer:
                 "level": sec["level"],
                 "snippet": sec["snippet"],
                 "score": round(score, 4),
+                "date": self._notes[rel].get("date", ""),
             })
         return results
 
@@ -716,15 +734,10 @@ class VaultIndexer:
             root = getattr(_cfg, "_PROJECT_ROOT", None)
             if root:
                 index = os.path.join(str(root), index)
-        if not vault:
-            try:
-                from meeting_minutes_app.wiki_core.obsidian import _detect_obsidian_config
-                detected = _detect_obsidian_config()
-                vault = detected.get("vault_path", "")
-                if vault:
-                    print(f"[indexer] 볼트 경로 자동 감지: {vault}")
-            except Exception:
-                pass
+        # 명시적으로 설정된 볼트만 사용한다. 과거에는 config가 비면 설치된 Obsidian
+        # 앱의 '열린 볼트'를 자동 감지해 인덱싱했는데, 사용자가 지정한 적 없는 개인 볼트를
+        # 조용히 인덱싱하면서도 진단 패널(assistant.obsidian-diagnose)은 '미설정'이라
+        # 표시해 동작이 어긋났다. 볼트는 웹 [설정] 또는 최초 설정 마법사에서 지정한다.
         if not vault:
             return None
         return cls(vault_path=vault, index_path=index)

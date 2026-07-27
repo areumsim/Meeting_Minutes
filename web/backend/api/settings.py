@@ -20,7 +20,7 @@ CONFIG_PATH = Path(EXE_DIR) / "config.json"
 # (과거엔 이 목록을 손으로 유지하다 "output" 오타·wiki_knowledge/vault_watcher 누락으로
 #  해당 섹션 저장이 422로 막히는 버그가 반복됐다. 새 기능 섹션은 example 에만 추가하면 됨.)
 _ALLOWED_FALLBACK = {
-    "api", "models", "realtime", "email", "obsidian",
+    "api", "models", "stt", "realtime", "email", "obsidian",
     "indexing", "wiki", "wiki_knowledge", "notify", "ssl", "server",
     "output_dir", "vault_watcher", "mcp", "supermemory", "analysis",
 }
@@ -197,6 +197,42 @@ def get_config_schema():
         raise HTTPException(status_code=500, detail=f"스키마 로드 실패: {e}")
 
 
+def _norm_vault(p: str) -> str:
+    """볼트 경로 비교용 정규화(대소문자·상대경로·틸드 통일). 빈 값은 ''."""
+    import os
+    s = (p or "").strip()
+    return os.path.normcase(os.path.abspath(os.path.expanduser(s))) if s else ""
+
+
+def _reindex_vault_bg() -> None:
+    """노트 폴더가 새로 연결/변경됐을 때 검색 인덱스 + 지식 그래프를 백그라운드로 재빌드한다.
+    온보딩/설정에서 폴더를 붙이면 [검색 인덱스·그래프 재빌드] 버튼을 누르지 않아도 위키 질문·
+    지식그래프가 바로 동작하게 한다(app.py 시작 시 자동 인덱스·그래프 백필과 동일 철학)."""
+    import threading
+
+    def _run():
+        try:
+            from meeting_minutes_app.common import config_loader as _cfg
+            if not bool(_cfg.get("indexing.enabled", True)):
+                return
+            from meeting_minutes_app.wiki_core.vault_indexer import VaultIndexer
+            idx = VaultIndexer.from_config()
+            if not idx:
+                return
+            n = idx.build(verbose=False)
+            print(f"[settings] 노트 폴더 연결 → 자동 검색 인덱스 완료: {n}개")
+            try:
+                from meeting_minutes_app.wiki_core import graph_sync
+                graph_sync.backfill_from_vault()
+                print("[settings] 노트 폴더 연결 → 지식 그래프 자동 백필 완료")
+            except Exception as ge:
+                print(f"[settings] 그래프 백필 건너뜀(무시): {ge}")
+        except Exception as e:
+            print(f"[settings] 폴더 연결 자동 인덱스 실패(무시): {e}")
+
+    threading.Thread(target=_run, name="vault-connect-reindex", daemon=True).start()
+
+
 @router.put("/config")
 def update_config(data: dict):
     if not CONFIG_PATH.exists():
@@ -217,6 +253,9 @@ def update_config(data: dict):
 
     with open(CONFIG_PATH, "r", encoding="utf-8") as f:
         cfg = json.load(f)
+
+    # 노트 폴더(볼트) 경로가 이번 저장으로 새로 연결/변경됐는지 판별하기 위해 기존 값 캡처.
+    _old_vault = _norm_vault(_dget(cfg, "indexing.vault_path") or _dget(cfg, "obsidian.vault_path") or "")
 
     sensitive = set(_sensitive_paths())
 
@@ -267,6 +306,15 @@ def update_config(data: dict):
     try:
         from meeting_minutes_app.common import config_loader
         config_loader.reload()
+    except Exception:
+        pass
+
+    # 노트 폴더가 새로 연결되거나 다른 폴더로 바뀌었으면 검색 인덱스+지식 그래프를 자동 재빌드
+    # (버튼을 누르지 않아도 위키 질문·지식그래프가 바로 뜨도록). 변경이 없으면 건너뛴다.
+    try:
+        _new_vault = _norm_vault(_dget(cfg, "indexing.vault_path") or _dget(cfg, "obsidian.vault_path") or "")
+        if _new_vault and _new_vault != _old_vault:
+            _reindex_vault_bg()
     except Exception:
         pass
 

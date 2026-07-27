@@ -16,6 +16,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from meeting_minutes_app.meeting_pipeline import json_utils as ju  # noqa: E402
 from meeting_minutes_app.wiki_core import wiki_knowledge as wk  # noqa: E402
 from meeting_minutes_app.wiki_core import vault_indexer as vi  # noqa: E402
+from meeting_minutes_app.wiki_core import wiki_ask as wa  # noqa: E402
 from meeting_minutes_app.meeting_pipeline import date_utils as du  # noqa: E402
 
 
@@ -561,7 +562,7 @@ class TestGetBriefRelatedNotesSelfReference:
         ]
         indexer = _FakeIndexer(results)
         regular, _ = wk._get_brief_related_notes(title, "", indexer, None, limit=5)
-        titles = [t for t, _ in regular]
+        titles = [t for t, *_ in regular]
         assert f"{title} 준비브리프" not in titles
         assert "조직도_및_회사관계" in titles
 
@@ -571,3 +572,78 @@ class TestGetBriefRelatedNotesSelfReference:
         indexer = _FakeIndexer(results)
         regular, _ = wk._get_brief_related_notes(title, "", indexer, None, limit=5)
         assert regular == []
+
+
+class TestNoteDateResolution:
+    """노트 날짜 인식: frontmatter 우선, 없으면 파일명(YYMMDD 등) 폴백."""
+
+    def test_frontmatter_date_wins(self):
+        d = vi._resolve_note_date({"date": "2026-07-07"}, "00_Meetings/260101 foo.md")
+        assert d == "2026-07-07"
+
+    def test_session_date_fallback(self):
+        d = vi._resolve_note_date({"session_date": "2026-06-30"}, "x.md")
+        assert d == "2026-06-30"
+
+    def test_filename_yymmdd_fallback(self):
+        # frontmatter에 날짜가 없으면 파일명 260707 → 2026-07-07
+        d = vi._resolve_note_date({}, "00_Meetings/PhysicalAI/260707 로봇 세미나.md")
+        assert d == "2026-07-07"
+
+    def test_no_date_returns_empty(self):
+        assert vi._resolve_note_date({}, "notes/조직도.md") == ""
+
+    def test_wa_fname_iso(self):
+        assert wa._fname_iso("2026-07-07 회의.md") == "2026-07-07"
+        assert wa._fname_iso("조직도.md") == ""
+
+
+class TestRecencyQueryDetection:
+    def test_recency_terms_detected(self):
+        for q in ["최근 회의가 언제야?", "가장 최신 세미나", "지난 회의 결정사항",
+                  "요즘 논의된 주제", "언제 만났어?", "latest meeting"]:
+            assert wa._is_recency_query(q), q
+
+    def test_non_recency_not_detected(self):
+        for q in ["NISQ가 뭐야?", "한빛 조직도 알려줘", "이 프로젝트 목표는?"]:
+            assert not wa._is_recency_query(q), q
+
+
+class TestPromptIncludesDate:
+    """_build_prompt: 시스템 프롬프트에 오늘 날짜, 각 블록에 (작성일: ...) 포함."""
+
+    def test_context_block_has_date_and_today(self):
+        engine = wa.WikiQA.__new__(wa.WikiQA)
+        engine._unverified = "확인 불가"
+        engine._conflict = "⚠️ 충돌"
+        engine._online = False
+        notes = [{"title": "로봇 세미나", "heading": None,
+                  "content": "본문", "date": "2026-07-07"}]
+        system, user = engine._build_prompt("최근 회의?", notes)
+        assert "작성일: 2026-07-07" in system
+        from datetime import datetime
+        assert datetime.now().strftime("%Y-%m-%d") in system
+
+
+class TestQueryCenteredTruncation:
+    """긴 노트에서 정답이 뒤쪽이면 앞부분만 자르지 않고 질문어 주변을 발췌한다."""
+
+    def test_short_note_returned_whole(self):
+        assert wa._truncate_note("짧은 내용", 100, terms=["내용"]) == "짧은 내용"
+
+    def test_head_kept_when_hit_near_front(self):
+        body = "핵심답변이다 " + ("x" * 500)
+        out = wa._truncate_note(body, 100, terms=["핵심답변"])
+        assert out.startswith("핵심답변이다")
+
+    def test_centers_on_hit_when_answer_is_deep(self):
+        body = "머리말 " + ("가" * 3000) + " 목표는연매출2배 " + ("나" * 200)
+        out = wa._truncate_note(body, 400, terms=["목표는연매출2배"])
+        assert "목표는연매출2배" in out       # 뒤쪽 정답이 발췌에 포함됨
+        assert "중략" in out                    # head + 발췌 형태
+        assert len(out) < len(body)
+
+    def test_no_terms_falls_back_to_head(self):
+        body = "a" * 5000
+        out = wa._truncate_note(body, 100)
+        assert out.startswith("a") and "truncated" in out

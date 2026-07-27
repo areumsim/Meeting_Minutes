@@ -345,6 +345,27 @@ async def upload_file(
 def _start_pending(*, file_path, args, title, topic, speakers, mode,
                    est_total, duration_sec, background_tasks) -> str:
     """세션을 만들고 예상 비용을 기록한 뒤 배치 처리를 시작한다(업로드/확인 공통)."""
+    # ── 월 지출 한도 재검사 ──────────────────────────────────────────
+    # 한도 검사는 upload_file 에서도 하지만, 일반 UI 는 2단계(예상비용 확인 → confirm)라
+    # 그 시점 검사는 '세션 생성 전' 값이라 대기 중 업로드가 서로 합산되지 않는다. 실제로
+    # 세션을 만드는 이 지점에서 현재 월 지출 합계 기준으로 다시 검사해, 여러 건을 미리
+    # 올려두고 한꺼번에 확인해 한도를 우회하는 것을 막는다(서버측 방어선 유지).
+    if est_total > 0:
+        from meeting_minutes_app.common import config_loader as _cfg
+        monthly_cap = float(_cfg.get("cost.monthly_cap_usd", 0) or 0)
+        if monthly_cap > 0:
+            mtd = db.month_to_date_spend()
+            if mtd + est_total > monthly_cap:
+                try:
+                    os.remove(file_path)
+                except OSError:
+                    pass
+                raise HTTPException(
+                    status_code=400,
+                    detail=(f"이번 달 예상 지출 ${mtd:.2f} + 이 파일 ${est_total:.2f} = "
+                            f"${mtd + est_total:.2f}가 월 한도 ${monthly_cap:.2f}를 초과합니다. "
+                            f"[설정] → 지출 한도에서 한도를 조정하세요."),
+                )
     session_id = db.create_session(
         title=title, topic=topic, doc_type=args.type, language=args.language,
         translate=args.translate, model=args.model or "", speakers=speakers,

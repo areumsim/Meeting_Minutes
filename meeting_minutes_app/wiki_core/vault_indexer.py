@@ -20,6 +20,7 @@ import json
 import math
 import glob
 import time
+import uuid
 import hashlib
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Tuple, Sequence
@@ -368,7 +369,10 @@ class VaultIndexer:
 
     def _save(self) -> None:
         os.makedirs(os.path.dirname(self.index_path) or ".", exist_ok=True)
-        tmp = self.index_path + ".tmp"
+        # tmp 경로를 프로세스/스레드별로 유일화한다 — 두 재빌드(설정 저장 시 백그라운드
+        # 재인덱스 + 회의 후 자동 재빌드 등)가 동시에 돌면 고정 ".tmp"를 공유해 json.dump가
+        # 뒤섞여 손상된 인덱스가 발행될 수 있다. os.replace 자체는 원자적이라 리더는 안전.
+        tmp = f"{self.index_path}.{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp"
         try:
             with open(tmp, "w", encoding="utf-8") as f:
                 json.dump({
@@ -381,6 +385,11 @@ class VaultIndexer:
             os.replace(tmp, self.index_path)
         except Exception as e:
             print(f"[indexer] 저장 실패: {e}")
+            try:
+                if os.path.isfile(tmp):
+                    os.remove(tmp)
+            except OSError:
+                pass
 
     # ── 임베딩 인덱스 (하이브리드 검색) ───────────────────────
     @property
@@ -461,7 +470,8 @@ class VaultIndexer:
         return bool(self._emb.get("notes"))
 
     def _save_embeddings(self) -> None:
-        tmp = self.emb_path + ".tmp"
+        # _save 와 동일 이유로 tmp 경로를 유일화(동시 재빌드 시 손상 방지).
+        tmp = f"{self.emb_path}.{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp"
         try:
             os.makedirs(os.path.dirname(self.emb_path) or ".", exist_ok=True)
             payload = {
@@ -475,6 +485,11 @@ class VaultIndexer:
             os.replace(tmp, self.emb_path)
         except Exception as e:
             print(f"[indexer] 임베딩 인덱스 저장 실패 (무시): {e}")
+            try:
+                if os.path.isfile(tmp):
+                    os.remove(tmp)
+            except OSError:
+                pass
 
     def build_embeddings(self, verbose: bool = False,
                          texts: Optional[Dict[str, str]] = None) -> int:
@@ -633,6 +648,45 @@ class VaultIndexer:
                 item["cosine"] = round(cos_map.get(rel, 0.0), 4)
             results.append(item)
         return results
+
+    def recent_notes(self, limit: int = 10,
+                     types: Optional[Sequence[str]] = None) -> List[Dict[str, Any]]:
+        """작성일(date) 내림차순으로 최근 노트를 반환한다(날짜 없는 노트는 제외).
+
+        "가장 최근 회의" 같은 시점 질의는 키워드 관련도로는 최신 노트를 회수하지 못한다
+        (일반 단어 '최근/회의'가 정작 그 회의 노트 본문과 잘 안 겹침). 그래서 관련도와
+        무관하게 날짜 기준으로 직접 최신 후보를 뽑아 컨텍스트에 합류시키는 용도다.
+
+        types 가 주어지면 그 type(frontmatter type) 노트만(대소문자 무시). 회의류만
+        원하면 ("meeting","seminar","lecture") 처럼 넘긴다. 날짜 형식이 섞여도(예:
+        "2026-07-24" vs "2026/07/24") 앞 10자를 '-'로 정규화해 사전식 비교가 맞게 한다.
+        """
+        if not self._built:
+            if not self.load():
+                return []
+        tset = {str(t).lower() for t in types} if types else None
+        rows: List[Tuple[str, str, Dict]] = []
+        for rel, note in self._notes.items():
+            raw = str(note.get("date") or "").strip().strip('"')
+            if not raw:
+                continue
+            if tset is not None and str(note.get("type") or "").lower() not in tset:
+                continue
+            key = raw[:10].replace("/", "-").replace(".", "-")
+            rows.append((key, rel, note))
+        rows.sort(key=lambda x: x[0], reverse=True)
+        out: List[Dict[str, Any]] = []
+        for key, rel, note in rows[:max(1, limit)]:
+            out.append({
+                "path": rel,
+                "title": note["title"],
+                "wikilink_title": note.get("wikilink_title", note["title"]),
+                "snippet": note.get("snippet", ""),
+                "score": 0.0,
+                "date": str(note.get("date") or "").strip().strip('"'),
+                "type": note.get("type", ""),
+            })
+        return out
 
     def find_related(self, text: str, limit: int = 5,
                      min_score: float = 0.05,

@@ -55,7 +55,7 @@ _SYSTEM_PROMPT_TEMPLATE = """당신은 Obsidian 볼트의 지식을 기반으로
    특히 블록 제목 "### [[노트#헤딩]]"의 헤딩은 인용 대상일 뿐 아니라 **그 자체가 사실 정보**입니다
    (예: 헤딩에 사람 이름·소속·그룹명이 들어 있으면 그것이 곧 답의 근거가 됩니다). 질문의 표현이
    노트와 달라도(예: "연대"="양자컴퓨팅") 합리적으로 연결해 답하세요. 외부 지식으로 지어내지는 마세요.
-2. 주장에는 가능한 한 [출처: [[노트 제목]]] 또는 [출처: [[노트 제목#헤딩]]] 형식으로 인용하세요.
+{citation_rule}
 3. 노트에서 합리적으로 도출할 수 있으면 답을 제시하고, **근거가 전혀 없을 때만** "{unverified}"라고
    명시하세요. 컨텍스트에 관련 단서가 있는데 표현이 다르다는 이유로 "{unverified}"를 쓰지 마세요.
 4. 두 노트가 서로 상충하는 정보를 담고 있으면 "{conflict}"을 표시하고 두 입장을 모두 제시하세요.
@@ -86,6 +86,20 @@ _SYSTEM_PROMPT_TEMPLATE = """당신은 Obsidian 볼트의 지식을 기반으로
 _ONLINE_SUPPLEMENT_PROMPT = """위 노트 컨텍스트 외에도 웹 검색으로 다음을 보완해도 됩니다.
 단, 웹 검색 결과에서 나온 내용은 [웹 출처: URL] 형식으로 표시하고,
 볼트 노트 내용과 구분하세요."""
+
+_PLAN_SYSTEM = """사용자의 위키 질문을 검색 계획(JSON)으로 변환하세요. 오늘 날짜는 {today} 입니다.
+아래 JSON 객체 '하나만' 출력하세요(설명·마크다운 금지):
+{{"intent":"recency|aggregate|lookup|general","date_from":"","date_to":"","types":[],"top_k":0,"entities":[]}}
+
+필드 규칙:
+- intent: "가장 최근/최신/마지막" 한 건 → recency. "N개/목록/전부/6월 회의들"처럼 여러 건 나열 →
+  aggregate. 특정 대상 조회 → lookup. 그 외 → general.
+- date_from/date_to: "지난 달/이번 주/올해/6월/최근 3개월" 같은 표현을 오늘 날짜 기준 실제
+  범위(YYYY-MM-DD)로 환산해 채우세요. 기간 언급이 없으면 둘 다 "".
+- types: 회의→"meeting", 세미나→"seminar", 강의→"lecture". 특정하지 않으면 빈 배열.
+- top_k: 사용자가 명시한 개수(예 "3개"→3). 없으면 0.
+- entities: 노트 검색에 쓸 핵심 명사 1~6개(조사·일반어 '회의/최근/관련' 등은 제외).
+"""
 
 
 class WikiQA:
@@ -131,8 +145,11 @@ class WikiQA:
         self._ensure_clients()
         limit = max_context_notes or self._max_notes
 
+        # 질문을 검색 계획(의도/기간/유형/개수/핵심어)으로 변환 — 실패·비활성 시 휴리스틱 폴백.
+        plan = self._plan_query(question)
+
         # 컨텍스트 수집
-        context_notes = self._gather_context(question, limit)
+        context_notes = self._gather_context(question, limit, plan)
 
         if not context_notes:
             # 노트 폴더는 연결됐지만 검색 인덱스가 아직 없으면(=폴더-only 사용자가
@@ -187,8 +204,66 @@ class WikiQA:
             "unverified": unverified,
         }
 
-    def _gather_context(self, question: str, max_notes: int) -> List[Dict[str, Any]]:
-        """인덱서 + Obsidian search 로 관련 노트/섹션을 수집한다."""
+    def _plan_query(self, question: str) -> Dict[str, Any]:
+        """질문 → 검색 계획 dict. LLM 쿼리 플래너(기본 켜짐, wiki.query_planner_enabled).
+
+        반환: {intent, date_from, date_to, types, top_k, entities}
+        - intent: recency(가장 최근) | aggregate(여러 건·기간) | lookup(특정 대상) | general
+        - 실패·비활성 시 정규식 휴리스틱으로 폴백(기존 동작과 동일한 안전값).
+
+        정규식 recency 감지만으로는 "6월 회의들"(기간)·"3개"(개수)·"지난 달"(상대기간)을
+        이해하지 못한다. LLM으로 이런 시점/개수/유형 의도를 구조화해 검색을 유도한다.
+        """
+        from datetime import datetime as _dt
+        # 휴리스틱 폴백(플래너 꺼짐/실패 시) — 기존 recency·meeting 감지 재사용.
+        fallback = {
+            "intent": "recency" if _is_recency_query(question) else "general",
+            "date_from": "", "date_to": "",
+            "types": (["meeting", "seminar", "lecture"]
+                      if _MEETING_PAT.search(question or "") else []),
+            "top_k": 0,
+            "entities": _keyword_terms(question),
+        }
+        if not bool(_c("wiki.query_planner_enabled", True)):
+            return fallback
+        try:
+            from meeting_minutes_app.meeting_pipeline.json_utils import parse_json_loose
+            system = _PLAN_SYSTEM.format(today=_dt.now().strftime("%Y-%m-%d"))
+            raw = self._llm.chat(system, question, temp=0.0)
+            data = parse_json_loose(raw, expect="dict")
+            if not isinstance(data, dict):
+                return fallback
+            intent = str(data.get("intent") or "").strip().lower()
+            if intent not in ("recency", "aggregate", "lookup", "general"):
+                intent = fallback["intent"]
+            types = [str(t).strip().lower() for t in (data.get("types") or [])
+                     if str(t).strip()]
+            ents = [str(e).strip() for e in (data.get("entities") or []) if str(e).strip()]
+            try:
+                top_k = int(data.get("top_k") or 0)
+            except (TypeError, ValueError):
+                top_k = 0
+            _dpat = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+            df = str(data.get("date_from") or "").strip()
+            dt = str(data.get("date_to") or "").strip()
+            return {
+                "intent": intent,
+                "date_from": df if _dpat.match(df) else "",
+                "date_to": dt if _dpat.match(dt) else "",
+                "types": types,
+                "top_k": max(0, top_k),
+                "entities": ents or fallback["entities"],
+            }
+        except Exception:
+            return fallback
+
+    def _gather_context(self, question: str, max_notes: int,
+                        plan: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+        """인덱서 + Obsidian search 로 관련 노트/섹션을 수집한다.
+
+        plan(검색 계획)이 주어지면 시점/기간/유형/개수 의도를 검색에 반영한다.
+        """
+        plan = plan or {}
         seen_titles: set = set()
         seen_sections: set = set()
         results: List[Dict] = []
@@ -204,7 +279,9 @@ class WikiQA:
             search_question = normalize_domain_text(question)
         except Exception:
             search_question = question
-        terms = _keyword_terms(search_question)
+        # 랭킹·발췌용 키워드는 쿼리 플래너가 뽑은 핵심어(entities)를 우선 사용한다 —
+        # 일반어가 걸러진 명사 위주라 관련도 가산·질문어 중심 발췌가 더 정확하다.
+        terms = [t for t in (plan.get("entities") or []) if t] or _keyword_terms(search_question)
 
         # 질문에서 도메인(양자/PhysicalAI 등)이 감지되면 검색 범위를 그 아카이브 +
         # 공유 참조노트로 좁힌다 — 감지 안 되면 빈 리스트(=볼트 전체 검색, 기존 동작).
@@ -224,6 +301,7 @@ class WikiQA:
                     search_question, limit=max_notes * 2, path_prefixes=path_prefixes)
             except Exception:
                 sec_hits = []
+            _sec_max = max((h.get("score", 0) or 0) for h in sec_hits) if sec_hits else 0
             for i, hit in enumerate(sec_hits):
                 title = hit.get("note_title", "")
                 heading = hit.get("heading", "")
@@ -244,6 +322,7 @@ class WikiQA:
                     terms=terms,
                     source="index",
                     order=i,
+                    relevance=(hit.get("score", 0) / _sec_max) if _sec_max else 0.0,
                 )
                 # 헤딩은 정답(인물/그룹명 등)을 담는 경우가 많은데 본문(content)에는 헤딩 줄이
                 # 빠져 있다. 헤딩을 본문 앞에 붙여 LLM이 인용링크가 아닌 '사실 텍스트'로 보게 한다.
@@ -266,7 +345,17 @@ class WikiQA:
         if self._indexer:
             idx_results = self._indexer.search(
                 search_question, limit=max_notes * 2, path_prefixes=path_prefixes)
+            # 관련도 하한(P1-2): TF-IDF 점수도 낮고 의미유사도도 없는 '노이즈' 노트는
+            # 컨텍스트에서 제외한다 — 무관 노트가 들어가면 LLM이 억지로 엮어 환각한다
+            # (예: requirements.txt를 회의로 오인). 임베딩 의미매치(cosine>0)는 점수가
+            # 0이라도 유지. min_context_score=0(기본)이면 필터 비활성(기존 동작).
+            _min_score = float(_c("wiki.min_context_score", 0.0) or 0.0)
+            _min_cos = float(_c("wiki_knowledge.embedding_min_cosine", 0.25) or 0.25)
+            _idx_max = max((r.get("score", 0) or 0) for r in idx_results) if idx_results else 0
             for r in idx_results:
+                if (_min_score > 0 and (r.get("score", 0) or 0) < _min_score
+                        and (r.get("cosine", 0.0) or 0.0) < _min_cos):
+                    continue
                 title = r.get("title", "")
                 norm = _norm_title(title)
                 if not norm or _seen_equiv(norm, seen_titles):
@@ -274,6 +363,9 @@ class WikiQA:
                 seen_titles.add(norm)
                 # 노트 전체 내용 읽기
                 content = self._indexer.get_note_content(r["path"]) or ""
+                # 하이브리드 관련도(P1-1): 의미유사도(cosine) 우선, 없으면 TF-IDF 정규화값.
+                _rel = (r.get("cosine", 0.0) or 0.0) or (
+                    (r.get("score", 0) / _idx_max) if _idx_max else 0.0)
                 rank_score = _context_rank_score(
                     title=title,
                     path=r.get("path", ""),
@@ -281,6 +373,7 @@ class WikiQA:
                     terms=terms,
                     source="index",
                     order=len(results),
+                    relevance=_rel,
                 )
                 results.append({
                     "title": title,
@@ -346,12 +439,64 @@ class WikiQA:
             except Exception:
                 pass
 
+        # Layer 3: 시점/기간 질의 — 날짜 기준 최신 노트 직접 주입.
+        # 키워드 관련도만으로는 '가장 최근 회의'가 후보 풀에 아예 안 들어오는 문제가 있다
+        # (일반어 '최근/회의'가 정작 최신 회의 노트 본문과 겹치지 않음). 관련도와 무관하게
+        # 인덱스에서 날짜 내림차순 최신 노트를 뽑아 합류시켜, 아래 recency 정렬이 이들을
+        # 상위로 올린다. 플래너가 유형(types)/개수(top_k)를 주면 그에 맞춰 좁히고 넉넉히 뽑는다.
+        _intent = str(plan.get("intent") or "")
+        _time_query = _intent in ("recency", "aggregate") or _is_recency_query(question)
+        if self._indexer and _time_query:
+            try:
+                _ptypes = [t for t in (plan.get("types") or []) if t]
+                _types = tuple(_ptypes) if _ptypes else (
+                    ("meeting", "seminar", "lecture") if _MEETING_PAT.search(question) else None)
+                _want = max(max_notes, int(plan.get("top_k") or 0) or 0)
+                for r in self._indexer.recent_notes(limit=_want, types=_types):
+                    title = r.get("title", "")
+                    norm = _norm_title(title)
+                    if not norm or _seen_equiv(norm, seen_titles):
+                        continue
+                    seen_titles.add(norm)
+                    content = self._indexer.get_note_content(r.get("path", "")) or ""
+                    results.append({
+                        "title": title,
+                        "heading": None,
+                        "path": r.get("path", ""),
+                        "snippet": r.get("snippet", ""),
+                        "content": _truncate_note(content, self._max_chars, terms=terms),
+                        "score": r.get("score", 0),
+                        "rank_score": 0.0,  # 후보 유지용 최소값 — 최신 정렬이 순위를 정함
+                        "date": r.get("date", ""),
+                        "source": "recent",
+                    })
+            except Exception:
+                pass
+
+        # 기간 필터(플래너 date_from/date_to) — 명시된 기간을 벗어난 노트는 제외한다.
+        # 기간 질의에서는 날짜 없는 노트도 노이즈이므로 함께 제외. 단, 전부 걸러지면
+        # 빈 컨텍스트를 피하려 원본을 유지한다(과필터 방지).
+        df, dt = str(plan.get("date_from") or ""), str(plan.get("date_to") or "")
+        if df or dt:
+            def _in_range(x: Dict) -> bool:
+                d = _recency_date_key(x)
+                if not d:
+                    return False
+                if df and d < df:
+                    return False
+                if dt and d > dt:
+                    return False
+                return True
+            _ranged = [r for r in results if _in_range(r)]
+            if _ranged:
+                results = _ranged
+
         # raw score는 index/REST 간 스케일이 달라 자체 랭킹으로 정렬
         results.sort(key=lambda x: -x.get("rank_score", 0))
-        # "최근/최신/지난/언제" 등 시점 질의는 관련 후보 중 최신 노트가 컨텍스트에
-        # 포함되도록 작성일 내림차순을 1순위로 재정렬한다(동점은 관련도 유지).
-        if _is_recency_query(question):
-            results.sort(key=lambda x: (str(x.get("date") or ""), x.get("rank_score", 0)),
+        # 시점/기간 질의는 관련 후보 중 최신 노트가 컨텍스트에 포함되도록 작성일 내림차순을
+        # 1순위로 재정렬한다(동점은 관련도 유지).
+        if _time_query:
+            results.sort(key=lambda x: (_recency_date_key(x), x.get("rank_score", 0)),
                          reverse=True)
         return results[:max_notes]
 
@@ -370,20 +515,22 @@ class WikiQA:
             context_blocks.append(block)
         context_str = "\n\n".join(context_blocks)
 
+        # wiki.citation_required(기본 true) 로 인용 규칙(규칙 2)을 실제로 분기한다.
+        # (과거엔 템플릿에 없는 문구를 replace 하려 해 토글이 아무 효과도 없었다 — 죽은 코드.)
+        if _c("wiki.citation_required", True):
+            citation_rule = ("2. 답변의 각 주장에는 가능한 한 [출처: [[노트 제목]]] 또는 "
+                             "[출처: [[노트 제목#헤딩]]] 형식으로 근거 노트를 인용하세요.")
+        else:
+            citation_rule = "2. 필요하면 [출처: [[노트 제목]]] 형식으로 인용해도 됩니다(필수 아님)."
+
         from datetime import datetime as _dt
         system = _SYSTEM_PROMPT_TEMPLATE.format(
             unverified=self._unverified,
             conflict=self._conflict,
             context=context_str,
             today=_dt.now().strftime("%Y-%m-%d"),
+            citation_rule=citation_rule,
         )
-        # wiki.citation_required=false 시 출처 인용 강제를 완화 (기본 true)
-        if not _c("wiki.citation_required", True):
-            system = system.replace(
-                "2. 모든 주장에는 반드시 [출처: [[노트 제목]]] 또는 "
-                "[출처: [[노트 제목#헤딩]]] 형식으로 인용하세요.",
-                "2. 가능하면 [출처: [[노트 제목]]] 형식으로 인용하세요 (필수 아님).",
-            )
         if self._online:
             system += "\n" + _ONLINE_SUPPLEMENT_PROMPT
 
@@ -428,11 +575,19 @@ _RECENCY_PAT = re.compile(
     r"최근|최신|요즘|근래|지난|언제|며칠|얼마\s*전|latest|recent|when|last\s+meeting",
     re.IGNORECASE,
 )
+_MEETING_PAT = re.compile(r"회의|미팅|세미나|강의|meeting|seminar", re.IGNORECASE)
 
 
 def _is_recency_query(text: str) -> bool:
     """질문이 시점/최근성을 묻는지 여부 — 맞으면 컨텍스트를 작성일 내림차순 우선 정렬한다."""
     return bool(_RECENCY_PAT.search(str(text or "")))
+
+
+def _recency_date_key(note: Dict[str, Any]) -> str:
+    """작성일 정렬용 정규화 키. 형식이 섞여도(YYYY-MM-DD / YYYY/MM/DD / 시각 포함)
+    앞 10자를 '-'로 통일해 사전식 비교가 시간순과 일치하게 한다. 날짜 없으면 ''."""
+    d = str(note.get("date") or "").strip().strip('"')
+    return d[:10].replace("/", "-").replace(".", "-") if d else ""
 
 
 def _fname_iso(path: str) -> str:
@@ -550,12 +705,21 @@ def _context_rank_score(
     terms: List[str],
     source: str,
     order: int,
+    relevance: float = 0.0,
 ) -> float:
+    """컨텍스트 병합 랭킹 점수.
+
+    relevance(0~1): 인덱서가 계산한 의미유사도/정규화 TF-IDF. 과거엔 이 값을 아예 쓰지
+    않아 하이브리드 검색 순위가 병합 단계에서 소실되고, source 상수(+제목 부분일치)만으로
+    순위가 뒤집혔다. 이제 relevance를 실제 가중치(≈제목일치 1건)로 반영한다.
+    source 프리미엄은 과거 20점(100 vs 80)이라 의미 1등을 눌렀던 것을 5점으로 낮춘다.
+    """
     hay_title = _norm_title(title)
     hay_path = _norm_title(path)
     hay_snippet = _norm_title(snippet)
-    score = 100.0 if source == "obsidian" else 80.0
+    score = 85.0 if source == "obsidian" else 80.0
     score -= order
+    score += 30.0 * max(0.0, min(1.0, relevance))
     for term in terms[:12]:
         nt = _norm_title(term)
         if not nt:

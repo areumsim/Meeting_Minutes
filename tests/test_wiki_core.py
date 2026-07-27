@@ -609,6 +609,59 @@ class TestRecencyQueryDetection:
             assert not wa._is_recency_query(q), q
 
 
+def _make_dated_indexer():
+    """날짜/type이 있는 노트로 recent_notes(최근성 회수)를 검증하는 수동 인덱서."""
+    ix = vi.VaultIndexer(vault_path="unused", index_path="unused.json")
+    ix._built = True
+    ix._notes = {
+        "m1.md": {"title": "옛 회의", "wikilink_title": "옛 회의", "snippet": "s",
+                  "date": "2025-09-16", "type": "meeting", "tf": {}},
+        "m2.md": {"title": "최신 회의", "wikilink_title": "최신 회의", "snippet": "s",
+                  "date": "2026-07-24", "type": "meeting", "tf": {}},
+        "m3.md": {"title": "중간 세미나", "wikilink_title": "중간 세미나", "snippet": "s",
+                  "date": "2026/06/25", "type": "seminar", "tf": {}},  # 슬래시 형식
+        "ref.md": {"title": "참고자료", "wikilink_title": "참고자료", "snippet": "s",
+                   "date": "", "type": "reference", "tf": {}},  # 날짜 없음 → 제외
+    }
+    ix._idf = {}
+    return ix
+
+
+class TestRecentNotes:
+    """[실전 버그] '가장 최근 회의'가 키워드 관련도 풀에 안 들어와 최신 회의를 놓치던 문제.
+    recent_notes 는 관련도와 무관하게 날짜 내림차순으로 최신 노트를 직접 회수한다."""
+
+    def test_orders_by_date_desc_and_excludes_undated(self):
+        ix = _make_dated_indexer()
+        titles = [r["title"] for r in ix.recent_notes(limit=10)]
+        assert titles == ["최신 회의", "중간 세미나", "옛 회의"]  # 날짜 없는 참고자료 제외
+
+    def test_type_filter_meeting_family(self):
+        ix = _make_dated_indexer()
+        got = ix.recent_notes(limit=10, types=("meeting", "seminar", "lecture"))
+        assert [r["title"] for r in got] == ["최신 회의", "중간 세미나", "옛 회의"]
+        only_meeting = ix.recent_notes(limit=10, types=("meeting",))
+        assert [r["title"] for r in only_meeting] == ["최신 회의", "옛 회의"]
+
+    def test_limit_keeps_newest(self):
+        ix = _make_dated_indexer()
+        assert [r["title"] for r in ix.recent_notes(limit=1)] == ["최신 회의"]
+
+    def test_mixed_date_formats_sort_chronologically(self):
+        # 2026/06/25(슬래시)가 2025-09-16(대시)보다 최신으로 정렬돼야 한다.
+        ix = _make_dated_indexer()
+        titles = [r["title"] for r in ix.recent_notes(limit=10)]
+        assert titles.index("중간 세미나") < titles.index("옛 회의")
+
+
+class TestRecencyDateKey:
+    def test_normalizes_separators_and_trims_time(self):
+        assert wa._recency_date_key({"date": "2026/07/24"}) == "2026-07-24"
+        assert wa._recency_date_key({"date": "2026-07-24T15:00:00"}) == "2026-07-24"
+        assert wa._recency_date_key({"date": ""}) == ""
+        assert wa._recency_date_key({}) == ""
+
+
 class TestPromptIncludesDate:
     """_build_prompt: 시스템 프롬프트에 오늘 날짜, 각 블록에 (작성일: ...) 포함."""
 
@@ -647,3 +700,171 @@ class TestQueryCenteredTruncation:
         body = "a" * 5000
         out = wa._truncate_note(body, 100)
         assert out.startswith("a") and "truncated" in out
+
+
+class _FakeLLM:
+    """chat()만 흉내내는 LLM 스텁."""
+    def __init__(self, reply):
+        self._reply = reply
+        self.calls = []
+
+    def chat(self, system, user, temp=0.1):
+        self.calls.append((system, user))
+        return self._reply
+
+
+class TestQueryPlanner:
+    """질문 → 검색 계획(LLM 쿼리 플래너). 실패·비활성 시 휴리스틱 폴백."""
+
+    def _engine(self, llm):
+        qa = wa.WikiQA.__new__(wa.WikiQA)
+        qa._llm = llm
+        return qa
+
+    def test_fallback_when_disabled_does_not_call_llm(self, monkeypatch):
+        monkeypatch.setattr(wa, "_c",
+                            lambda k, d=None: False if k == "wiki.query_planner_enabled" else d)
+        llm = _FakeLLM("{}")
+        plan = self._engine(llm)._plan_query("가장 최근 회의 3개")
+        assert plan["intent"] == "recency"
+        assert "meeting" in plan["types"]
+        assert llm.calls == []  # 비활성 시 LLM 호출 없음
+
+    def test_parses_llm_plan(self, monkeypatch):
+        monkeypatch.setattr(wa, "_c",
+                            lambda k, d=None: True if k == "wiki.query_planner_enabled" else d)
+        llm = _FakeLLM('{"intent":"aggregate","date_from":"2026-06-01",'
+                       '"date_to":"2026-06-30","types":["meeting"],"top_k":3,'
+                       '"entities":["레이더"]}')
+        plan = self._engine(llm)._plan_query("6월 회의 3개")
+        assert plan["intent"] == "aggregate"
+        assert plan["date_from"] == "2026-06-01" and plan["date_to"] == "2026-06-30"
+        assert plan["types"] == ["meeting"] and plan["top_k"] == 3
+        assert plan["entities"] == ["레이더"]
+
+    def test_invalid_date_string_dropped(self, monkeypatch):
+        monkeypatch.setattr(wa, "_c",
+                            lambda k, d=None: True if k == "wiki.query_planner_enabled" else d)
+        llm = _FakeLLM('{"intent":"lookup","date_from":"6월","date_to":"",'
+                       '"types":[],"top_k":0,"entities":["NISQ"]}')
+        plan = self._engine(llm)._plan_query("NISQ 정의")
+        assert plan["date_from"] == "" and plan["intent"] == "lookup"
+
+    def test_llm_failure_falls_back(self, monkeypatch):
+        monkeypatch.setattr(wa, "_c",
+                            lambda k, d=None: True if k == "wiki.query_planner_enabled" else d)
+
+        class _Boom:
+            def chat(self, *a, **k):
+                raise RuntimeError("x")
+        plan = self._engine(_Boom())._plan_query("최근 세미나")
+        assert plan["intent"] == "recency"
+
+
+class TestContextRankScore:
+    """병합 랭킹이 하이브리드(의미) 관련도를 실제로 반영하는지."""
+
+    def test_relevance_adds_weight(self):
+        base = wa._context_rank_score(title="t", path="p", snippet="s", terms=[],
+                                      source="index", order=0, relevance=0.0)
+        hi = wa._context_rank_score(title="t", path="p", snippet="s", terms=[],
+                                    source="index", order=0, relevance=1.0)
+        assert hi - base == pytest.approx(30.0)
+
+    def test_semantic_index_beats_bare_obsidian(self):
+        # 제목엔 질문어가 없지만 의미 관련도 높은 인덱스 노트가, 관련도 0인 Obsidian 노트를 이긴다.
+        idx = wa._context_rank_score(title="무관", path="", snippet="", terms=["레이더"],
+                                     source="index", order=0, relevance=1.0)
+        obs = wa._context_rank_score(title="무관", path="", snippet="", terms=["레이더"],
+                                     source="obsidian", order=0, relevance=0.0)
+        assert idx > obs
+
+
+class TestCitationToggle:
+    """citation_required 토글이 프롬프트 규칙2를 실제로 분기하는지(과거엔 죽은 replace)."""
+
+    def _engine(self):
+        e = wa.WikiQA.__new__(wa.WikiQA)
+        e._unverified = "확인 불가"
+        e._conflict = "⚠️ 충돌"
+        e._online = False
+        return e
+
+    def _note(self):
+        return [{"title": "n", "heading": None, "content": "본문", "date": ""}]
+
+    def test_required_true_inserts_firm_rule(self, monkeypatch):
+        monkeypatch.setattr(wa, "_c",
+                            lambda k, d=None: True if k == "wiki.citation_required" else d)
+        system, _ = self._engine()._build_prompt("q", self._note())
+        assert "근거 노트를 인용" in system and "필수 아님" not in system
+
+    def test_required_false_makes_optional(self, monkeypatch):
+        monkeypatch.setattr(wa, "_c",
+                            lambda k, d=None: False if k == "wiki.citation_required" else d)
+        system, _ = self._engine()._build_prompt("q", self._note())
+        assert "필수 아님" in system
+
+
+class _GatherFakeIndexer:
+    """_gather_context 통합 테스트용 덕타이핑 인덱서(섹션 없음, TF-IDF 매치 없음)."""
+    def __init__(self, notes):
+        self._data = {n["path"]: n for n in notes}
+
+    def find_related_sections(self, q, limit=10, path_prefixes=None):
+        return []
+
+    def search(self, q, limit=10, path_prefixes=None):
+        # 일반어 질의라 관련도 매치가 없다고 가정(빈 결과) — recency 주입만이 최신 노트를 넣는다.
+        return []
+
+    def get_note_content(self, path):
+        return self._data.get(path, {}).get("content", "내용")
+
+    def recent_notes(self, limit=10, types=None):
+        tset = {t.lower() for t in types} if types else None
+        rows = [n for n in self._data.values()
+                if n.get("date") and (tset is None or n.get("type", "").lower() in tset)]
+        rows.sort(key=lambda x: x["date"], reverse=True)
+        return [{"title": n["title"], "path": n["path"], "wikilink_title": n["title"],
+                 "snippet": "", "score": 0.0, "date": n["date"], "type": n.get("type", "")}
+                for n in rows[:limit]]
+
+
+class TestGatherContextTemporal:
+    """플래너 의도로 최신노트 주입·기간 필터가 컨텍스트에 반영되는지."""
+
+    def _engine(self, notes):
+        qa = wa.WikiQA.__new__(wa.WikiQA)
+        qa._llm = None
+        qa._obs = None
+        qa._indexer = _GatherFakeIndexer(notes)
+        qa._max_chars = 2000
+        qa._max_notes = 10
+        return qa
+
+    _NOTES = [
+        {"path": "m1.md", "title": "옛 회의", "date": "2025-09-16", "type": "meeting", "content": "옛"},
+        {"path": "m2.md", "title": "최신 회의", "date": "2026-07-24", "type": "meeting", "content": "신"},
+        {"path": "s1.md", "title": "6월 세미나", "date": "2026-06-25", "type": "seminar", "content": "세"},
+        {"path": "ref.md", "title": "참고자료", "date": "", "type": "reference", "content": "무관노이즈"},
+    ]
+
+    def test_recency_injects_newest_meeting_first(self, monkeypatch):
+        monkeypatch.setattr(wa, "_c", lambda k, d=None: d)  # 모든 config 기본값
+        eng = self._engine(self._NOTES)
+        plan = {"intent": "recency", "date_from": "", "date_to": "",
+                "types": ["meeting"], "top_k": 0, "entities": ["회의"]}
+        out = eng._gather_context("가장 최근 회의", 10, plan)
+        titles = [n["title"] for n in out]
+        assert titles and titles[0] == "최신 회의"
+        assert "참고자료" not in titles  # 날짜 없는 노이즈 제외
+
+    def test_date_range_filters_to_june(self, monkeypatch):
+        monkeypatch.setattr(wa, "_c", lambda k, d=None: d)
+        eng = self._engine(self._NOTES)
+        plan = {"intent": "aggregate", "date_from": "2026-06-01", "date_to": "2026-06-30",
+                "types": [], "top_k": 0, "entities": ["세미나"]}
+        out = eng._gather_context("6월에 뭐 했지", 10, plan)
+        titles = [n["title"] for n in out]
+        assert titles == ["6월 세미나"]  # 기간 밖 회의·무날짜 노트 모두 제외

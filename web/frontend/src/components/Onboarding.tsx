@@ -25,9 +25,9 @@ export default function Onboarding({ onClose }: { onClose: () => void }) {
 
   // Step 3 — 저장 폴더
   const [outputDir, setOutputDir] = useState("");
-  // Step 3 — Obsidian 볼트(선택)
+  // Step 4 — Obsidian 볼트(선택)
   const [vault, setVault] = useState("");
-  // Step 4 — 이메일(선택)
+  // Step 5 — 이메일(선택)
   const [sender, setSender] = useState("");
   const [password, setPassword] = useState("");
   const [emailResult, setEmailResult] = useState<{ ok: boolean; message: string } | null>(null);

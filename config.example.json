@@ -251,6 +251,10 @@
   "wiki": {
     "_comment": "LLM Wiki Q&A 및 실시간 사실 검증 설정.",
     "citation_required": true,
+    "_query_planner_comment": "질문을 LLM으로 검색계획(의도/기간/유형/개수/핵심어)으로 변환해 '가장 최근 회의', '6월 회의들', '3개' 같은 시점·개수 질의 검색을 강화. 질문당 LLM 호출 1회 추가(소액). 끄면 정규식 휴리스틱으로 폴백.",
+    "query_planner_enabled": true,
+    "_min_context_score_comment": "컨텍스트에 넣을 노트의 최소 TF-IDF 관련도(의미매치는 별도 유지). 무관 노트가 섞여 LLM이 환각하는 것 방지. 0=필터 끔(기존 동작), 0.03 정도부터 노이즈 컷.",
+    "min_context_score": 0.0,
     "max_context_notes": 10,
     "unverified_marker": "확인 불가",
     "conflict_marker": "⚠️ 충돌",

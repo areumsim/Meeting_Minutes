@@ -105,12 +105,12 @@ export default function FileUpload({ onComplete }: { onComplete: (id: string) =>
           <motion.div
             initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
             className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
-            onClick={handleCancelPending}
           >
+            {/* 백드롭 클릭으로는 닫지 않는다 — 오클릭 시 업로드된 파일이 서버에서 삭제돼
+                대용량 파일을 처음부터 다시 올려야 하는 사고를 방지(명시적 버튼으로만 결정). */}
             <motion.div
               initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.95, opacity: 0 }}
               className="bg-white rounded-2xl shadow-xl max-w-sm w-full p-6"
-              onClick={(e) => e.stopPropagation()}
             >
               <h3 className="text-lg font-bold text-brand-900 mb-1">예상 비용 확인</h3>
               <p className="text-sm text-brand-500 mb-4">

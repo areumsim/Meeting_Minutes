@@ -48,6 +48,8 @@ export default function SessionDetail({ id, onBack, onOpenGraph }: Props) {
   const [cost, setCost] = useState<SessionCost | null>(null);
   const [cancelling, setCancelling] = useState(false);
   const [retrying, setRetrying] = useState(false);
+  // 재시도 직후 STT 재사용 여부 안내(처리 화면 상단 배너). 재과금 가능성을 사용자가 알게 한다.
+  const [retryNote, setRetryNote] = useState<string | null>(null);
 
   const handleRetry = async () => {
     setRetrying(true);
@@ -55,9 +57,11 @@ export default function SessionDetail({ id, onBack, onOpenGraph }: Props) {
       const r = await retrySession(id);
       // STT 재사용 여부를 알려 재과금 없이 이어짐을 사용자가 알게 한다.
       if (session) setSession({ ...session, status: "processing", error_detail: undefined });
-      if (r.reusedStt === false) {
-        // 중간 결과가 없어 처음부터 다시 처리(비용 재발생 가능) — 조용히 진행.
-      }
+      setRetryNote(
+        r.reusedStt === false
+          ? "완료된 전사가 없어 음성 인식부터 다시 처리합니다 — API 비용이 다시 발생할 수 있습니다."
+          : "완료된 전사를 재사용해 이어서 처리합니다 — 음성 인식 비용은 다시 청구되지 않습니다."
+      );
       await load();
     } catch (e) {
       alert(`재시도 실패: ${e instanceof Error ? e.message : "잠시 후 다시 시도하세요."}`);
@@ -148,7 +152,7 @@ export default function SessionDetail({ id, onBack, onOpenGraph }: Props) {
     const t = setInterval(async () => {
       try {
         const s = await getSessionStatus(id);
-        if (s.status !== "processing") { setProgress(null); load(); return; }
+        if (s.status !== "processing") { setProgress(null); setRetryNote(null); load(); return; }
         const p = await getUploadProgress(id);
         if (p.found) setProgress({ percent: p.percent ?? 0, stage: p.stage ?? "", elapsed: p.elapsed ?? 0 });
       } catch { /* ignore */ }
@@ -339,6 +343,12 @@ export default function SessionDetail({ id, onBack, onOpenGraph }: Props) {
 
       {session.status === "processing" ? (
         <div className="bg-white border border-brand-200 rounded-3xl p-12 md:p-16 text-center">
+          {retryNote && (
+            <div className="max-w-md mx-auto mb-6 px-4 py-2.5 bg-brand-50 border border-brand-200 rounded-xl text-sm text-brand-600 text-left flex items-start gap-2">
+              <RefreshCw size={15} className="mt-0.5 shrink-0 text-brand-400" />
+              <span>{retryNote}</span>
+            </div>
+          )}
           <Loader2 size={48} className="mx-auto text-amber-500 animate-spin mb-6" />
           <h3 className="text-xl font-bold mb-2">처리 중입니다...</h3>
           <p className="text-brand-500 mb-6">AI가 회의 문서를 생성하고 있습니다. 이 화면은 자동으로 갱신됩니다.</p>

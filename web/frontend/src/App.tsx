@@ -1,5 +1,5 @@
 import React, { useState, useEffect, lazy, Suspense } from "react";
-import { Mic, FileAudio, List, Settings, FileText, MessageCircleQuestion, ClipboardList, HelpCircle, Network, CalendarClock, Loader2 } from "lucide-react";
+import { Mic, FileAudio, List, Settings, FileText, MessageCircleQuestion, ClipboardList, HelpCircle, Network, CalendarClock, Loader2, PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import Dashboard from "./components/Dashboard";
 import Onboarding from "./components/Onboarding";
@@ -24,6 +24,13 @@ export default function App() {
   const [ffmpegMissing, setFfmpegMissing] = useState(false);
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [graphQuery, setGraphQuery] = useState("");   // 위키링크로 지식그래프 진입 시 초기 검색어
+  // 데스크톱 사이드바 접기/펴기 (localStorage로 상태 유지)
+  const [collapsed, setCollapsed] = useState(() => localStorage.getItem("SIDEBAR_COLLAPSED") === "1");
+  const toggleCollapsed = () => setCollapsed((c) => {
+    const n = !c;
+    try { localStorage.setItem("SIDEBAR_COLLAPSED", n ? "1" : "0"); } catch { /* ignore */ }
+    return n;
+  });
 
   const view = viewState;
   const setView = (v: View) => {
@@ -93,30 +100,38 @@ export default function App() {
       {showOnboarding && <Onboarding onClose={() => { setShowOnboarding(false); setView("settings"); }} />}
 
       {/* Sidebar (iPad / Desktop) */}
-      <nav className="hidden md:flex fixed left-0 top-0 bottom-0 w-64 bg-white border-r border-brand-200 flex-col z-50 pt-[env(safe-area-inset-top,0px)] shadow-xl shadow-brand-900/5">
-        <div className="p-8">
-          <div className="flex items-center gap-3 mb-12">
-            <div className="w-10 h-10 bg-brand-950 rounded-xl flex items-center justify-center text-white shadow-lg shadow-brand-900/20">
+      <nav className={`hidden md:flex fixed left-0 top-0 bottom-0 ${collapsed ? "w-20" : "w-64"} bg-white border-r border-brand-200 flex-col z-50 pt-[env(safe-area-inset-top,0px)] shadow-xl shadow-brand-900/5 transition-[width] duration-200`}>
+        <div className={collapsed ? "px-3 py-6" : "p-8"}>
+          <div className={`flex items-center ${collapsed ? "flex-col gap-2 mb-6" : "gap-3 mb-12"}`}>
+            <div className="w-10 h-10 bg-brand-950 rounded-xl flex items-center justify-center text-white shadow-lg shadow-brand-900/20 shrink-0">
               <Mic size={20} />
             </div>
-            <h1 className="font-sans font-bold text-xl tracking-tight">AI Minutes</h1>
+            {!collapsed && <h1 className="font-sans font-bold text-xl tracking-tight">AI Minutes</h1>}
+            <button
+              onClick={toggleCollapsed}
+              title={collapsed ? "사이드바 펼치기" : "사이드바 접기"}
+              aria-label={collapsed ? "사이드바 펼치기" : "사이드바 접기"}
+              className={`${collapsed ? "" : "ml-auto"} text-brand-400 hover:text-brand-900 p-1.5 rounded-lg hover:bg-brand-100 transition-colors`}
+            >
+              {collapsed ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}
+            </button>
           </div>
 
           <div className="space-y-2">
-            <NavItem icon={<List size={18} />} label="대시보드" active={view === "dashboard"} onClick={() => setView("dashboard")} />
-            <NavItem icon={<Mic size={18} />} label="녹음" active={view === "recorder"} onClick={() => setView("recorder")} />
-            <NavItem icon={<FileAudio size={18} />} label="업로드" active={view === "upload"} onClick={() => setView("upload")} />
-            <NavItem icon={<FileText size={18} />} label="텍스트 분석" active={view === "text"} onClick={() => setView("text")} />
-            <NavItem icon={<MessageCircleQuestion size={18} />} label="위키 질문" active={view === "wiki"} onClick={() => setView("wiki")} />
-            <NavItem icon={<ClipboardList size={18} />} label="회의 준비" active={view === "prep"} onClick={() => setView("prep")} />
-            <NavItem icon={<CalendarClock size={18} />} label="회의 비서" active={view === "assistant"} onClick={() => setView("assistant")} />
-            <NavItem icon={<Network size={18} />} label="지식그래프" active={view === "graph"} onClick={openGraphNav} />
-            <NavItem icon={<HelpCircle size={18} />} label="도움말" active={view === "help"} onClick={() => setView("help")} />
+            <NavItem collapsed={collapsed} icon={<List size={18} />} label="대시보드" active={view === "dashboard"} onClick={() => setView("dashboard")} />
+            <NavItem collapsed={collapsed} icon={<Mic size={18} />} label="녹음" active={view === "recorder"} onClick={() => setView("recorder")} />
+            <NavItem collapsed={collapsed} icon={<FileAudio size={18} />} label="업로드" active={view === "upload"} onClick={() => setView("upload")} />
+            <NavItem collapsed={collapsed} icon={<FileText size={18} />} label="텍스트 분석" active={view === "text"} onClick={() => setView("text")} />
+            <NavItem collapsed={collapsed} icon={<MessageCircleQuestion size={18} />} label="위키 질문" active={view === "wiki"} onClick={() => setView("wiki")} />
+            <NavItem collapsed={collapsed} icon={<ClipboardList size={18} />} label="회의 준비" active={view === "prep"} onClick={() => setView("prep")} />
+            <NavItem collapsed={collapsed} icon={<CalendarClock size={18} />} label="회의 비서" active={view === "assistant"} onClick={() => setView("assistant")} />
+            <NavItem collapsed={collapsed} icon={<Network size={18} />} label="지식그래프" active={view === "graph"} onClick={openGraphNav} />
+            <NavItem collapsed={collapsed} icon={<HelpCircle size={18} />} label="도움말" active={view === "help"} onClick={() => setView("help")} />
           </div>
         </div>
 
-        <div className="mt-auto p-8 border-t border-brand-100">
-          <NavItem icon={<Settings size={18} />} label="설정" active={view === "settings"} onClick={() => setView("settings")} />
+        <div className={`mt-auto ${collapsed ? "px-3 py-6" : "p-8"} border-t border-brand-100`}>
+          <NavItem collapsed={collapsed} icon={<Settings size={18} />} label="설정" active={view === "settings"} onClick={() => setView("settings")} />
         </div>
       </nav>
 
@@ -131,7 +146,7 @@ export default function App() {
       </nav>
 
       {/* Main Content */}
-      <main className="flex-1 w-full md:ml-64 p-4 md:p-8 lg:p-12 pt-[calc(env(safe-area-inset-top,0px)+1rem)] relative">
+      <main className={`flex-1 w-full ${collapsed ? "md:ml-20" : "md:ml-64"} p-4 md:p-8 lg:p-12 pt-[calc(env(safe-area-inset-top,0px)+1rem)] relative transition-[margin] duration-200`}>
         {ffmpegMissing && (
           <div className="mb-4 rounded-xl border border-amber-300 bg-amber-50 text-amber-800 px-4 py-3 text-sm">
             ⚠️ <strong>ffmpeg가 설치되어 있지 않습니다.</strong> 오디오 파일 업로드/변환 기능이 동작하지 않을 수 있습니다.
@@ -169,11 +184,12 @@ export default function App() {
   );
 }
 
-function NavItem({ icon, label, active, onClick }: { icon: React.ReactNode; label: string; active: boolean; onClick: () => void }) {
+function NavItem({ icon, label, active, onClick, collapsed }: { icon: React.ReactNode; label: string; active: boolean; onClick: () => void; collapsed?: boolean }) {
   return (
     <button
       onClick={onClick}
-      className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all duration-300 group ${
+      title={collapsed ? label : undefined}
+      className={`w-full flex items-center ${collapsed ? "justify-center px-2" : "gap-3 px-4"} py-3 rounded-xl transition-all duration-300 group ${
         active
           ? "bg-brand-900 text-white font-semibold shadow-lg shadow-brand-900/10"
           : "text-brand-500 hover:bg-brand-100 hover:text-brand-900"
@@ -182,7 +198,7 @@ function NavItem({ icon, label, active, onClick }: { icon: React.ReactNode; labe
       <span className={`transition-transform duration-300 ${active ? "scale-110" : "group-hover:scale-110"}`}>
         {icon}
       </span>
-      <span className="text-sm">{label}</span>
+      {!collapsed && <span className="text-sm">{label}</span>}
     </button>
   );
 }

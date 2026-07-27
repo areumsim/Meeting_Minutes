@@ -677,6 +677,14 @@ export const uploadFile = async (formData: FormData) => {
       throw new Error(d?.detail || `업로드 실패 (${res.status})`);
     }
     const data = await res.json();
+    // 서버가 예상 비용 확인을 요구 — 아직 처리를 시작하지 않았다.
+    // 상위(FileUpload)에서 비용을 보여주고 [계속] 시 confirmUpload 를 호출한다.
+    if (data.status === "confirm_required") {
+      return data as {
+        status: "confirm_required"; pendingId: string; estimateUsd: number;
+        durationSec: number; monthToDateUsd: number; monthlyCapUsd: number;
+      };
+    }
     const sessionId = data.sessionId;
     void pollAndMirrorSession(sessionId); // 백그라운드 미러링
     return { sessionId, status: "processing" };
@@ -734,6 +742,39 @@ export const uploadFile = async (formData: FormData) => {
   })();
 
   return { sessionId, status: "processing" };
+};
+
+// 비용 확인 후 실제 처리 시작 (uploadFile 이 confirm_required 를 반환했을 때)
+export const confirmUpload = async (pendingId: string) => {
+  const res = await apiFetch(`/api/upload/confirm/${pendingId}`, { method: "POST" });
+  if (!res.ok) {
+    const d = await res.json().catch(() => null);
+    throw new Error(d?.detail || `처리 시작 실패 (${res.status})`);
+  }
+  const data = await res.json();
+  void pollAndMirrorSession(data.sessionId);
+  return { sessionId: data.sessionId as string, status: "processing" as const };
+};
+
+// 비용 확인 단계에서 취소 — 업로드된 파일을 서버에서 정리 (best-effort)
+export const cancelPendingUpload = async (pendingId: string) => {
+  try {
+    await apiFetch(`/api/upload/cancel-pending/${pendingId}`, { method: "POST" });
+  } catch {
+    /* 정리 실패는 무시 — 서버측 임시 파일만 남을 뿐 사용자 영향 없음 */
+  }
+};
+
+// 실패한 세션 재시도 — 같은 출력 폴더를 재사용해 완료된 STT는 다시 결제하지 않는다.
+export const retrySession = async (sessionId: string) => {
+  const res = await apiFetch(`/api/upload/retry/${sessionId}`, { method: "POST" });
+  if (!res.ok) {
+    const d = await res.json().catch(() => null);
+    throw new Error(d?.detail || `재시도 실패 (${res.status})`);
+  }
+  const data = await res.json();
+  void pollAndMirrorSession(sessionId);
+  return data as { sessionId: string; status: string; reusedStt: boolean };
 };
 
 // Text Input Direct Processing

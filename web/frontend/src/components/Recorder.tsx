@@ -9,6 +9,9 @@ import {
   getCostRates, getConfig, type CostRates,
 } from "../lib/api";
 import { MODE_PRESETS, type RealtimeSegment } from "../lib/types";
+import ModeSelector from "./ModeSelector";
+import { KeepAwake } from '@capacitor-community/keep-awake';
+import { Haptics, ImpactStyle, NotificationType } from '@capacitor/haptics';
 
 interface RelatedNote {
   filename: string;
@@ -25,9 +28,6 @@ const STT_OPTIONS: { value: string; label: string }[] = [
   { value: "gpt-4o-transcribe-diarize", label: "gpt-4o-transcribe-diarize — 화자분리(실시간은 자동 전환)" },
   { value: "whisper-1", label: "whisper-1 — 구형·안정" },
 ];
-import ModeSelector from "./ModeSelector";
-import { KeepAwake } from '@capacitor-community/keep-awake';
-import { Haptics, ImpactStyle, NotificationType } from '@capacitor/haptics';
 
 export default function Recorder({ onComplete, onExit }: { onComplete: (id: string) => void; onExit?: () => void }) {
   const [isRecording, setIsRecording] = useState(false);
@@ -35,7 +35,7 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
   const [duration, setDuration] = useState(0);
   const [title, setTitle] = useState("");
   const [topic, setTopic] = useState("");
-  const [modeNum, setModeNum] = useState(2);
+  const [modeNum, setModeNum] = useState(1);  // 기본: 한국어 회의 (MODE_PRESETS[1])
   const [speakers, setSpeakers] = useState("");
   const [isSettingsCollapsed, setIsSettingsCollapsed] = useState(false);
   const [liveTranscript, setLiveTranscript] = useState<RealtimeSegment[]>([]);
@@ -376,7 +376,9 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
           if (completionTimerRef.current) clearTimeout(completionTimerRef.current);
           const sid = msg.sessionId || serverSessionIdRef.current;
           setStatus("completed");
-          setWsStatus(`문서 생성 완료 (세그먼트 ${msg.segmentCount ?? "?"}개)`);
+          setWsStatus(msg.minutesSkipped
+            ? (msg.message || "내용이 짧아 회의록 없이 전사만 저장했습니다.")
+            : `문서 생성 완료 (세그먼트 ${msg.segmentCount ?? "?"}개)`);
           try { ws.close(); } catch {}
           if (sid) {
             // 미러 실패 시 몇 차례 재시도 후 이동 — 첫 시도 실패로 상세 화면이

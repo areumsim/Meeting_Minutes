@@ -255,6 +255,17 @@ export default function Help({ onNavigate }: { onNavigate?: (v: NavTarget) => vo
         <p>아래는 <b>없어도 회의록 생성에는 지장 없는</b> 부가 기능입니다. .md 노트 폴더를 연결하면 회의 기록이 쌓여 검색·질문·자동화가 가능해집니다.</p>
 
         <div className="space-y-2 mt-1">
+          <Detail summary={<span className="flex items-center gap-1.5"><Sparkles size={14} /> 작동 방식 — 아주 간단히</span>} defaultOpen>
+            <ul className="list-disc ml-4 space-y-1">
+              <li><b>정리(쌓임)</b> — 회의록을 만들 때마다 노트 폴더에 <b>날짜와 함께</b> .md 한 건으로 자동 저장됩니다.</li>
+              <li><b>색인</b> — <Tag>설정</Tag> → <b>검색 인덱스·그래프 재빌드</b>를 누르면, 앱이 폴더의 노트들을 검색·질문할 수 있게 목록으로 정리합니다. (노트를 추가/변경한 뒤 한 번씩 눌러 최신화)</li>
+              <li><b>위키 질문(회의록 질의)</b> — 물어보면 ① 질문과 <b>관련된 노트</b>를 폴더에서 찾고 → ② 그 내용<b>만 근거</b>로 AI가 답하며 → ③ 사용한 <b>출처 노트</b>를 함께 보여줍니다(없는 내용은 지어내지 않고 "확인 불가"로 표시).</li>
+              <li><b>날짜 인식</b> — 각 노트의 <b>작성일</b>을 함께 읽으므로 "가장 최근 회의는?", "언제 정해졌어?" 같은 <b>시점 질문</b>에도 답합니다.</li>
+              <li><b>회의 준비</b> — 제목·주제를 넣으면 관련 노트·지난 결정·미완료 액션을 <b>한 장으로 모아</b> 브리핑을 만듭니다.</li>
+            </ul>
+            <p className="text-brand-400">요약: <b>회의록 생성 → 폴더에 날짜별로 쌓임 → 재빌드로 색인 → 질문하면 관련 노트를 근거로 출처와 함께 답변</b>. 표현이 달라도 뜻으로 찾는 <b>의미 검색</b>이 기본 적용되고, 노트가 많을수록 답이 정확해집니다. (Obsidian 앱 없이 <b>.md 폴더만</b>으로 동작)</p>
+          </Detail>
+
           <Detail summary={<span className="flex items-center gap-1.5"><FolderOpen size={14} /> 먼저: 노트 폴더 연결 (Obsidian 앱 없어도 됨)</span>}>
             <Steps items={[
               <><Tag>설정</Tag> → <Tag>노트 폴더</Tag> 에 .md를 모아둘 폴더 경로를 넣습니다(찾아보기 버튼 사용).</>,
@@ -327,6 +338,7 @@ export default function Help({ onNavigate }: { onNavigate?: (v: NavTarget) => vo
           </Detail>
           <Detail summary="위키 질문·회의 준비·그래프가 결과를 못 찾아요">
             <p><Tag>설정</Tag>에서 <b>노트 폴더</b>가 올바른지 확인한 뒤 <b>검색 인덱스·그래프 재빌드</b>를 눌러 최신화하세요. 폴더에 회의 기록(.md)이 아직 없으면 결과가 비어 있을 수 있습니다.</p>
+            <p className="text-brand-400">표현이 달라 정답을 못 찾을 때: <b>의미 검색(임베딩)</b>이 기본으로 켜져 있어, 질문과 노트의 말이 달라도 뜻으로 찾아줍니다(OpenAI 키 필요, 재빌드 시 자동 적용). 키가 없으면 글자 매칭만으로 동작하니, 핵심 <b>키워드·고유명사</b>를 넣어 물어보면 더 잘 찾습니다.</p>
           </Detail>
           <Detail summary="메일이 안 보내져요">
             <p>로그인 비밀번호가 아니라 <b>앱 비밀번호</b>를 넣었는지 확인하세요. <Tag>설정</Tag> → 이메일의 <b>테스트 메일 보내기</b>가 실패하면 메시지에 원인이 나옵니다(회사 메일은 SMTP가 막혀 IT 허용이 필요할 수 있음).</p>

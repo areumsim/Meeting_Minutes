@@ -3,7 +3,7 @@ import {
   Upload, FileAudio, Loader2, ChevronDown,
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
-import { uploadFile, getProfiles } from "../lib/api";
+import { uploadFile, confirmUpload, cancelPendingUpload, getProfiles } from "../lib/api";
 import { MODE_PRESETS } from "../lib/types";
 import type { Profile } from "../lib/types";
 import ModeSelector from "./ModeSelector";
@@ -18,6 +18,11 @@ export default function FileUpload({ onComplete }: { onComplete: (id: string) =>
   const [dragOver, setDragOver] = useState(false);
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [showProfiles, setShowProfiles] = useState(false);
+  // 예상 비용 확인 대기 상태(서버가 confirm_required 를 돌려줬을 때)
+  const [pending, setPending] = useState<{
+    pendingId: string; estimateUsd: number; durationSec: number;
+    monthToDateUsd: number; monthlyCapUsd: number;
+  } | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
   const preset = MODE_PRESETS[modeNum] || MODE_PRESETS[2];
@@ -49,6 +54,12 @@ export default function FileUpload({ onComplete }: { onComplete: (id: string) =>
 
     try {
       const data = await uploadFile(formData);
+      if ("pendingId" in data) {
+        // 서버가 예상 비용 확인을 요구 — 모달을 띄우고 사용자의 [계속]을 기다린다.
+        setPending(data);
+        setUploading(false);
+        return;
+      }
       onComplete(data.sessionId);
     } catch (err) {
       console.error(err);
@@ -57,6 +68,30 @@ export default function FileUpload({ onComplete }: { onComplete: (id: string) =>
     }
   };
 
+  const handleConfirm = async () => {
+    if (!pending) return;
+    setUploading(true);
+    try {
+      const data = await confirmUpload(pending.pendingId);
+      setPending(null);
+      onComplete(data.sessionId);
+    } catch (err) {
+      console.error(err);
+      alert(`처리 시작 실패: ${err instanceof Error ? err.message : "다시 시도하세요."}`);
+      setPending(null);
+      setUploading(false);
+    }
+  };
+
+  const handleCancelPending = async () => {
+    if (!pending) return;
+    void cancelPendingUpload(pending.pendingId);
+    setPending(null);
+    setUploading(false);
+  };
+
+  const fmtUsd = (n: number) => `$${n.toFixed(2)}`;
+
   const formatSize = (bytes: number) => {
     if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
     return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
@@ -64,6 +99,61 @@ export default function FileUpload({ onComplete }: { onComplete: (id: string) =>
 
   return (
     <div className="max-w-4xl mx-auto px-1 md:px-0">
+      {/* 예상 비용 확인 모달 */}
+      <AnimatePresence>
+        {pending && (
+          <motion.div
+            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+            onClick={handleCancelPending}
+          >
+            <motion.div
+              initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.95, opacity: 0 }}
+              className="bg-white rounded-2xl shadow-xl max-w-sm w-full p-6"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <h3 className="text-lg font-bold text-brand-900 mb-1">예상 비용 확인</h3>
+              <p className="text-sm text-brand-500 mb-4">
+                이 파일을 처리하면 아래 정도의 API 비용이 발생합니다(대략값이라 실제 청구액과 다를 수 있습니다).
+              </p>
+              <div className="rounded-xl bg-zinc-50 border border-zinc-200 p-4 space-y-2 mb-5">
+                <div className="flex items-baseline justify-between">
+                  <span className="text-sm text-brand-500">이 파일 예상 비용</span>
+                  <span className="text-2xl font-bold text-brand-900">
+                    {pending.estimateUsd > 0 ? fmtUsd(pending.estimateUsd) : "산정 불가"}
+                  </span>
+                </div>
+                {pending.durationSec > 0 && (
+                  <div className="flex items-center justify-between text-xs text-brand-400">
+                    <span>길이</span><span>약 {Math.round(pending.durationSec / 60)}분</span>
+                  </div>
+                )}
+                {pending.monthlyCapUsd > 0 && (
+                  <div className="flex items-center justify-between text-xs text-brand-400 pt-1 border-t border-zinc-200">
+                    <span>이번 달 예상 지출 / 한도</span>
+                    <span>{fmtUsd(pending.monthToDateUsd)} / {fmtUsd(pending.monthlyCapUsd)}</span>
+                  </div>
+                )}
+              </div>
+              <div className="flex gap-2">
+                <button
+                  onClick={handleCancelPending}
+                  className="flex-1 py-2.5 rounded-xl border border-zinc-200 text-sm font-semibold text-brand-600 hover:bg-zinc-50 transition-colors"
+                >
+                  취소
+                </button>
+                <button
+                  onClick={handleConfirm}
+                  className="flex-1 py-2.5 rounded-xl bg-zinc-900 text-white text-sm font-bold hover:bg-zinc-800 transition-colors"
+                >
+                  계속 처리
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       <h2 className="text-2xl font-bold tracking-tight mb-1">파일 업로드</h2>
       <p className="text-brand-500 mb-4 text-sm">오디오/영상 파일을 올리면 전사·번역·회의록을 자동 생성합니다.</p>
 

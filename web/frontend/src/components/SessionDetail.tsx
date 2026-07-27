@@ -8,7 +8,7 @@ import MiniGraph from "./MiniGraph";
 import { Share } from '@capacitor/share';
 import { getSession, getSessionStatus, generateSummaryForSession, getTargetEmail,
   getSessionGraph, getNodeNeighbors, getUploadProgress, getSessionCost, cancelUpload,
-  mirrorServerSession, type SessionCost } from "../lib/api";
+  mirrorServerSession, retrySession, type SessionCost } from "../lib/api";
 import { formatDuration, formatTime } from "../lib/format";
 import type { Session, Segment, Document as Doc, SessionGraph, GraphNeighbors } from "../lib/types";
 
@@ -47,6 +47,24 @@ export default function SessionDetail({ id, onBack, onOpenGraph }: Props) {
   const [progress, setProgress] = useState<{ percent: number; stage: string; elapsed: number } | null>(null);
   const [cost, setCost] = useState<SessionCost | null>(null);
   const [cancelling, setCancelling] = useState(false);
+  const [retrying, setRetrying] = useState(false);
+
+  const handleRetry = async () => {
+    setRetrying(true);
+    try {
+      const r = await retrySession(id);
+      // STT 재사용 여부를 알려 재과금 없이 이어짐을 사용자가 알게 한다.
+      if (session) setSession({ ...session, status: "processing", error_detail: undefined });
+      if (r.reusedStt === false) {
+        // 중간 결과가 없어 처음부터 다시 처리(비용 재발생 가능) — 조용히 진행.
+      }
+      await load();
+    } catch (e) {
+      alert(`재시도 실패: ${e instanceof Error ? e.message : "잠시 후 다시 시도하세요."}`);
+    } finally {
+      setRetrying(false);
+    }
+  };
 
   const handleCancel = async () => {
     if (!window.confirm("처리를 취소하시겠습니까? 현재 단계가 끝나면 중단되고 이 세션은 삭제됩니다.")) return;
@@ -293,10 +311,25 @@ export default function SessionDetail({ id, onBack, onOpenGraph }: Props) {
             )}
             {session.source === "cli" && <span className="text-zinc-400">CLI</span>}
           </div>
-          {session.status === "error" && session.error_detail && (
-            <p className="mt-2 text-sm text-red-600 bg-red-50 border border-red-100 rounded-lg px-3 py-2">
-              {session.error_detail}
-            </p>
+          {session.status === "error" && (
+            <div className="mt-2">
+              {session.error_detail && (
+                <p className="text-sm text-red-600 bg-red-50 border border-red-100 rounded-lg px-3 py-2">
+                  {session.error_detail}
+                </p>
+              )}
+              <button
+                onClick={handleRetry}
+                disabled={retrying}
+                className="mt-2 inline-flex items-center gap-2 px-4 py-2 bg-zinc-900 text-white text-sm font-semibold rounded-xl hover:bg-zinc-800 disabled:opacity-50 transition-colors"
+              >
+                {retrying ? <Loader2 size={15} className="animate-spin" /> : <RefreshCw size={15} />}
+                {retrying ? "재시도 중..." : "다시 시도"}
+              </button>
+              <p className="mt-1.5 text-xs text-brand-400">
+                음성 인식(STT)이 끝난 뒤 실패한 경우, 재시도는 완료된 전사를 재사용해 비용을 다시 청구하지 않습니다.
+              </p>
+            </div>
           )}
         </div>
         <button onClick={() => load()} className="p-2 hover:bg-brand-100 rounded-xl transition-colors">

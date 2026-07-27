@@ -3,9 +3,9 @@ import {
   Mic, Loader2, CheckCircle, XCircle, FolderOpen, ChevronRight, ChevronLeft, Eye, EyeOff, Sparkles,
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
-import { updateConfig, testOpenAIKey, testEmail, pickFolder } from "../lib/api";
+import { updateConfig, testOpenAIKey, testAnthropicKey, testEmail, pickFolder } from "../lib/api";
 
-const TOTAL = 4;
+const TOTAL = 5;
 
 // 첫 실행 설정 마법사 — 비개발자가 필수 3~4가지만 순서대로 마치도록 안내.
 // 저장은 스텝별로 기존 updateConfig 를 재사용한다(신규 백엔드 불필요).
@@ -18,7 +18,12 @@ export default function Onboarding({ onClose }: { onClose: () => void }) {
   const [reveal, setReveal] = useState(false);
   const [keyResult, setKeyResult] = useState<{ ok: boolean; message: string } | null>(null);
 
-  // Step 2 — 저장 폴더
+  // Step 2 — Anthropic(Claude) 키 (선택)
+  const [anthropicKey, setAnthropicKey] = useState("");
+  const [revealA, setRevealA] = useState(false);
+  const [anthropicResult, setAnthropicResult] = useState<{ ok: boolean; message: string } | null>(null);
+
+  // Step 3 — 저장 폴더
   const [outputDir, setOutputDir] = useState("");
   // Step 3 — Obsidian 볼트(선택)
   const [vault, setVault] = useState("");
@@ -40,6 +45,18 @@ export default function Onboarding({ onClose }: { onClose: () => void }) {
       setKeyResult(await testOpenAIKey());
     } catch (e: any) {
       setKeyResult({ ok: false, message: e?.message || "저장 실패" });
+    }
+    setBusy(false);
+  };
+
+  const testClaudeNow = async () => {
+    if (!anthropicKey.trim()) { setAnthropicResult({ ok: false, message: "키를 입력하세요." }); return; }
+    setBusy(true);
+    try {
+      await updateConfig({ api: { anthropic_api_key: anthropicKey.trim() } });
+      setAnthropicResult(await testAnthropicKey());
+    } catch (e: any) {
+      setAnthropicResult({ ok: false, message: e?.message || "저장 실패" });
     }
     setBusy(false);
   };
@@ -67,9 +84,10 @@ export default function Onboarding({ onClose }: { onClose: () => void }) {
     setBusy(true);
     try {
       if (step === 0 && key.trim()) await updateConfig({ api: { openai_api_key: key.trim() } });
-      if (step === 1 && outputDir.trim()) await updateConfig({ output_dir: outputDir.trim() });
-      if (step === 2 && vault.trim()) await updateConfig({ obsidian: { vault_path: vault.trim() } });
-      if (step === 3 && (sender.trim() || password.trim())) {
+      if (step === 1 && anthropicKey.trim()) await updateConfig({ api: { anthropic_api_key: anthropicKey.trim() } });
+      if (step === 2 && outputDir.trim()) await updateConfig({ output_dir: outputDir.trim() });
+      if (step === 3 && vault.trim()) await updateConfig({ obsidian: { vault_path: vault.trim() } });
+      if (step === 4 && (sender.trim() || password.trim())) {
         await updateConfig({ email: { sender: sender.trim(), password: password.trim() } });
       }
     } catch { /* 저장 실패는 무시하고 진행 — 나중에 [설정]에서 재입력 가능 */ }
@@ -140,13 +158,45 @@ export default function Onboarding({ onClose }: { onClose: () => void }) {
 
               {step === 1 && (
                 <div className="space-y-3">
+                  <StepTitle icon={<Sparkles size={18} />} title="Claude(Anthropic) API 키 (선택)" />
+                  <p className="text-sm text-brand-500">회의록을 Claude로 만들고 싶을 때만 입력하세요. 안 쓰면 건너뛰어도 됩니다(OpenAI 키만으로 모든 기능이 동작합니다).</p>
+                  <div className="relative">
+                    <input
+                      type={revealA ? "text" : "password"}
+                      value={anthropicKey}
+                      onChange={(e) => { setAnthropicKey(e.target.value); setAnthropicResult(null); }}
+                      placeholder="sk-ant-..."
+                      className="w-full px-3 py-2.5 pr-10 bg-zinc-50 border border-zinc-200 rounded-lg outline-none focus:ring-2 focus:ring-brand-500 text-sm font-mono"
+                    />
+                    <button type="button" onClick={() => setRevealA((s) => !s)} tabIndex={-1} className="absolute right-2 top-1/2 -translate-y-1/2 text-brand-400 hover:text-brand-700 p-1">
+                      {revealA ? <EyeOff size={16} /> : <Eye size={16} />}
+                    </button>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <button onClick={testClaudeNow} disabled={busy} className="flex items-center gap-2 px-4 py-2 bg-brand-50 text-brand-700 rounded-lg text-sm font-semibold hover:bg-brand-100 transition-all">
+                      {busy ? <Loader2 size={16} className="animate-spin" /> : <CheckCircle size={16} />} 연결 테스트
+                    </button>
+                    {anthropicResult && (
+                      <span className={`flex items-center gap-1.5 text-sm ${anthropicResult.ok ? "text-emerald-600" : "text-red-600"}`}>
+                        {anthropicResult.ok ? <CheckCircle size={16} /> : <XCircle size={16} />} {anthropicResult.message}
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-xs text-brand-400">
+                    키 발급: <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noreferrer" className="text-brand-700 underline underline-offset-2">console.anthropic.com/settings/keys</a> · 사용하려면 [설정] → 모델에서 '회의록 생성 AI'를 Claude로 바꾸세요. (음성 인식은 항상 OpenAI 사용)
+                  </p>
+                </div>
+              )}
+
+              {step === 2 && (
+                <div className="space-y-3">
                   <StepTitle icon={<FolderOpen size={18} />} title="결과물 저장 폴더" />
                   <p className="text-sm text-brand-500">완성된 회의록·요약·전사 파일이 저장될 폴더입니다. 잘 모르겠으면 비워 두세요(프로그램 옆 기본 폴더 사용).</p>
                   <PickerInput value={outputDir} onChange={setOutputDir} onPick={() => pick(setOutputDir, outputDir)} busy={busy} placeholder="기본값 사용 (예: D:\Minutes)" />
                 </div>
               )}
 
-              {step === 2 && (
+              {step === 3 && (
                 <div className="space-y-3">
                   <StepTitle icon={<FolderOpen size={18} />} title="Obsidian 볼트 폴더 (선택)" />
                   <p className="text-sm text-brand-500">Obsidian을 쓴다면 볼트(.md 폴더)를 지정하세요. 회의록이 볼트에 저장되고 위키 검색에 활용됩니다. 안 쓰면 건너뛰어도 됩니다.</p>
@@ -154,7 +204,7 @@ export default function Onboarding({ onClose }: { onClose: () => void }) {
                 </div>
               )}
 
-              {step === 3 && (
+              {step === 4 && (
                 <div className="space-y-3">
                   <StepTitle icon={<Sparkles size={18} />} title="이메일 자동 발송 (선택)" />
                   <p className="text-sm text-brand-500">회의록이 완성되면 메일로 받고 싶을 때만 입력하세요. 안 쓰면 건너뛰세요.</p>

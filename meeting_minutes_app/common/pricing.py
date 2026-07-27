@@ -19,9 +19,12 @@ DEFAULT_STT_PRICE_PER_MIN = 0.006
 # Claude 단가가 과거 이 표에 없어 LLM_TOKEN=claude 세션도 항상 gpt-4o 가격으로
 # 계산돼 비용이 왜곡됐다. Anthropic 공개 단가(2026-06 기준)를 추가한다.
 LLM_TOKEN_PRICE = {
-    # OpenAI
+    # OpenAI — config_schema models.gpt_model / minutes_model / summary_model 선택지와 일치.
+    # (선택 가능한 모델이 이 표에 없으면 estimate 가 gpt-4o 폴백 단가로 잘못 계산된다.)
     "gpt-4o":            {"in": 2.50, "out": 10.00},
     "gpt-4o-mini":       {"in": 0.15, "out": 0.60},
+    "o1":                {"in": 15.00, "out": 60.00},
+    "o3-mini":           {"in": 1.10, "out": 4.40},
     # Anthropic (Claude)
     "claude-opus-4-8":   {"in": 5.00, "out": 25.00},
     "claude-opus-4-7":   {"in": 5.00, "out": 25.00},
@@ -64,6 +67,21 @@ MINUTES_COST_PER_SESSION = minutes_cost("gpt", "gpt-4o")
 
 def stt_rate_per_min(stt_model: str) -> float:
     return STT_PRICE_PER_MIN.get(stt_model, DEFAULT_STT_PRICE_PER_MIN)
+
+
+def current_models(cfg) -> dict:
+    """현재 config 기준으로 비용 추정에 쓸 모델을 해석한다.
+
+    cfg 는 config_loader 모듈(또는 .get(path, default) 를 제공하는 객체).
+    stt / llm / 회의록 생성 모델을 한 곳에서 뽑아 estimate_session_cost 에 넘긴다.
+    """
+    stt_model = cfg.get("models.stt", "gpt-4o-mini-transcribe") or "gpt-4o-mini-transcribe"
+    llm = cfg.get("models.llm", "gpt") or "gpt"
+    if str(llm).lower().startswith("claude"):
+        minutes_model = cfg.get("models.claude_model", None)
+    else:
+        minutes_model = cfg.get("models.minutes_model", None) or cfg.get("models.gpt_model", None)
+    return {"stt_model": stt_model, "llm": llm, "minutes_model": minutes_model}
 
 
 def estimate_session_cost(duration_sec: float, stt_model: str,

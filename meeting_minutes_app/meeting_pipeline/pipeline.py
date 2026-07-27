@@ -20,7 +20,9 @@ from meeting_minutes_app.meeting_pipeline.meeting_minutes import (
     TYPE_LABELS, logger, info, warn, _c,
     load_segments_from_transcript, parse_session_dt_from_filename, _date_key_local,
 )
-from meeting_minutes_app.meeting_pipeline.stt import prepare_audio, run_stt, translate_segments
+from meeting_minutes_app.meeting_pipeline.stt import (
+    prepare_audio, run_stt, translate_segments, review_translation_segments,
+)
 from meeting_minutes_app.meeting_pipeline.script_formatting import build_script_md
 from meeting_minutes_app.meeting_pipeline.minutes_generation import (
     refine_script, _refined_script_is_usable, infer_speaker_names, save,
@@ -159,38 +161,20 @@ def process_single(
 
     _p(55, "전사 완료 · 후처리 중")
 
-    # 4. 번역
-    segments_for_doc = segments
-    if getattr(args, "translate", False):
-        seg_ko_path = os.path.join(output_dir, f"{pfx}segments_translated.json")
-        if getattr(args, "resume", False) and os.path.isfile(seg_ko_path):
-            info("기존 번역 세그먼트 로드 (--resume)")
-            with open(seg_ko_path, "r", encoding="utf-8") as f:
-                segments_for_doc = json.load(f)
-        else:
-            segments_for_doc = translate_segments(segments, llm, debug_dir=debug_dir)
-            with open(seg_ko_path, "w", encoding="utf-8") as f:
-                json.dump(segments_for_doc, f, ensure_ascii=False, indent=2)
-
-    # 5. 스크립트 (원본 raw 보존)
-    script_md = build_script_md(segments)
-    save(script_md, os.path.join(output_dir, f"{pfx}script.md"), "스크립트")
-    save(script_md, transcript_path, "전사")
-
-    if getattr(args, "translate", False) and getattr(args, "translate_script", False):
-        script_ko = build_script_md(segments_for_doc, include_original=True)
-        save(script_ko, os.path.join(output_dir, f"{pfx}script_ko.md"), "스크립트 (한국어)")
-
-    # 5b. STT 교정 — 회의록 생성 전에 실행하여 교정본을 입력으로 사용
-    _p(65, "STT 교정 중")
+    # 4. STT 교정 (원문 언어) — 번역·회의록 생성 '전에' 원문 STT 오류를 먼저 교정한다.
+    #    과거엔 번역(EN→KR) 뒤 한국어 세그먼트를 교정해, refine이 영어 원문을 보지 못하고
+    #    (오역을 검증·수정할 수 없고) 회의록도 '번역→교정' 이중 손실 텍스트로 생성됐다.
+    #    이제 원문을 교정해 회의록 입력(precomputed_refined)으로 쓰고 — 회의록은 어차피
+    #    한국어로 출력되므로 원문 언어 교정본이 오히려 손실이 적다 — 번역은 그 뒤에 한다.
+    _p(60, "STT 교정 중")
     topic_str = getattr(args, 'topic', '') or ""
     refined_text: Optional[str] = None
     try:
         refined_text = refine_script(
-            segments_for_doc, llm, args.type,
+            segments, llm, args.type,
             topic=topic_str, debug_dir=debug_dir,
         )
-        usable, reason = _refined_script_is_usable(refined_text, segments_for_doc)
+        usable, reason = _refined_script_is_usable(refined_text, segments)
         if usable:
             save(refined_text,
                  os.path.join(output_dir, f"{pfx}script_refined.txt"), "교정 스크립트")
@@ -208,15 +192,48 @@ def process_single(
     except Exception as e:
         warn(f"STT 교정 실패 ({e}) → 원본 스크립트로 회의록 생성")
 
-    # Obsidian "전사" 노트는 교정본이 품질 게이트를 통과했으면 그걸 쓴다 — 과거엔 교정
-    # 성공 여부와 무관하게 항상 원본 raw script_md만 저장돼, 회의록 생성에는 깔끔한
-    # 교정본이 쓰이고도 정작 전사 노트엔 오탈자·잡음 섞인 원문만 남는 불일치가 있었다.
+    # 5. 번역 (원문 세그먼트 → 한국어) — 전사 표시·세그먼트 폴백용.
+    segments_for_doc = segments
+    if getattr(args, "translate", False):
+        _p(70, "번역 중")
+        seg_ko_path = os.path.join(output_dir, f"{pfx}segments_translated.json")
+        if getattr(args, "resume", False) and os.path.isfile(seg_ko_path):
+            info("기존 번역 세그먼트 로드 (--resume)")
+            with open(seg_ko_path, "r", encoding="utf-8") as f:
+                segments_for_doc = json.load(f)
+        else:
+            segments_for_doc = translate_segments(segments, llm, debug_dir=debug_dir)
+            # 번역 검수 패스 — 원문·번역을 병치해 주제 맥락으로 오역·누락만 교정(문장 정합
+            # 유지). 번역과 별도 LLM 호출이라 비용이 늘어 config 로 켜고 끈다(기본 켜짐).
+            if _c("stt.translation_review", True):
+                _p(75, "번역 검수 중")
+                segments_for_doc = review_translation_segments(
+                    segments_for_doc, llm, topic=topic_str, debug_dir=debug_dir)
+            with open(seg_ko_path, "w", encoding="utf-8") as f:
+                json.dump(segments_for_doc, f, ensure_ascii=False, indent=2)
+
+    # 6. 스크립트 파일 (원본 raw 보존)
+    script_md = build_script_md(segments)
+    save(script_md, os.path.join(output_dir, f"{pfx}script.md"), "스크립트")
+    save(script_md, transcript_path, "전사")
+
+    if getattr(args, "translate", False) and getattr(args, "translate_script", False):
+        script_ko = build_script_md(segments_for_doc, include_original=True)
+        save(script_ko, os.path.join(output_dir, f"{pfx}script_ko.md"), "스크립트 (한국어)")
+
+    # 7. 발행용 전사 노트
+    #  - 번역 OFF: 원문 언어 교정본(품질 게이트 통과 시)을 전사 노트로 — 오탈자·고유명사
+    #    가 정리된 깔끔한 전사가 남는다.
+    #  - 번역 ON: 교정본은 '원문 언어'라 한국어 표시 노트로는 부적합 → 한국어(원문 병기)
+    #    전사를 발행한다. (번역 품질은 8단계 번역 검수 패스가 별도로 다듬는다.)
     transcript_for_publish = script_md
-    if refined_text:
+    if getattr(args, "translate", False):
+        transcript_for_publish = build_script_md(segments_for_doc, include_original=True)
+    elif refined_text:
         transcript_for_publish = (
             "# 스크립트 (Transcript, 교정본)\n\n"
             f"> 생성: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
-            f"> 세그먼트: {len(segments_for_doc)}개 · STT 교정 적용(오탈자·고유명사 수정)\n\n"
+            f"> 세그먼트: {len(segments)}개 · STT 교정 적용(오탈자·고유명사 수정)\n\n"
             "---\n\n"
             + refined_text.strip()
         )
@@ -261,7 +278,8 @@ def process_single(
         def on_stage_error(self, stage, exc):
             warn(f"[{stage}] 실패 (무시): {exc}")
 
-    stt_meta = _stt_quality_meta(segments_for_doc, refined_text, bool(refined_text), stt_source)
+    # 교정본은 '원문 언어'이므로 품질 지표(refined_ratio)도 원문 세그먼트 기준으로 계산
+    stt_meta = _stt_quality_meta(segments, refined_text, bool(refined_text), stt_source)
     source_file_date = _date_key_local(parse_session_dt_from_filename(input_path))
     _root_out = Path(__file__).resolve().parent.parent.parent / str(_c("output_dir", "output"))
 

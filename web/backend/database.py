@@ -161,6 +161,24 @@ def update_session_status(sid: str, status: str, **kwargs):
         c.commit()
 
 
+def month_to_date_spend(now: Optional[datetime] = None) -> float:
+    """이번 달(로컬 시각 기준) 1일 00:00 이후 생성된 세션들의 예상비용 합(USD).
+
+    지출 한도(cost.monthly_cap_usd) 검사용. 실패(error) 세션은 제외하고 진행 중
+    (processing)도 포함해, 동시에 여러 건을 올려 한도를 우회하지 못하게 한다.
+    `date` 컬럼(생성 시각, 로컬 ISO)을 기준으로 필터한다.
+    """
+    now = now or datetime.now()
+    start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0).isoformat()
+    with _conn() as c:
+        row = c.execute(
+            "SELECT COALESCE(SUM(cost_estimate), 0) AS s FROM sessions "
+            "WHERE date >= ? AND status != 'error'",
+            (start,),
+        ).fetchone()
+    return float(row["s"] or 0.0)
+
+
 def delete_session(sid: str):
     with _conn() as c:
         c.execute("DELETE FROM segments WHERE session_id = ?", (sid,))

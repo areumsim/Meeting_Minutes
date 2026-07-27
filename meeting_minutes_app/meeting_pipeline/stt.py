@@ -50,6 +50,33 @@ except ImportError:
 # ──────────────────────────────────────────────
 #  오디오 준비
 # ──────────────────────────────────────────────
+def _audio_filters() -> List[str]:
+    """config(stt.*)에 따라 STT 전처리용 ffmpeg 오디오 필터 목록을 만든다.
+
+    - loudnorm(기본 켜짐): 음량 정규화. 마이크 게인이 낮은 녹음도 STT 정확도가 오른다.
+      타임라인을 바꾸지 않아 타임스탬프에 안전하다.
+    - silenceremove(기본 꺼짐): 무음 구간 제거. 파일이 짧아져 비용·환각이 줄지만
+      무음을 지워 타임스탬프가 실제 경과시간과 어긋난다 → 고급 설정에서만 켠다.
+    """
+    try:
+        from meeting_minutes_app.common import config_loader as cfg
+        loudnorm = bool(cfg.get("stt.preprocess_audio", True))
+        trim = bool(cfg.get("stt.trim_silence", False))
+    except Exception:
+        loudnorm, trim = True, False
+    filters: List[str] = []
+    if loudnorm:
+        # 방송 표준(EBU R128) 근사 — 발화용으로 무난한 값.
+        filters.append("loudnorm=I=-16:TP=-1.5:LRA=11")
+    if trim:
+        # 앞뒤 무음을 다듬고, 1.5초 이상 이어지는 내부 무음을 제거(-45dB 이하를 무음으로).
+        filters.append(
+            "silenceremove=start_periods=1:start_duration=0.2:start_threshold=-45dB:"
+            "stop_periods=-1:stop_duration=1.5:stop_threshold=-45dB"
+        )
+    return filters
+
+
 def prepare_audio(input_path: str, work_dir: str) -> str:
     step("오디오 준비 중...")
     ext  = Path(input_path).suffix.lower()
@@ -57,18 +84,32 @@ def prepare_audio(input_path: str, work_dir: str) -> str:
     info(f"입력: {Path(input_path).name}  ({size:.1f} MB, {ext})")
     logger.debug(f"입력 파일: {input_path}, {size:.2f}MB")
 
-    if size <= MAX_FILE_SIZE_MB and ext in UPLOAD_FORMATS:
+    filters = _audio_filters()
+    can_direct = size <= MAX_FILE_SIZE_MB and ext in UPLOAD_FORMATS
+
+    # 전처리가 필요 없고(필터 없음) 직접 업로드 가능하면 재인코딩 없이 그대로 — 기존 빠른 경로.
+    if not filters and can_direct:
         info(f"포맷 {ext}, {size:.1f}MB → 변환 없이 직접 업로드")
         return input_path
 
-    info(f"mp3 변환 중... (원본 {size:.1f}MB)")
     out = os.path.join(work_dir, Path(input_path).stem + ".mp3")
-    run_cmd([
-        FFMPEG, "-y", "-i", input_path,
-        "-vn", "-ar", "16000", "-ac", "1", "-b:a", "48k", out,
-    ])
+    base_cmd = [FFMPEG, "-y", "-i", input_path, "-vn", "-ar", "16000", "-ac", "1", "-b:a", "48k"]
+    cmd = base_cmd + (["-af", ",".join(filters)] if filters else []) + [out]
+    if filters:
+        info(f"오디오 전처리·변환 중... (필터: {', '.join(f.split('=')[0] for f in filters)})")
+    else:
+        info(f"mp3 변환 중... (원본 {size:.1f}MB)")
+    try:
+        run_cmd(cmd)
+    except Exception as e:
+        # 전처리(필터) 실패 시: 직접 업로드 가능하면 원본으로, 아니면 필터 없이 단순 변환 재시도.
+        # (비개발자 사용 환경에서 전처리 오류로 전체 처리가 멈추지 않도록 방어)
+        warn(f"오디오 전처리 실패 ({e}) → 필터 없이 진행")
+        if can_direct:
+            return input_path
+        run_cmd(base_cmd + [out])
     new_size = file_mb(out)
-    ok(f"변환 완료: {size:.1f}MB → {new_size:.1f}MB  ({out})")
+    ok(f"오디오 준비 완료: {size:.1f}MB → {new_size:.1f}MB  ({out})")
     return out
 
 
@@ -473,3 +514,82 @@ def translate_segments(
 
     ok(f"번역 완료: {len(translated)}개")
     return translated
+
+
+def review_translations(
+    pairs: List[Tuple[str, str]], llm: LLMClient,
+    topic: str = "", batch_size: int = 20, debug_dir: Optional[str] = None,
+) -> List[str]:
+    """번역 검수 패스: (원문, 번역) 쌍을 주제 맥락으로 대조해 오역·누락·의미 왜곡·용어
+    불일치만 고친 한국어 리스트를 반환한다.
+
+    - 입력과 같은 길이·순서를 유지한다(문장 단위 정합, 원문 i ↔ 번역 i).
+    - 번역이 이미 정확하면 그대로 둔다(불필요한 재작성 억제).
+    - 배치 실패 시 그 배치는 기존 번역을 유지한다(전체가 멈추지 않음).
+    번역 1회 패스로는 못 잡는 문맥·주제 의존 오역을 정리하는 용도이며, 번역과 별도의
+    LLM 호출이라 비용이 늘어난다(config stt.translation_review 로 켜고 끔).
+    """
+    out: List[str] = [ko for _, ko in pairs]
+    if not pairs:
+        return out
+    from meeting_minutes_app.meeting_pipeline.json_utils import parse_json_loose
+    total = math.ceil(len(pairs) / batch_size)
+    topic_hint = f"\n주제 맥락: {topic}" if topic else ""
+    step("번역 검수 중...")
+    for bi in range(total):
+        lo = bi * batch_size
+        batch = pairs[lo: lo + batch_size]
+        items = json.dumps(
+            [{"i": i, "src": s, "ko": k} for i, (s, k) in enumerate(batch)],
+            ensure_ascii=False,
+        )
+        system = (
+            f"전문 영한 번역 검수자입니다.{topic_hint}\n"
+            "각 항목의 'src'(원문)와 'ko'(현재 번역)를 대조해, 오역·누락·의미 왜곡·"
+            "부자연스러운 표현·용어 불일치가 있으면 고친 한국어를 출력하세요.\n"
+            "규칙:\n"
+            "- 번역이 이미 정확하고 자연스러우면 ko를 그대로 반환\n"
+            "- 원문에 없는 내용을 추가하거나 여러 문장을 합치지 말 것(문장 단위 대응 유지)\n"
+            "- 전문 용어는 원문 병기 가능(예: 인공지능(AI))\n"
+            "- 반드시 한국어로만 출력. 다른 언어 금지\n"
+            'JSON 배열로만 응답: [{"i":0,"t":"검수된 한국어"},...] — 입력과 같은 개수·순서.'
+        )
+        try:
+            raw = llm.chat(system, items, temp=0.1)
+            if debug_dir:
+                debug_save(raw,
+                           os.path.join(debug_dir, f"review_batch{bi:03d}.txt"),
+                           f"Review {bi}")
+            arr = parse_json_loose(raw, expect="list")
+            if arr is None:
+                raise ValueError("검수 JSON 파싱 실패")
+            tmap = {a["i"]: a["t"] for a in arr
+                    if isinstance(a, dict) and "i" in a and a.get("t")}
+            for i in range(len(batch)):
+                fixed = tmap.get(i)
+                if fixed and str(fixed).strip():
+                    out[lo + i] = str(fixed).strip()
+        except Exception as e:
+            warn(f"  검수 배치 {bi+1}/{total} 실패: {e} → 기존 번역 유지")
+        if bi < total - 1:
+            time.sleep(0.3)
+    ok("번역 검수 완료")
+    return out
+
+
+def review_translation_segments(
+    segments: List[Dict], llm: LLMClient,
+    topic: str = "", debug_dir: Optional[str] = None,
+) -> List[Dict]:
+    """번역된 세그먼트(text=한국어, text_original=원문)를 검수해 text를 갱신한 새 리스트 반환.
+
+    translate_segments 산출물(배치 경로)을 그대로 받아 처리한다.
+    """
+    pairs = [((s.get("text_original") or ""), (s.get("text") or "")) for s in segments]
+    fixed = review_translations(pairs, llm, topic=topic, debug_dir=debug_dir)
+    out: List[Dict] = []
+    for s, ko in zip(segments, fixed):
+        ns = s.copy()
+        ns["text"] = ko or s.get("text", "")
+        out.append(ns)
+    return out

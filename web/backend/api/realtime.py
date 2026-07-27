@@ -177,7 +177,7 @@ class BrowserRealtimeSession:
 
         # DB 세션 생성
         self.session_id = db.create_session(
-            title=title or f"실시간 녹음 {datetime.now().strftime('%H:%M')}",
+            title=title or f"실시간 녹음 {datetime.now().strftime('%y%m%d-%H%M')}",
             topic=topic,
             doc_type=doc_type,
             language=language,
@@ -1283,6 +1283,32 @@ class BrowserRealtimeSession:
         # _finalize 전체에서 snapshot 사용 (스레드 안전)
         self.segments = segments_snapshot
 
+        # 트리비얼 가드: 발화가 사실상 없는 세션(세그먼트 2개 미만 '또는' 전사
+        # 15자 미만)은 회의록/요약 LLM 생성을 건너뛴다 — "안녕하세요" 한 마디까지
+        # 완결된 회의록으로 저장돼 대시보드를 어지럽히던 문제. 전사·세션은 그대로
+        # 보존하고(completed) 상세에서 전사만 볼 수 있게 한다.
+        _total_chars = sum(len((s.get("text") or "").strip()) for s in segments_snapshot)
+        if len(segments_snapshot) < 2 or _total_chars < 15:
+            duration = (segments_snapshot[-1]["end"] - segments_snapshot[0]["start"]
+                        if segments_snapshot else 0)
+            # output_dir 미설정 — run_post_session을 건너뛰어 web_realtime_{id}/ 산출물
+            # 폴더 자체를 만들지 않으므로 startup 스캐너가 오해할 대상도 없다.
+            db.update_session_status(self.session_id, "completed", duration_sec=duration)
+            print(f"[finalize] 내용 짧음(seg={len(segments_snapshot)}, chars={_total_chars})"
+                  f" → 회의록 생성 생략, 전사만 저장")
+            try:
+                await self.ws.send_json({
+                    "type": "completed",
+                    "sessionId": self.session_id,
+                    "segmentCount": len(segments_snapshot),
+                    "duration": duration,
+                    "minutesSkipped": True,
+                    "message": "내용이 짧아 회의록 없이 전사만 저장했습니다.",
+                })
+            except Exception:
+                pass
+            return
+
         # F2: 화자분리 후처리(opt-in). 모아둔 PCM을 diarize 모델로 재전사해 speaker를
         # 채우고 세그먼트를 교체한다 — 이후 회의록/요약 생성이 화자 라벨을 반영한다.
         # 완전 best-effort: 어떤 실패든 원본 세그먼트를 그대로 유지한다.
@@ -1332,6 +1358,32 @@ class BrowserRealtimeSession:
             # 회의록 생성 LLM은 config.json(models.llm)을 따른다
             llm = mm.LLMClient(preferred=mm._c("models.llm", "gpt") or "gpt")
             session_dt = datetime.now().strftime("%Y년 %m월 %d일 %H:%M")
+
+            # 번역 검수 패스 — 번역이 켜진 세션의 화면·DB 번역(translated_text)을 원문과
+            # 병치해 주제 맥락으로 오역·누락을 교정한다. 실시간 번역은 발화/윈도 단위라
+            # 문맥 없이 처리돼 오역이 남기 쉬운데, 종료 시 전체 맥락으로 한 번 더 다듬는다.
+            # (회의록 본문은 원문 세그먼트에서 생성되므로 영향 없음 — 표시 품질 개선용)
+            if translate and mm._c("stt.translation_review", True):
+                try:
+                    from meeting_minutes_app.meeting_pipeline.stt import review_translations
+                    _tr_segs = [s for s in self.segments if (s.get("translated_text") or "").strip()]
+                    if _tr_segs:
+                        self._send_to_browser({"type": "status", "message": "번역 검수 중..."})
+                        _pairs = [((s.get("text") or ""), (s.get("translated_text") or ""))
+                                  for s in _tr_segs]
+                        _fixed = await asyncio.to_thread(
+                            review_translations, _pairs, llm, topic)
+                        for s, ko in zip(_tr_segs, _fixed):
+                            if ko and ko.strip():
+                                s["translated_text"] = ko.strip()
+                                if self.session_id:
+                                    try:
+                                        db.update_segment_translation(
+                                            self.session_id, s["start"], ko.strip())
+                                    except Exception:
+                                        pass
+                except Exception as _re:
+                    print(f"[realtime] 번역 검수 실패(기존 번역 유지): {_re}")
 
             # 실시간 수집분 — vault 관련 노트 + 웹 검색 보완
             with self._notes_lock:
@@ -1392,11 +1444,23 @@ class BrowserRealtimeSession:
             await asyncio.to_thread(fz.run_post_session, inputs, options, _WebEvents())
 
             duration = self.segments[-1]["end"] - self.segments[0]["start"] if self.segments else 0
+            # 예상 비용 기록 — 월 지출 한도(cost.monthly_cap_usd) 합계에 실시간 세션도
+            # 포함되도록. 번역 비용은 분당 단가가 미미해 생략(대략값).
+            try:
+                from meeting_minutes_app.common import pricing, config_loader as _cfg
+                _m = pricing.current_models(_cfg)
+                _est = pricing.estimate_session_cost(
+                    duration, _m["stt_model"], include_minutes=True,
+                    llm=_m["llm"], minutes_model=_m["minutes_model"],
+                )["total"]
+            except Exception:
+                _est = 0.0
             # output_dir 기록 필수 — 없으면 startup 폴더 스캐너가 web_realtime_{id}/ 를
             # '미등록 CLI 산출물'로 보고 재시작마다 중복 세션을 만들어냈다.
             db.update_session_status(
                 self.session_id, "completed",
                 duration_sec=duration,
+                cost_estimate=round(_est, 4),
                 output_dir=str(session_out),
             )
 

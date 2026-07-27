@@ -81,6 +81,7 @@ hiddenimports = [
     'uvicorn.protocols.http.h11_impl',
     'uvicorn.protocols.websockets',
     'uvicorn.protocols.websockets.auto',
+    'uvicorn.protocols.websockets.websockets_impl',
     'uvicorn.protocols.websockets.wsproto_impl',
     'uvicorn.lifespan',
     'uvicorn.lifespan.on',
@@ -190,6 +191,10 @@ hiddenimports = [
 
 # GA Realtime 전사 세션 param/이벤트 타입은 lazy 참조라 정적 감지가 어렵다 — 서브모듈 전체 포함.
 hiddenimports += collect_submodules('openai.types.realtime')
+# uvicorn의 WebSocket 프로토콜 구현이 런타임에 동적으로 불러오는 하위 모듈도
+# 전부 포함한다. top-level 'websockets'만 적으면 빌드 환경/버전에 따라 일부가
+# 분석에서 빠져 HTTP-only EXE가 만들어질 수 있다.
+hiddenimports += collect_submodules('websockets')
 
 a = Analysis(
     [os.path.join(APP, 'meeting_pipeline', 'run_ui_exe.py')],

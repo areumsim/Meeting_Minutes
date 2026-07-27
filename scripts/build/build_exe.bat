@@ -1,6 +1,12 @@
 @echo off
 chcp 65001 >nul
 title Build Meeting Minutes EXE
+:: [안내] 배포 기본 방식은 포터블(임베디드 파이썬 + bat) 로 바뀌었습니다:
+::        scripts\build\build_portable.bat  →  dist\MeetingMinutesPortable.zip
+::   이유: PyInstaller exe 는 UPX/미서명 부트로더 때문에 백신 스캔에 걸려
+::         첫 실행이 매우 느립니다. 포터블은 PSF 서명된 python.exe 를 써서 빠릅니다.
+::   이 exe 빌드는 원격 MCP(/mcp) 커넥터가 꼭 필요할 때 등 예외적으로만 사용하세요
+::   (포터블은 pywin32 재배치 문제로 fastmcp 를 의도적으로 제외함).
 cd /d "%~dp0..\.."
 
 echo.
@@ -46,6 +52,16 @@ if errorlevel 1 (
     echo  [2/5] PyInstaller found. OK
 )
 
+:: 녹음 필수 WebSocket 구현 확인. 이 패키지가 없으면 PyInstaller는 경고만 남기고
+:: 빌드를 계속하며, 결과 EXE는 HTTP는 되지만 /ws/realtime이 404가 된다.
+python -c "import inspect; from websockets.sync.connection import Connection; assert 'decode' in inspect.signature(Connection.recv).parameters, 'websockets>=14,<16 required'; import uvicorn.protocols.websockets.websockets_impl"
+if errorlevel 1 (
+    echo  [ERROR] WebSocket 빌드 의존성이 없거나 OpenAI Realtime과 호환되지 않습니다.
+    echo          python -m pip install "websockets>=14,<16" 을 실행한 뒤 다시 빌드하세요.
+    pause
+    exit /b 1
+)
+
 :: 3. EXE 빌드
 echo  [3/5] Building EXE...
 echo.
@@ -57,6 +73,11 @@ set "MM_DATA_BAK=%TEMP%\MM_DATA_BAK_%RANDOM%"
 if exist "dist\MeetingMinutes\MeetingMinutesData" (
     echo  기존 설정/데이터 백업: "%MM_DATA_BAK%"
     move "dist\MeetingMinutes\MeetingMinutesData" "%MM_DATA_BAK%" >nul
+    if not exist "%MM_DATA_BAK%" (
+        echo  [ERROR] 기존 설정/데이터 백업에 실패했습니다. 빌드를 중단합니다.
+        pause
+        exit /b 1
+    )
 )
 
 python -m PyInstaller scripts\build\build_exe.spec --noconfirm --clean
@@ -64,12 +85,15 @@ echo.
 
 :: 사용자 데이터 복원 (빌드 성공/실패와 무관하게 되돌린다)
 if exist "%MM_DATA_BAK%" (
-    if exist "dist\MeetingMinutes" (
-        echo  설정/데이터 복원 중...
-        if exist "dist\MeetingMinutes\MeetingMinutesData" rmdir /s /q "dist\MeetingMinutes\MeetingMinutesData"
-        move "%MM_DATA_BAK%" "dist\MeetingMinutes\MeetingMinutesData" >nul
-    ) else (
-        rmdir /s /q "%MM_DATA_BAK%"
+    echo  설정/데이터 복원 중...
+    if not exist "dist\MeetingMinutes" mkdir "dist\MeetingMinutes"
+    if exist "dist\MeetingMinutes\MeetingMinutesData" rmdir /s /q "dist\MeetingMinutes\MeetingMinutesData"
+    move "%MM_DATA_BAK%" "dist\MeetingMinutes\MeetingMinutesData" >nul
+    if exist "%MM_DATA_BAK%" (
+        echo  [ERROR] 설정/데이터 복원에 실패했습니다.
+        echo          백업 위치: "%MM_DATA_BAK%"
+        pause
+        exit /b 1
     )
 )
 

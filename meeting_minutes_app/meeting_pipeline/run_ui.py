@@ -41,6 +41,10 @@ NPM_CMD = shutil.which("npm") or "npm"
 
 def check_python_deps():
     """Python 의존성 확인 및 설치."""
+    # websockets가 없으면 uvicorn은 서버 자체는 정상 기동하지만 WebSocket
+    # Upgrade 요청을 일반 HTTP로 넘겨 /ws/realtime에 404를 반환한다. 13.x도
+    # OpenAI SDK 2.x가 쓰는 sync recv(decode=False)를 지원하지 않아 연결 직후
+    # 실시간 전사가 깨진다. 두 경우를 모두 설치 단계에서 차단한다.
     required = ["fastapi", "uvicorn", "python-multipart"]
     missing = []
     for pkg in required:
@@ -49,6 +53,15 @@ def check_python_deps():
             __import__(mod)
         except ImportError:
             missing.append(pkg)
+
+    websocket_spec = "websockets>=14,<16"
+    try:
+        import inspect
+        from websockets.sync.connection import Connection
+        if "decode" not in inspect.signature(Connection.recv).parameters:
+            missing.append(websocket_spec)
+    except (ImportError, AttributeError):
+        missing.append(websocket_spec)
 
     if missing:
         print(f"\n  필요한 패키지 설치: {', '.join(missing)}")
@@ -132,6 +145,9 @@ def main():
                 port=args.port,
                 reload=True,
                 reload_dirs=[str(WEB_DIR / "backend")],
+                # 개발 모드도 배포본과 같은 WebSocket 구현을 사용해 녹음 경로의
+                # 동작 차이와 의존성 누락을 즉시 드러낸다.
+                ws="websockets",
             )
         finally:
             vite_proc.terminate()
@@ -154,6 +170,9 @@ def main():
             "web.backend.app:app",
             host=args.host,
             port=args.port,
+            # auto는 구현 패키지가 빠졌을 때 HTTP-only로 조용히 기동한다.
+            # 녹음 필수 기능이므로 명시적으로 선택해 누락을 즉시 드러낸다.
+            ws="websockets",
         )
 
 

@@ -14,6 +14,15 @@ output/
 dist/
 *.tsbuildinfo
 
+# ── 벤더 바이너리 캐시 (빌드 스크립트가 다운로드/배치 — git에 올리지 않음) ─────
+# 임베디드 파이썬은 build_portable.ps1 이 python.org에서 받아 vendor/python-embed/ 에 캐시.
+# (vendor/ffmpeg/*.exe 는 위 *.exe 규칙으로 이미 제외됨)
+vendor/python-embed/
+
+# ── 작업 중 만든 백업 잔재 ────────────────────────
+.recording-fix-backup/
+.recording-fix-backup-final/
+
 # ── Node ─────────────────────────────────────────
 node_modules/
 

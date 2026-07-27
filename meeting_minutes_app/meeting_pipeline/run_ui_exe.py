@@ -178,12 +178,26 @@ def main():
     if not args.no_browser:
         open_browser_when_ready(port)
 
+    # OpenAI SDK 2.x Realtime은 sync Connection.recv(decode=False)를 사용한다.
+    # websockets 13.x로 잘못 빌드된 실행본이 잠깐 ready를 보낸 뒤 폴백하는
+    # 반쪽 동작을 허용하지 않고 시작 단계에서 명확히 실패시킨다.
+    import inspect
+    from websockets.sync.connection import Connection
+    if "decode" not in inspect.signature(Connection.recv).parameters:
+        raise RuntimeError(
+            "호환되지 않는 websockets 버전입니다. "
+            "실시간 녹음에는 websockets>=14,<16이 필요합니다."
+        )
+
     import uvicorn
     uvicorn.run(
         "web.backend.app:app",
         host=host,
         port=port,
         log_level="info",
+        # WebSocket 구현 누락 시 HTTP-only로 조용히 기동해 녹음만 404가 되는
+        # 상태를 허용하지 않는다. build_exe.bat도 빌드 전에 같은 의존성을 검사한다.
+        ws="websockets",
     )
 
 

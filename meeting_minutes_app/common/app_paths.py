@@ -44,7 +44,15 @@ def _repo_root() -> Path:
 
 
 def get_resource_dir() -> Path:
-    """번들된 읽기전용 리소스 루트 (_MEIPASS 또는 저장소 루트)."""
+    """번들된 읽기전용 리소스 루트 (_MEIPASS 또는 저장소 루트).
+
+    포터블(임베디드 파이썬 + bat) 배포에서는 MM_RESOURCE_DIR 환경변수로
+    리소스 루트(config.example.json·prompts·vendor/ffmpeg·web/frontend/dist)를
+    명시 지정할 수 있다. 미설정 시 frozen→_MEIPASS, 그 외→저장소 루트.
+    """
+    env = os.environ.get("MM_RESOURCE_DIR")
+    if env:
+        return Path(env).expanduser().resolve()
     if is_frozen():
         return Path(getattr(sys, "_MEIPASS"))
     return _repo_root()
@@ -53,8 +61,13 @@ def get_resource_dir() -> Path:
 def get_base_dir() -> Path:
     """쓰기 가능한 데이터 베이스 디렉토리.
 
-    frozen → exe 옆 MeetingMinutesData/, dev → 저장소 루트.
+    - MM_DATA_DIR 환경변수가 있으면 최우선(포터블/임베디드 파이썬 배포에서
+      설정·회의록·DB를 소스 폴더와 분리하기 위해 _start.bat 이 지정).
+    - frozen → exe 옆 MeetingMinutesData/, dev → 저장소 루트.
     """
+    env = os.environ.get("MM_DATA_DIR")
+    if env:
+        return Path(env).expanduser().resolve()
     if is_frozen():
         return Path(sys.executable).resolve().parent / _DATA_FOLDER_NAME
     return _repo_root()

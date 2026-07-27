@@ -238,7 +238,10 @@ flowchart TD
 
     E --> J[disconnect → _finalize]
     I --> J
-    J --> K[build_generation_context_memo\n세션 중 수집 노트 + 종료 후 통합 검색]
+    J --> J0{트리비얼 가드\n세그먼트<2 또는 <15자?}
+    J0 -- 예 --> JX[전사만 저장·회의록 생략\ncompleted]
+    J0 -- 아니오 --> J1[번역 검수\ntranslate + stt.translation_review\nreview_translations로 translated_text 교정]
+    J1 --> K[build_generation_context_memo\n세션 중 수집 노트 + 종료 후 통합 검색]
     K --> L[generate_minutes + summary + actions]
     L --> M[claim_verify\ncurrent_title 필터]
     M --> M2[wiki_context.json + wiki_proposal\nDB/output 저장]
@@ -590,11 +593,11 @@ python run_meeting.py obsidian --project PhysicalAI --where
 | 모듈 | 역할 | 주요 함수 | 외부 호출 |
 |---|---|---|---|
 | `meeting_pipeline/meeting_minutes.py` | 배치 CLI(`main()`) + 공용 상수/로깅/파일명·비용 유틸 | `main()`, `setup_logging()`, `estimate_cost()`, `find_existing_output_dir()`, `load_segments_from_transcript()` | — |
-| `meeting_pipeline/stt.py` | 오디오 준비 + STT(OpenAI Transcription API) + 영→한 번역 | `prepare_audio()`, `split_audio()`, `run_stt()`, `translate_segments()` | OpenAI STT |
+| `meeting_pipeline/stt.py` | 오디오 준비(전처리 필터 포함) + STT(OpenAI Transcription API) + 영→한 번역 + 번역 검수. `prepare_audio()`는 config `stt.preprocess_audio`(loudnorm, 기본 켜짐)·`stt.trim_silence`(silenceremove, 기본 꺼짐)로 ffmpeg `-af` 필터를 구성한다(필터 실패 시 원본/무필터 폴백). `review_translations()`는 (원문,번역) 쌍을 주제 맥락으로 대조해 오역·누락만 문장 단위로 교정 | `_audio_filters()`, `prepare_audio()`, `split_audio()`, `run_stt()`, `translate_segments()`, `review_translations()`, `review_translation_segments()` | OpenAI STT |
 | `meeting_pipeline/script_formatting.py` | STT 세그먼트 → 스크립트(Transcript) 마크다운 변환 | `build_script_md()` | — |
 | `meeting_pipeline/minutes_generation.py` | 회의록/세미나/강의 프롬프트 + 생성 (회의록·요약·액션아이템·스크립트 교정·화자 추론). 회의록 생성은 `_minutes_is_usable()` 품질 게이트로 필수 섹션 누락/과도한 축약을 감지해 1회 재시도하며, 액션 아이템 추출은 발췌 한도 초과 시 청크 분할 후 병합·dedup한다 | `generate_minutes()`, `generate_summary()`, `extract_action_items()`, `_minutes_is_usable()`, `refine_script()`, `infer_speaker_names()` | GPT-4o, Claude |
 | `meeting_pipeline/publish.py` | 후처리 발행 — 알림 발송, 계획(planned) 노트 매칭/병합, Obsidian 기록 | `enrich_and_publish()`, `plan_context_memo()`, `_send_notification()` | Obsidian REST, SMTP/Webhooks |
-| `meeting_pipeline/pipeline.py` | 단일 오디오 파일 전체 처리 오케스트레이션 (stt/script_formatting/minutes_generation/publish 통합) | `process_single()` | 위 4개 모듈 |
+| `meeting_pipeline/pipeline.py` | 단일 오디오 파일 전체 처리 오케스트레이션 (stt/script_formatting/minutes_generation/publish 통합). 순서는 **STT → 교정(원문 언어) → 번역 → 번역 검수 → finalize**: `refine_script()`를 번역 전 원문 세그먼트에 적용해 원문 STT 오류를 교정하고(교정본은 `finalize`에 `precomputed_refined`로 전달, 회의록은 한국어 출력), 번역은 그 뒤 별도로 수행한다(과거엔 번역→교정 순이라 refine이 원문을 못 봤다) | `process_single()` | 위 4개 모듈 |
 | `common/llm_client.py` | LLM 클라이언트 (GPT-4o ↔ Claude 폴백) — `wiki_core`/`meeting_pipeline` 공용 | `LLMClient`, `make_openai_client()`, `make_anthropic_client()` | OpenAI, Anthropic |
 | `meeting_pipeline/date_utils.py` | batch/ingest 날짜 파싱 (meeting_pipeline 전용) | `parse_session_dt_from_path()`, `parse_iso_date_from_text()`, `iso_to_yymmdd()` | 표준 라이브러리 |
 | `meeting_pipeline/meeting_workflow.py` | 회의록 생성 컨텍스트 오케스트레이션, claim verify, 회의 자동분류/문서유형 판별. `_extract_claims()`는 발췌 한도 초과 시 청크 분할 후 청크 간 라운드로빈으로 `max_claims`를 채워 회의 뒷부분 주장 누락을 방지한다. `graph_expand_titles()`는 note/person/organization/topic 타입을 순서대로 조회한다 | `build_generation_context_memo()`, `_keyword_vault_search()`, `claim_verify()`, `_extract_claims()`, `_fetch_vault_notes_for_claim()`, `graph_expand_titles()`, `classify_meeting_route()`, `classify_doc_type_llm()` | VaultIndexer, Obsidian REST, LLM, Graph DB |

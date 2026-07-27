@@ -1,0 +1,42 @@
+# 포터블(임베디드 파이썬) 배포용 — 웹 서버 런타임 전용 의존성
+# =============================================================
+# build_portable.bat 이 이 목록을 python-embed 옆 Lib/site-packages 에
+# `pip install --target` 으로 설치한다.
+#
+# requirements.txt 대비 제외한 것(웹 UI 런타임에서 import 되지 않음. 마이크는
+# 브라우저가 처리하고, 실시간 STT는 서버가 HTTP/WebSocket 로 OpenAI 에 위임):
+#   - sounddevice, numpy       (CLI 실시간 녹음 전용)
+#   - webrtcvad(-wheels)        (CLI VAD 전용)
+# 이는 build_exe.spec 의 excludes(numpy/sounddevice/webrtcvad 등)와 같은 취지다.
+
+# LLM / HTTP
+openai>=1.107.1
+httpx>=0.27.0
+anthropic>=0.30.0
+
+# WebSocket (녹음 /ws/realtime). OpenAI SDK 2.x recv(decode=False) 호환 범위.
+websockets>=14,<16
+
+# 알림/요청
+requests>=2.31.0
+
+# 폴더 자동 감시(vault_watcher)
+watchdog>=4.0.0
+
+# 웹 백엔드 (FastAPI). uvicorn[standard] 는 httptools·websockets·watchfiles 포함.
+fastapi>=0.110.0
+uvicorn[standard]>=0.29.0
+python-multipart>=0.0.9
+pydantic~=2.0
+
+# 회사망 SSL 검사 대응 — OS(Windows) 인증서 저장소 신뢰 (web/backend/app.py 에서 주입)
+truststore>=0.10
+
+# 주의: fastmcp(/mcp 원격 커넥터)는 의도적으로 제외한다.
+#  - fastmcp 는 mcp 를 끌어오고, mcp 는 Windows 에서 pywin32(pywintypes)를 import 하는데
+#    pip --target 로 설치한 pywin32 는 DLL/스텁이 재배치되지 않아 임베디드 파이썬에서
+#    import 가 깨진다(억지 복구는 취약).
+#  - /mcp 는 "Claude Cowork 커스텀 커넥터"용 선택 기능이고, web/backend/app.py 가
+#    try/except 로 감싸 없으면 조용히 비활성만 하고 나머지 앱은 정상 동작한다.
+#  - 위키/그래프 기능 자체는 HTTP API(/api/wiki·/api/graph)로 동작하므로 영향 없다.
+# 필요 시(원격 MCP 커넥터를 꼭 써야 할 때)만 PyInstaller exe 빌드(build_exe.spec)를 쓰라.

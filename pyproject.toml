@@ -12,7 +12,9 @@ dependencies = [
     "openai>=1.107.1,<3",
     "httpx~=0.27",
     "anthropic~=0.30",
-    "websockets~=13.0",
+    # OpenAI SDK 2.x Realtime 수신은 Connection.recv(decode=False)를 사용한다.
+    # 해당 sync API는 websockets 14부터 제공되며, OpenAI 공식 상한은 <16이다.
+    "websockets>=14,<16",
     "sounddevice~=0.4.6",
     "numpy~=1.24",
     "requests~=2.31",

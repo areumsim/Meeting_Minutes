@@ -106,16 +106,49 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
 
   const transcriptRef = useRef<RealtimeSegment[]>([]);
   const transcriptPanelRef = useRef<HTMLDivElement>(null);
+  // 위로 스크롤해 이전 내용을 읽는 중인지 + 그 사이 새로 쌓인 줄 수(맨 아래로 버튼용).
+  const [followLatest, setFollowLatest] = useState(true);
+  const [unseenCount, setUnseenCount] = useState(0);
   useEffect(() => {
+    const prevLen = transcriptRef.current.length;
     transcriptRef.current = liveTranscript;
     // 사용자가 위로 스크롤해 이전 내용을 읽는 중이면 자동 스크롤로 끌어내리지 않는다.
     const panel = transcriptPanelRef.current;
     const nearBottom =
       !panel || panel.scrollHeight - panel.scrollTop - panel.clientHeight < 120;
-    if (nearBottom && transcriptEndRef.current) {
-      transcriptEndRef.current.scrollIntoView({ behavior: "auto", block: "nearest" });
+    if (nearBottom) {
+      if (transcriptEndRef.current) {
+        transcriptEndRef.current.scrollIntoView({ behavior: "auto", block: "nearest" });
+      }
+      if (unseenCount) setUnseenCount(0);
+    } else if (liveTranscript.length > prevLen) {
+      setUnseenCount((c) => c + (liveTranscript.length - prevLen));
     }
   }, [liveTranscript]);
+
+  const jumpToLatest = () => {
+    const panel = transcriptPanelRef.current;
+    if (panel) panel.scrollTo({ top: panel.scrollHeight, behavior: "smooth" });
+    setUnseenCount(0);
+    setFollowLatest(true);
+  };
+
+  // 스크롤 위치로 '최신 따라가기' 상태 표시 — 사용자가 위를 읽는 동안엔 배지를 띄운다.
+  const onTranscriptScroll = () => {
+    const panel = transcriptPanelRef.current;
+    if (!panel) return;
+    const atBottom = panel.scrollHeight - panel.scrollTop - panel.clientHeight < 120;
+    setFollowLatest(atBottom);
+    if (atBottom && unseenCount) setUnseenCount(0);
+  };
+
+  // 장시간 회의(수천 줄)에서 모든 줄을 그리면 스크롤·입력이 무거워진다.
+  // 화면엔 최근 MAX_VISIBLE_LINES 줄만 두고, 전체는 종료 후 전사 문서에서 본다.
+  const MAX_VISIBLE_LINES = 250;
+  const hiddenLineCount = Math.max(0, liveTranscript.length - MAX_VISIBLE_LINES);
+  const visibleTranscript = hiddenLineCount
+    ? liveTranscript.slice(-MAX_VISIBLE_LINES)
+    : liveTranscript;
 
   // 세그먼트 렌더링 key용 안정 id 발급기 — 텍스트 스트리밍 중 행 리마운트(깜빡임) 방지
   const segSeqRef = useRef(0);
@@ -1090,9 +1123,21 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
                   exit={{ opacity: 0, scale: 0.95 }}
                   className="w-full h-full flex flex-col items-center gap-6 md:gap-10 px-0 md:px-10"
                 >
-                  {/* Live Transcript */}
-                  <div ref={transcriptPanelRef} className={`w-full max-w-4xl glass-panel md:rounded-[2rem] p-3 md:p-5 flex-1 overflow-y-auto flex flex-col gap-2 md:gap-3 transition-all duration-700 relative`}>
-                    <div className="sticky top-0 z-10 flex justify-end pb-2">
+                  {/* Live Transcript — 높이를 화면 비율로 제한하고 패널 안에서만
+                      스크롤한다. 과거엔 상위에 확정 높이가 없어 flex-1 이 내용만큼
+                      늘어나 페이지 전체가 길어지고(한국어는 특히 줄이 빨리 쌓인다)
+                      정지 버튼이 화면 밖으로 밀려났다. */}
+                  <div
+                    ref={transcriptPanelRef}
+                    onScroll={onTranscriptScroll}
+                    className={`w-full max-w-4xl glass-panel md:rounded-[2rem] p-3 md:p-5 min-h-[220px] max-h-[42vh] md:max-h-[52vh] overflow-y-auto overscroll-contain flex flex-col gap-2 md:gap-3 transition-all duration-700 relative`}
+                  >
+                    <div className="sticky top-0 z-10 flex items-center justify-between gap-2 pb-2">
+                      {/* 전사 줄 수 — 얼마나 쌓였는지, 화면에 안 보이는 앞부분이 있는지 알려준다 */}
+                      <span className="text-[10px] font-bold text-brand-300 tabular-nums pl-1">
+                        {liveTranscript.length > 0 && `전사 ${liveTranscript.length}줄`}
+                        {hiddenLineCount > 0 && ` (앞 ${hiddenLineCount}줄은 종료 후 전사 문서에서)`}
+                      </span>
                        <div className="inline-flex items-center gap-2 bg-white/80 backdrop-blur-md px-3 py-1.5 rounded-full shadow-sm">
                         {/* 녹음 중에는 실제 마이크 입력(소리 감지/무음)을 여기 표시 — 전사를
                             보는 바로 그 자리에서 소리가 들어가는지 즉시 알 수 있게 한다. */}
@@ -1136,7 +1181,7 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
                       </div>
                     ) : (
                       <div className="flex flex-col gap-2 md:gap-2.5">
-                        {liveTranscript.map((item) => (
+                        {visibleTranscript.map((item) => (
                           <motion.div
                             initial={{ opacity: 0, y: 10 }}
                             animate={{ opacity: 1, y: 0 }}
@@ -1182,6 +1227,17 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
                         ))}
                         <div ref={transcriptEndRef} className="h-4" />
                       </div>
+                    )}
+
+                    {/* 위를 읽는 동안 자동 스크롤이 멈추므로, 돌아갈 방법을 항상 준다 */}
+                    {!followLatest && liveTranscript.length > 0 && (
+                      <button
+                        onClick={jumpToLatest}
+                        className="sticky bottom-0 self-center mt-1 inline-flex items-center gap-1.5 bg-brand-900 text-white text-xs font-bold px-3.5 py-2 rounded-full shadow-lg hover:bg-brand-800 transition-colors"
+                      >
+                        <ChevronDown className="w-3.5 h-3.5" />
+                        최신 전사로{unseenCount > 0 ? ` (새 ${unseenCount}줄)` : ""}
+                      </button>
                     )}
                   </div>
 

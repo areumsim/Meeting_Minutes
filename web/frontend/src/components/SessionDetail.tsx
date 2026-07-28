@@ -414,7 +414,7 @@ export default function SessionDetail({ id, onBack, onOpenGraph }: Props) {
           <div className="p-8">
             {activeTab === "graph" ? (
               graph ? (
-                <div className="space-y-8 max-h-[600px] overflow-y-auto">
+                <div className="space-y-8 max-h-[65vh] overflow-y-auto overscroll-contain">
                   {/* 시각적 그래프 개요 — 아래 타입별 목록과 함께 제공 */}
                   {(() => {
                     const allNodes = Object.values(graph.nodes).flat();
@@ -505,7 +505,7 @@ export default function SessionDetail({ id, onBack, onOpenGraph }: Props) {
                 </div>
 
                 {activeTab === "script" && segments.length > 0 ? (
-                  <div className="space-y-4 max-h-[600px] overflow-y-auto">
+                  <div className="space-y-4 max-h-[65vh] overflow-y-auto overscroll-contain">
                     {segments.map((seg, i) => (
                       <div key={i} className="flex gap-4 group">
                         <span className="text-xs text-brand-400 font-mono mt-1 shrink-0 w-14">
@@ -526,7 +526,7 @@ export default function SessionDetail({ id, onBack, onOpenGraph }: Props) {
                     ))}
                   </div>
                 ) : (
-                  <div className="max-h-[600px] overflow-y-auto">
+                  <div className="max-h-[65vh] overflow-y-auto overscroll-contain">
                     {activeDoc.format === "json" ? (
                       <pre className="bg-zinc-50 p-6 rounded-xl text-sm overflow-x-auto">
                         {(() => { try { return JSON.stringify(JSON.parse(activeDoc.content), null, 2); } catch { return activeDoc.content; } })()}

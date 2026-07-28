@@ -15,7 +15,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import pytest
 
 from meeting_minutes_app.wiki_core import graph_db, graph_sync  # noqa: E402
-from meeting_minutes_app.wiki_core import mcp_server  # noqa: E402
+
+# fastmcp 는 원격 MCP(/mcp) 전용 의존성으로 포터블 배포본에는 제외된다(pyproject 참고).
+# 미설치 환경에서는 이 모듈 테스트만 스킵하고 나머지 스위트는 정상 수집되게 한다.
+mcp_server = pytest.importorskip(
+    "meeting_minutes_app.wiki_core.mcp_server",
+    reason="fastmcp 미설치 — /mcp 서버 테스트 스킵",
+)
 
 
 @pytest.fixture

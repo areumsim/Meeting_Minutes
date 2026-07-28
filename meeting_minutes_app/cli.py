@@ -94,8 +94,8 @@ Advanced:
   meeting-minutes status|prep|process|schedule|merge [args]
   meeting-minutes obsidian|profiles|speaker-cache [args]
   meeting-minutes plan-watcher|auto-process [args]
-  meeting-minutes audio-watcher|vault-indexer|wiki-ask [args]
-  meeting-minutes legacy-watcher [args]           # 구형 파일 감시자
+  meeting-minutes audio-watcher|vault-indexer|wiki-ask [args]   # 폴더 감시는 audio-watcher 사용
+  meeting-minutes legacy-watcher [args]           # 구형(deprecated) — 신규는 audio-watcher
 
 (레거시: `python run_meeting.py ...` 형태로도 동일하게 동작합니다.)
 """
@@ -149,6 +149,8 @@ def dispatch(argv: list[str]) -> int:
     if cmd in ("audio-watcher", "audio_watcher"):
         return _py("audio_watcher.py", *rest)
     if cmd in ("legacy-watcher", "legacy_watcher"):
+        # deprecated: watcher.py(구형 감시자). 신규 코드/사용자는 audio-watcher(audio_watcher.py)를
+        # 쓴다. 하위 호환을 위해 남겨둠 — 통합 시 회귀 위험이 있어 코드는 그대로 보존.
         return _py("watcher.py", *rest)
     if cmd in ("vault-indexer", "vault_indexer"):
         return _py("vault_indexer.py", *rest)

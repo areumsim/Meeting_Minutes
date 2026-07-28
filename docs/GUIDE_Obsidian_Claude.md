@@ -99,6 +99,8 @@ meeting-minutes mcp-token --name 홍길동
 
 **2) 서버 노출**: `python run_meeting.py web` 실행 시(또는 패키징된 `MeetingMinutes.exe` 실행 시에도) `/mcp`가 함께 서빙됩니다. 팀 외부에서 접근하려면 Cloudflare Tunnel 등으로 `/mcp`만(다른 API는 제외) 외부에 노출하는 걸 권장합니다.
 
+> `/mcp` 서빙은 **exe 대체 빌드**에서만 지원됩니다(`fastmcp` 포함). 기본 포터블 배포판(`MeetingMinutes.bat`)은 UI/API는 동일하게 띄우지만 `fastmcp`를 제외하므로, `/mcp` 원격 커넥터가 필요하면 PyInstaller exe 빌드를 쓰세요.
+
 **3) Claude 쪽 등록**: Claude 데스크톱 앱 → Customize → Connectors → **Add custom connector** → `<서버 주소>/mcp` 입력 → Authorization에 `Bearer <발급받은 토큰>` 입력.
 
 **시킬 수 있는 일** (그냥 말로):

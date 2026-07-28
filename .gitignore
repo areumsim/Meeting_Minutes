@@ -45,6 +45,7 @@ __pycache__/
 *.pyo
 *.pyd
 .Python
+.pytest_cache/
 
 # ── 데이터베이스 ─────────────────────────────────
 *.db

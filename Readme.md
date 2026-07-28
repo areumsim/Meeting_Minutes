@@ -87,6 +87,17 @@ python run_meeting.py realtime-raw --language ko   # 한국어 회의
 python run_meeting.py realtime-raw --translate     # 영어 → 한국어 실시간 번역
 ```
 
+### 6. 테스트 실행 (개발자)
+
+```bash
+pip install -e ".[dev]"     # pytest 포함 개발 의존성
+python -m pytest            # 전체 회귀 테스트 (LLM/네트워크 없이 mock 기반)
+python -m pytest tests/test_wiki_core.py -q   # 특정 모듈만
+```
+
+테스트는 실제 API·볼트를 건드리지 않도록 mock되어 있어 키 없이도 실행됩니다. 원격 MCP(`/mcp`)용
+`fastmcp`가 설치돼 있지 않으면 `tests/test_mcp_server.py`만 자동 skip되고 나머지는 정상 수집됩니다.
+
 ---
 
 ## 웹 UI (run_meeting.bat)
@@ -95,7 +106,7 @@ CLI와 동일한 기능을 브라우저에서 사용할 수 있는 웹 인터페
 
 ### 시작
 
-`run_meeting.bat`(더블클릭)은 **통합 런처 터미널 메뉴**를 엽니다 — 웹은 그 메뉴에서 선택하거나, 아래처럼 직접 실행합니다. (비개발자 배포는 웹이 바로 열리는 **EXE 패키지**를 쓰세요 → `docs/USER_GUIDE.md`)
+`run_meeting.bat`(더블클릭)은 **통합 런처 터미널 메뉴**를 엽니다 — 웹은 그 메뉴에서 선택하거나, 아래처럼 직접 실행합니다. (비개발자 배포는 웹이 바로 열리는 **포터블 배포판**(`MeetingMinutesPortable.zip` → 압축 해제 후 `MeetingMinutes.bat`)을 쓰세요 → `docs/USER_GUIDE.md`)
 
 ```bash
 # 통합 런처 메뉴 (Windows, 더블클릭) — 메뉴에서 '웹 UI' 선택
@@ -107,7 +118,7 @@ python run_meeting.py web --dev              # 개발 모드 (Vite + FastAPI)
 python run_meeting.py web --port 9000        # 포트 변경
 ```
 
-> EXE 패키지는 8501이 사용 중이면 자동으로 다른 빈 포트를 선택하므로, 주소가 8501이 아닐 수 있습니다(브라우저는 자동으로 열립니다).
+> 포터블 배포판(`MeetingMinutes.bat`)은 8501이 사용 중이면 자동으로 다른 빈 포트를 선택하므로, 주소가 8501이 아닐 수 있습니다(브라우저는 자동으로 열립니다).
 
 > 최초 실행 시 `fastapi`, `uvicorn`, `python-multipart` 및 프론트엔드 의존성이 자동 설치됩니다.
 
@@ -178,7 +189,7 @@ Browser mic → AudioWorkletProcessor
 **빌드는 macOS + Xcode에서만 가능**합니다. 앱은 두 가지 모드를 지원하며 [설정]에서 전환합니다:
 
 - **단독 모드**: 앱에 OpenAI API 키를 넣고 OpenAI에 직접 연결. 데이터는 기기 내 IndexedDB에만 저장(프라이버시). 파일 업로드 전사·텍스트→회의록·요약이 견고.
-- **PC 연결 모드(권장)**: 같은 WiFi의 PC에서 `MeetingMinutes.exe`를 켜고 앱 [설정] → "PC 서버 연결"에 그 주소를 입력하면, exe와 **동일한 고품질 파이프라인**(2단계 보정·위키·그래프)을 아이폰에서 그대로 사용. PC에서 `server.lan_access`를 켜야 합니다(아래 설정 참고).
+- **PC 연결 모드(권장)**: 같은 WiFi의 PC에서 포터블 배포판(`MeetingMinutes.bat`, MCP 대체 빌드에선 `MeetingMinutes.exe`)을 켜고 앱 [설정] → "PC 서버 연결"에 그 주소를 입력하면, PC 서버와 **동일한 고품질 파이프라인**(2단계 보정·위키·그래프)을 아이폰에서 그대로 사용. 두 빌드 모두 같은 FastAPI 서버(`/api/*`, `/ws/realtime`)를 띄웁니다. PC에서 `server.lan_access`를 켜야 합니다(아래 설정 참고).
 
 기타: 대용량 파일 자동 청크 분할, 백그라운드 녹음(오디오 세션 유지), 네이티브 공유 시트.
 
@@ -565,7 +576,7 @@ cp   config.example.json config.json   # Mac/Linux
 | 설정 영역 | 쓰는 곳 |
 | --- | --- |
 | `api`, `models`, `ssl` | STT, 번역, 회의록/요약 생성, SSL 검증 |
-| `server` | `server.lan_access`=true 면 exe가 0.0.0.0에 바인딩해 같은 WiFi의 iOS/태블릿 앱이 접속(PC 연결 모드). 기본 false(localhost 전용) |
+| `server` | `server.lan_access`=true 면 PC 서버(`MeetingMinutes.bat`/exe)가 0.0.0.0에 바인딩해 같은 WiFi의 iOS/태블릿 앱이 접속(PC 연결 모드). 기본 false(localhost 전용) |
 | `realtime` | `realtime_transcription.py`, `run_realtime.py`, 웹 Recorder |
 | `email`, `notify` | 배치/실시간/자동 처리 완료 알림. `notify.on_finish`가 있으면 기본 알림으로 사용 |
 | `obsidian` | Local REST API 발행, 계획 노트 매칭/병합, Vault 폴더 경로 |

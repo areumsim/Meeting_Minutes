@@ -23,6 +23,10 @@ dependencies = [
     "uvicorn[standard]~=0.29",
     "python-multipart~=0.0.9",
     "pydantic~=2.0",
+    # fastmcp 는 원격 MCP 서버(/mcp) 전용이다. 포터블 배포본(build_portable.ps1 /
+    # requirements-web.txt)은 임베디드 파이썬의 pywin32 재배치 문제로 fastmcp 를 의도적으로
+    # 제외하며, 이 경우 /mcp 만 비활성화되고 나머지 기능은 정상 동작한다. 개발환경(pip install
+    # -e .)에서는 설치돼 tests/test_mcp_server.py 도 수집된다. (미설치 시 해당 테스트만 스킵)
     "fastmcp~=3.4",
 ]
 

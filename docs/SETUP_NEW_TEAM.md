@@ -11,18 +11,20 @@
 
 | 채널 | 대상 | 필요 사항 |
 |---|---|---|
-| **`.exe` 배포판 (권장, 비개발자용)** | 팀 내 실제 사용자 | Python 설치 불필요. 사내 파일 공유/릴리스 페이지에서 `MeetingMinutes` 폴더를 통째로 받음 |
+| **포터블 배포판 (권장, 비개발자용)** | 팀 내 실제 사용자 | Python 설치 불필요(임베디드 파이썬 동봉). 사내 파일 공유/릴리스 페이지에서 `MeetingMinutesPortable.zip`을 받아 풀고 `MeetingMinutes.bat` 실행 |
 | **`pip install -e .` (개발/셋업 담당자용)** | 팀 IT·파워유저가 처음 설치를 세팅할 때 | Python 3.10+, git |
 
-두 채널 모두 아래 "2. Obsidian 연동 준비"와 "3. 설정"은 동일합니다. `.exe`를 쓰는 팀이라도
-최초 설치는 보통 IT/파워유저 한 명이 `pip install -e .` 경로로 확인해보고, 실제 배포는 `.exe`로
+> MCP(`/mcp`) 원격 서버가 꼭 필요한 팀만 대체 경로로 PyInstaller `.exe` 빌드를 씁니다(아래 "7. 유지보수자용 — 재빌드" 참고). 포터블 배포판에는 `fastmcp`가 포함되지 않습니다.
+
+두 채널 모두 아래 "2. Obsidian 연동 준비"와 "3. 설정"은 동일합니다. 포터블 배포판을 쓰는 팀이라도
+최초 설치는 보통 IT/파워유저 한 명이 `pip install -e .` 경로로 확인해보고, 실제 배포는 포터블 zip으로
 하는 경우가 많습니다.
 
 ---
 
 ## 1. 사전 준비
 
-- **Python 3.10 이상** (`.exe` 채널만 쓸 경우 불필요)
+- **Python 3.10 이상** (포터블 배포판만 쓸 경우 불필요 — 임베디드 파이썬이 동봉됩니다)
 - **ffmpeg**: <https://www.gyan.dev/ffmpeg/builds/> 에서 다운로드 후 PATH에 추가 (Windows),
   또는 `brew install ffmpeg`(Mac) / `apt install ffmpeg`(Linux)
 - **Obsidian** (Wiki/그래프 기능을 쓰려면 필요 — 없어도 회의록 생성 자체는 동작합니다. 회의록은
@@ -46,12 +48,13 @@ Wiki 지식 순환(Registry, Wiki Context/Proposal)과 이번에 추가된 그�
 
 ## 3. 설치
 
-### 3-A. `.exe` 채널 (비개발자용)
+### 3-A. 포터블 배포판 (비개발자용)
 
-1. 배포된 `MeetingMinutes/` 폴더 전체를 받습니다.
-2. `config.example.json`을 같은 폴더에 `config.json`으로 복사하거나, `MeetingMinutes.exe`를
-   한 번 실행한 뒤 콘솔 안내에 따라 설정합니다.
-3. `MeetingMinutes.exe`를 실행하면 브라우저에 웹 UI가 열립니다.
+1. 배포된 `MeetingMinutesPortable.zip`을 원하는 폴더에 전부 풉니다.
+2. 처음 `MeetingMinutes.bat`를 실행하면 브라우저에 설정 마법사가 뜹니다. 수동으로 하려면
+   `config.example.json`을 같은 폴더에 `config.json`으로 복사해 둡니다.
+3. `MeetingMinutes.bat`를 실행하면 브라우저에 웹 UI가 열립니다(진단은 `Troubleshoot.bat`).
+   비개발자용 상세 설치 안내는 배포본 동봉 `사용법.txt`([`scripts/build/사용법_포터블.txt`](../scripts/build/사용법_포터블.txt))를 참고하세요.
 
 ### 3-B. `pip install -e .` 채널 (개발/셋업 담당자용)
 
@@ -79,7 +82,7 @@ batch <파일>`로 CLI 배치 처리를 시작할 수 있습니다.
 - 팀 A가 `C:\Teams\A\Meeting_Minutes`에, 팀 B가 `C:\Teams\B\Meeting_Minutes`에 각각
   `git clone` + `pip install -e .` + `meeting-minutes init`을 하면, 두 팀의 `config.json`/`data/`는
   완전히 독립적입니다 — 코드를 고칠 필요가 전혀 없습니다.
-- `.exe` 채널도 마찬가지로 배포 폴더별로 격리됩니다.
+- 포터블 배포판도 마찬가지로 배포 폴더별로 격리됩니다.
 
 ## 5. 첫 실행 검증 체크리스트
 
@@ -96,11 +99,24 @@ batch <파일>`로 CLI 배치 처리를 시작할 수 있습니다.
 - **git 채널**: `git pull` (또는 새 태그로 `git checkout`) 후 의존성이 바뀐 경우에만
   `pip install -e .`를 다시 실행하면 됩니다. `config.json`/`data/`는 gitignore 대상이라 diff에
   걸리지 않으므로 안전합니다.
-- **`.exe` 채널**: 새 배포 폴더를 받은 뒤 기존 폴더의 `config.json`과 `data/`를 새 폴더로
-  복사해오세요 (exe 폴더를 통째로 교체하면 두 파일/폴더가 함께 사라지므로, 교체 전 반드시
-  별도 위치에 백업했다가 복원하세요).
+- **포터블 배포판**: 새 `MeetingMinutesPortable.zip`을 새 폴더에 푼 뒤 기존 폴더의 `config.json`과
+  `data/`(또는 `MeetingMinutesData/`)를 새 폴더로 복사해오세요 (폴더를 통째로 교체하면 이 파일/폴더가
+  함께 사라지므로, 교체 전 반드시 별도 위치에 백업했다가 복원하세요).
 
-## 7. 유지보수자용 — `.exe` 재빌드
+## 7. 유지보수자용 — 재빌드
+
+### 7-A. 포터블 배포판 (기본 배포 경로)
+
+```powershell
+scripts\build\build_portable.ps1
+```
+
+(더블클릭용 래퍼는 `scripts\build\build_portable.bat`.) 임베디드 파이썬 런타임에
+`meeting_minutes_app`·`web/backend`·빌드된 `web/frontend/dist`를 함께 담아 `MeetingMinutes.bat`
+(pythonw 런처)·`Troubleshoot.bat`·`사용법.txt`를 포함한 배포본을 만듭니다. 결과물은
+`dist/MeetingMinutesPortable.zip`이며, 사용자는 이 zip을 풀어 `MeetingMinutes.bat`를 실행합니다.
+
+### 7-B. PyInstaller `.exe` (MCP(`/mcp`) 필요 시 대체 경로)
 
 ```bash
 pip install -e .
@@ -111,3 +127,7 @@ scripts\build\build_exe.bat
 `scripts/build/build_exe.spec`이 `meeting_minutes_app`(common/wiki_core/meeting_pipeline
 서브패키지 포함)과 `web/backend`, 빌드된 `web/frontend/dist`를 함께 패키징합니다. 결과물은
 `dist/MeetingMinutes/`에 생성됩니다.
+
+> 이 exe 경로는 **원격 MCP 서버(`/mcp`, fastmcp)가 필요한 경우에만** 씁니다. 포터블 배포판은
+> 임베디드 파이썬/`pywin32` 호환 문제로 `fastmcp`를 의도적으로 제외하므로, `/mcp`를 서빙해야 하면
+> 이 PyInstaller 빌드를 대체로 사용하세요. 일반 배포는 7-A(포터블)를 기본으로 합니다.

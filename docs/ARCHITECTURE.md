@@ -22,9 +22,10 @@
 > `web/frontend/`는 Capacitor 기반 모바일 앱(iOS, SPM)이며 두 가지 모드로 동작한다.  
 > - **단독 모드**: 앱이 `FastAPI`를 거치지 않고 **OpenAI Realtime API에 직접 연결**한다  
 >   (`web/frontend/src/lib/api.ts` — `wss://api.openai.com/v1/realtime`). 키는 기기에만 저장.  
-> - **PC 연결 모드**: 앱 [설정]에서 PC(exe) 주소를 지정하면 `api.ts`의 `apiFetch`/WS가  
+> - **PC 연결 모드**: 앱 [설정]에서 PC 서버 주소를 지정하면 `api.ts`의 `apiFetch`/WS가  
 >   그 백엔드(`/api/*`, `/ws/realtime`)로 향해 **서버 파이프라인(2-pass·위키·그래프)**을 그대로 쓴다.  
->   exe는 `server.lan_access=true`일 때만 0.0.0.0에 바인딩한다(`run_ui_exe.py`).  
+>   PC 서버는 `server.lan_access=true`일 때만 0.0.0.0에 바인딩한다(`run_ui_exe.py`).  
+>   기본 배포는 포터블 bat 빌드(`MeetingMinutes.bat`)가 이 서버를 띄우며, exe는 MCP(`/mcp`) 서빙용 대체 빌드다.  
 > 장기 보안 목표는 프론트엔드 장기 API Key 저장을 제거하고, FastAPI가 ephemeral credential을 발급한 뒤 WebRTC로 직접 연결하는 구조다.
 
 ---
@@ -1043,9 +1044,12 @@ pyproject.toml을 고칠 필요가 없다.
 `meeting-minutes init`(`meeting_minutes_app/cli_init.py`)이 새 팀의 최초 설정(Obsidian/API 키
 입력 + 연결 확인)을 처리한다.
 
-PyInstaller `.exe` 배포(`scripts/build/build_exe.spec`)는 비개발자용 1차 배포 채널로 유지된다.
-새 팀 설치 절차 전체(배포 채널 선택, Obsidian 플러그인 설정, 격리 확인, 첫 실행 체크리스트,
-업데이트 방법)는 [`docs/SETUP_NEW_TEAM.md`](SETUP_NEW_TEAM.md)에 있다.
+비개발자용 **기본 배포 채널은 포터블 배포판**(`scripts/build/build_portable.ps1` →
+`dist/MeetingMinutesPortable.zip`, 임베디드 파이썬 + `MeetingMinutes.bat` 런처)이다.
+PyInstaller `.exe` 배포(`scripts/build/build_exe.spec`)는 원격 MCP 서버(`/mcp`, fastmcp)가
+필요한 경우의 **대체 경로**로만 유지된다 — 포터블 빌드는 임베디드 파이썬/`pywin32` 호환 문제로
+`fastmcp`를 제외한다. 새 팀 설치 절차 전체(배포 채널 선택, Obsidian 플러그인 설정, 격리 확인,
+첫 실행 체크리스트, 업데이트 방법)는 [`docs/SETUP_NEW_TEAM.md`](SETUP_NEW_TEAM.md)에 있다.
 
 ---
 

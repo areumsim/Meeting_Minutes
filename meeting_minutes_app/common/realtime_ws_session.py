@@ -42,6 +42,28 @@ def normalize_ws_model(stt_model: str) -> Tuple[str, Optional[str]]:
     return base, None
 
 
+def resolve_session_language(language: Optional[str],
+                             cfg_get: Optional[Callable[..., Any]] = None,
+                             fallback: str = "ko") -> str:
+    """실시간 세션 STT 언어를 하나로 확정한다 (CLI·웹 공유).
+
+    "auto"/빈값이면 STT 호출에서 language 파라미터가 생략돼 짧은 조각마다 언어가
+    재판정된다. 그 결과 무음·잡음 구간이 엉뚱한 언어(러시아어 등)로 환각되는 문제가
+    있었으므로, 세션 전체가 같은 언어 값을 쓰도록 고정한다(사내 기본 한국어).
+    """
+    lang = (language or "").strip().lower()
+    if lang and lang != "auto":
+        return lang
+    if cfg_get is not None:
+        try:
+            cand = str(cfg_get("realtime.language", fallback) or "").strip().lower()
+        except Exception:
+            cand = ""
+        if cand and cand != "auto":
+            return cand
+    return fallback
+
+
 def build_ws_session_config(
     stt_model: str,
     language: Optional[str],

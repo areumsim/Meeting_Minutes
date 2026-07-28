@@ -59,6 +59,7 @@ class SessionInputs:
     source: str = "batch"                   # batch|realtime_cli|recover|web_realtime
     attendees: List[str] = field(default_factory=list)
     session_id: str = ""                    # graph_sync용 (웹 세션 ID 등)
+    language: str = ""                       # ko|en (빈값이면 전사 내용으로 추정)
 
 
 @dataclass
@@ -145,7 +146,22 @@ def run_post_session(
     if llm is None:
         raise ValueError("FinalizeOptions.llm 은 필수입니다 (호출자가 LLMClient 주입)")
 
+    # STT 환각·반복 정화 — 모든 진입점(배치/CLI/웹/워처)이 이 함수로 수렴하므로
+    # 여기서 한 번 정화하면 교정·회의록·요약·스크립트가 전부 정화본을 쓴다.
+    # 보수적 정책: 되풀이만 축약·제거하고 환각 의심은 [불명] 표시만 남긴다.
     segments = inputs.segments or []
+    if _c("realtime.hallucination_filter", True):
+        try:
+            from meeting_minutes_app.common.text_filters import (
+                sanitize_stats_line, sanitize_transcript,
+            )
+            segments, _san_stats = sanitize_transcript(segments, inputs.language)
+            _line = sanitize_stats_line(_san_stats)
+            if _line:
+                print(f"  [finalize] 전사 정화: {_line}")
+        except Exception as e:  # 정화 실패가 회의록 생성을 막지 않는다
+            print(f"  [finalize] 전사 정화 건너뜀: {e}")
+            segments = inputs.segments or []
     title = inputs.title or inputs.topic or "무제 회의"
     memo: Optional[str] = inputs.base_memo
 

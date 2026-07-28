@@ -115,6 +115,45 @@ def run(calls_fixture, tmp_path, *, doc_type="meeting", **opt_kw):
     return res, ev
 
 
+class TestTranscriptSanitize:
+    """모든 진입점이 거치는 정화 단계 — 회의록 입력에 환각·반복이 들어가지 않는다."""
+
+    DIRTY = [
+        {"start": 0.0, "end": 3.0, "text": "Na velolodu.", "speaker": ""},
+        {"start": 3.0, "end": 6.0, "text": "Na velolodu.", "speaker": ""},
+        {"start": 6.0, "end": 9.0, "text": "Na velolodu.", "speaker": ""},
+        {"start": 9.0, "end": 12.0, "text": "где-нибудь 뭐가 있냐.", "speaker": ""},
+        {"start": 12.0, "end": 15.0, "text": "금주 안에 오픈하라고 하셔서 오픈은 해요.", "speaker": ""},
+        {"start": 15.0, "end": 18.0, "text": "금주 안에 오픈하라고 하셔서 오픈은 해요.", "speaker": ""},
+        {"start": 18.0, "end": 21.0, "text": "가이드 문서를 하나 드릴 거예요.", "speaker": ""},
+    ]
+
+    def _segments_seen_by_refine(self, patched, tmp_path, **kw):
+        ev = RecordingEvents()
+        inputs = fz.SessionInputs(
+            segments=list(self.DIRTY), title="테스트 회의", topic="위키 오픈",
+            doc_type="meeting", session_dt="2026년 07월 28일 10:00",
+            source="test", session_id="sess-2", language="ko", **kw,
+        )
+        fz.run_post_session(inputs, fz.FinalizeOptions(
+            llm=object(), artifacts_dir=tmp_path), ev)
+        args, _ = patched["refine"][0]
+        return [s["text"] for s in args[0]]
+
+    def test_repeats_collapsed_and_hallucination_marked(self, patched, tmp_path):
+        texts = self._segments_seen_by_refine(patched, tmp_path)
+        assert texts.count("Na velolodu.") == 0            # 표시가 붙어 원문 그대로는 없음
+        assert sum(1 for t in texts if "Na velolodu" in t) == 1
+        assert any(t.startswith("[불명]") and "где-нибудь" in t for t in texts)
+        assert texts.count("금주 안에 오픈하라고 하셔서 오픈은 해요.") == 1
+        assert "가이드 문서를 하나 드릴 거예요." in texts   # 정상 발화는 보존
+
+    def test_original_input_not_mutated(self, patched, tmp_path):
+        before = [dict(s) for s in self.DIRTY]
+        self._segments_seen_by_refine(patched, tmp_path)
+        assert self.DIRTY == before   # 호출자의 세그먼트(DB/화면 원본)는 건드리지 않는다
+
+
 class TestFullMeetingRun:
     def test_all_stages_and_documents(self, patched, tmp_path):
         res, ev = run(patched, tmp_path, do_graph_sync=True)

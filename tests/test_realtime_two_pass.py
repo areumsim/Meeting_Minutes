@@ -205,9 +205,14 @@ def _loud_frame(seconds: float) -> bytes:
     return b"\x00\x10" * n
 
 
+def _silent_frame(seconds: float) -> bytes:
+    # 완전 무음 프레임 — RMS 0 이라 발화로 판정되지 않는다
+    return b"\x00\x00" * int(24000 * seconds)
+
+
 def _run_session(frames, cfg, fast_text="quick frag.", revise_text=None,
                  fail_first_stt=False, translate=False, language="en",
-                 create_side_effect=None):
+                 create_side_effect=None, topic="", speakers=""):
     """_run_http_fallback 을 가짜 WS/OpenAI 로 끝까지 실행하고 (session, ws) 반환."""
     ws = _FakeWS(frames)
     session = rt.BrowserRealtimeSession(ws, {})
@@ -237,7 +242,7 @@ def _run_session(frames, cfg, fast_text="quick frag.", revise_text=None,
 
     asyncio.run(session._run_http_fallback(
         client, language, translate, "gpt-4o-mini",
-        "meeting", "", "테스트", "", cfg,
+        "meeting", topic, "테스트", speakers, cfg,
     ))
     return session, ws, client
 
@@ -315,7 +320,11 @@ class TestTwoPassPipeline:
         assert translated, "보정 후 번역이 포함된 revise 재전송이 있어야 함"
 
     def test_fast_pass_prompt_echo_stripped(self):
-        """STT가 prompt(직전 문장)를 출력에 되풀이해도 화면에 중복되지 않는다."""
+        """STT가 prompt(직전 문장)를 출력에 되풀이해도 화면에 중복되지 않는다.
+
+        꼬리 문맥(prompt_context="tail")을 쓰는 구동작에서의 방어다 — 기본값
+        static 에서는 꼬리를 아예 넘기지 않아 이 에코가 생기지 않는다.
+        """
         def _create(**params):
             prompt = params.get("prompt") or ""
             if not prompt:
@@ -325,7 +334,8 @@ class TestTwoPassPipeline:
 
         frames = [{"bytes": _loud_frame(5.5)} for _ in range(2)]
         session, ws, _ = _run_session(
-            frames, _FakeCfg({"realtime.two_pass": False}),
+            frames, _FakeCfg({"realtime.two_pass": False,
+                              "realtime.prompt_context": "tail"}),
             create_side_effect=_create)
         texts = [m["text"] for m in ws.sent if m.get("type") == "segment"]
         assert texts[0] == "We are rendering at."
@@ -348,3 +358,109 @@ class TestTwoPassPipeline:
         # 보정 완료 구간의 PCM 은 폐기되고 기준 시각이 전진한다
         assert session._pcm_base_sec > 0.0
         assert len(session._pcm) < 33 * 48000
+
+
+# ━━━━━━━━ 통합: 환각 방어 (무음 스킵 / 언어 고정 / 반복 차단) ━━━━━━━━
+
+class TestHallucinationDefense:
+    """한국어 회의 전사에 외국어 조각·반복 문장이 섞이던 문제(2026-07-28)의 회귀 방어."""
+
+    def test_silent_chunks_are_not_transcribed(self):
+        # 무음만 30초 — STT 를 한 번도 호출하지 않아야 한다(무음 전사 = 환각의 원인)
+        frames = [{"bytes": _silent_frame(5.5)} for _ in range(6)]
+        session, ws, client = _run_session(frames, _FakeCfg(), fast_text="ghost text.")
+        assert client.audio.transcriptions.create.call_count == 0
+        assert not [m for m in ws.sent if m.get("type") == "segment"]
+        assert not session.segments
+
+    def test_silence_skip_can_be_disabled(self):
+        frames = [{"bytes": _silent_frame(5.5)} for _ in range(2)]
+        session, ws, client = _run_session(
+            frames, _FakeCfg({"realtime.drop_silent_chunks": False,
+                              "realtime.two_pass": False}),
+            fast_text="ghost text.")
+        assert client.audio.transcriptions.create.call_count > 0
+
+    def test_speech_after_silence_still_transcribed(self):
+        # 무음 → 발화 → 무음: 발화 구간은 정상 전사되고 타임스탬프가 어긋나지 않는다
+        frames = [{"bytes": _silent_frame(5.5)},
+                  {"bytes": _loud_frame(5.5)},
+                  {"bytes": _silent_frame(5.5)}]
+        session, ws, _ = _run_session(
+            frames, _FakeCfg({"realtime.two_pass": False}),
+            fast_text="실제 발화 내용입니다.")
+        segs = [m for m in ws.sent if m.get("type") == "segment"]
+        assert len(segs) == 1
+        assert segs[0]["start"] >= 5.0   # 앞 무음 구간만큼 타임라인이 전진
+
+    def test_language_auto_is_pinned_to_ko(self):
+        frames = [{"bytes": _loud_frame(5.5)}]
+        session, ws, client = _run_session(
+            frames, _FakeCfg({"realtime.two_pass": False,
+                              "realtime.language": "auto"}),
+            language="auto", fast_text="한국어 발화 내용입니다.")
+        langs = [c.kwargs.get("language")
+                 for c in client.audio.transcriptions.create.call_args_list]
+        assert langs and all(l == "ko" for l in langs), langs
+
+    def test_explicit_language_is_forwarded(self):
+        frames = [{"bytes": _loud_frame(5.5)}]
+        session, ws, client = _run_session(
+            frames, _FakeCfg({"realtime.two_pass": False}),
+            language="en", fast_text="english sentence here.")
+        langs = [c.kwargs.get("language")
+                 for c in client.audio.transcriptions.create.call_args_list]
+        assert all(l == "en" for l in langs)
+
+    def test_static_prompt_has_no_transcript_tail(self):
+        """기본(static) 모드는 전사 결과를 prompt 로 되먹이지 않는다 — 반복 루프 차단."""
+        frames = [{"bytes": _loud_frame(5.5)} for _ in range(3)]
+        prompts = []
+
+        def _create(**params):
+            prompts.append(params.get("prompt"))
+            return _FakeResponse({"text": "고유한 문장 하나입니다."})
+
+        _run_session(frames, _FakeCfg({"realtime.two_pass": False}),
+                     language="ko", topic="위키 오픈 준비", speakers="김책임",
+                     create_side_effect=_create)
+        assert prompts, "STT 가 호출되어야 함"
+        for p in prompts:
+            assert "고유한 문장" not in (p or ""), f"전사 결과가 prompt 로 되먹여짐: {p}"
+            assert "위키 오픈 준비" in (p or "")   # 주제·참석자 힌트는 전달
+
+    def test_duplicate_fast_fragments_not_emitted(self):
+        # 같은 조각이 청크마다 반복되면(모델 반복 루프) 화면·DB에 한 번만 남는다
+        frames = [{"bytes": _loud_frame(5.5)} for _ in range(4)]
+        session, ws, _ = _run_session(
+            frames, _FakeCfg({"realtime.two_pass": False}),
+            language="ko", fast_text="뭐가 있냐 뭐가 있냐 뭐가 있냐.")
+        segs = [m for m in ws.sent if m.get("type") == "segment"]
+        assert len(segs) == 1
+        # 조각 안의 되풀이도 축약된다
+        assert segs[0]["text"] == "뭐가 있냐."
+
+    def test_repetitive_revision_is_rejected(self):
+        """보정 결과가 같은 문장의 되풀이면 교체하지 않고 빠른 패스를 유지한다."""
+        loop = " ".join(["같은 문장이 계속 반복됩니다."] * 6)
+
+        def _create(**params):
+            if params.get("model") == "gpt-4o-transcribe":
+                return _FakeResponse({"text": loop})
+            return _FakeResponse({"text": "빠른 패스 조각입니다."})
+
+        frames = [{"bytes": _loud_frame(5.5)} for _ in range(6)]
+        session, ws, _ = _run_session(frames, _FakeCfg(), language="ko",
+                                      create_side_effect=_create)
+        assert not [m for m in ws.sent if m.get("type") == "revise"]
+        assert all("빠른 패스" in s["text"] for s in session.segments)
+
+    def test_foreign_script_is_marked_not_dropped(self):
+        frames = [{"bytes": _loud_frame(5.5)}]
+        session, ws, _ = _run_session(
+            frames, _FakeCfg({"realtime.two_pass": False}),
+            language="ko", fast_text="где-нибудь 뭐가 있냐.")
+        segs = [m for m in ws.sent if m.get("type") == "segment"]
+        assert len(segs) == 1
+        assert segs[0]["text"].startswith("[불명]")
+        assert "где-нибудь" in segs[0]["text"]   # 원문은 남긴다(보수적)

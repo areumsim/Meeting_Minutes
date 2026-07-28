@@ -357,6 +357,7 @@ class IngestionPipeline:
                 segments=segments, title=title, topic=topic, doc_type=doc_type,
                 session_dt=session_dt, base_memo=base_memo, source="ingest",
                 attendees=speakers,
+                language=str(mm._c("realtime.language", "") or ""),
             )
             options = fz.FinalizeOptions(
                 llm=self._llm, indexer=self._indexer, obs=self._obs,

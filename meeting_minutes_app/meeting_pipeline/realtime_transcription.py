@@ -82,8 +82,17 @@ def _c(key: str, default=None):
     return _cfg_mod.get(key, default) if _cfg_ok else default
 
 
-from meeting_minutes_app.common.text_filters import is_cjk_hallucination as _is_cjk_hallucination
-from meeting_minutes_app.common.realtime_ws_session import build_ws_session_config
+from meeting_minutes_app.common.text_filters import (
+    collapse_repetitions as _collapse_repetitions,
+    is_cjk_hallucination as _is_cjk_hallucination,
+    is_near_duplicate as _is_near_duplicate,
+    is_script_mismatch as _is_script_mismatch,
+    mark_suspect as _mark_suspect,
+)
+from meeting_minutes_app.common.realtime_ws_session import (
+    build_ws_session_config,
+    resolve_session_language as _resolve_session_language,
+)
 
 
 def _make_cli_finalize_events(output_dir: str, stem: str, labels: Dict[str, str],
@@ -645,6 +654,7 @@ def cmd_recover(log_path: str, output_dir: str, llm_preferred: str,
             session_dt=session_dt,
             base_memo=memo,
             source="recover",
+            language=language or "",
         ),
         fz.FinalizeOptions(
             llm=llm,
@@ -951,7 +961,9 @@ class RealtimeTranscriber:
     ):
         self.client          = openai_client
         self.stt_model       = stt_model
-        self.language        = language
+        # 언어 고정 — auto 면 청크마다 언어가 재판정돼 무음·잡음 구간이 엉뚱한
+        # 언어로 환각된다(공유 정책: realtime_ws_session.resolve_session_language).
+        self.language        = _resolve_session_language(language, _c)
         self.translate       = translate and (language == "en")  # 영어일 때만 실시간 번역
         self.translate_model = translate_model
         self.logger          = logger
@@ -1014,6 +1026,24 @@ class RealtimeTranscriber:
 
         raise last_err  # type: ignore
 
+    def _clean_text(self, text: str) -> str:
+        """STT 환각·반복 방어 (웹 경로와 동일 정책).
+
+        조각 안의 되풀이를 축약하고, 직전 세그먼트와 같은 말이면 버리고(모델이
+        문맥을 되풀이한 경우), 회의 언어에 없는 이질 문자는 [불명] 표시만 붙인다.
+        """
+        if not _c("realtime.hallucination_filter", True):
+            return text
+        t = _collapse_repetitions(text)
+        if not t:
+            return ""
+        prev = self.segments[-1].get("text", "") if self.segments else ""
+        if prev and _is_near_duplicate(t, prev):
+            return ""
+        if _is_script_mismatch(t, self.language or "ko"):
+            t = _mark_suspect(t)
+        return t
+
     def process(self, float_audio: np.ndarray) -> Optional[str]:
         wav = AudioRecorder.to_wav_bytes(float_audio)
         try:
@@ -1033,6 +1063,9 @@ class RealtimeTranscriber:
             for ds in result:
                 txt = ds.get("text", "").strip()
                 if not txt or _is_cjk_hallucination(txt):
+                    continue
+                txt = self._clean_text(txt)
+                if not txt:
                     continue
                 spk = ds.get("speaker", "")
                 mm, ss = divmod(int(elapsed), 60)
@@ -1071,6 +1104,9 @@ class RealtimeTranscriber:
         # 일반 모델: result가 str
         text = result if isinstance(result, str) else ""
         if not text or _is_cjk_hallucination(text):
+            return None
+        text = self._clean_text(text)
+        if not text:
             return None
 
         mm, ss  = divmod(int(elapsed), 60)
@@ -1978,6 +2014,7 @@ class RealtimeSession:
                 session_dt=session_dt,
                 base_memo=self.memo,
                 source="realtime",
+                language=self.language or "",
             ),
             fz.FinalizeOptions(
                 llm=self.llm,
@@ -2085,7 +2122,7 @@ def main():
     )
     parser.add_argument("--type", default=_c("realtime.type", "meeting"),
                         choices=["meeting", "seminar", "lecture"])
-    parser.add_argument("--language", default=_c("realtime.language", "en"),
+    parser.add_argument("--language", default=_c("realtime.language", "ko"),
                         choices=["en", "ko"],
                         help="입력 언어 (en=영어, ko=한국어)")
     parser.add_argument("--model", default=DEFAULT_STT_MODEL, choices=STT_MODELS)

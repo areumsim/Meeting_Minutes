@@ -20,7 +20,11 @@ from typing import Any, Dict, List, Optional, Tuple
 from meeting_minutes_app.common.llm_client import (
     LLMClient, OPENAI_API_KEY, get_api_key, make_openai_client,
 )
-from meeting_minutes_app.common.text_filters import is_cjk_hallucination as _is_cjk_hallucination
+from meeting_minutes_app.common.text_filters import (
+    is_cjk_hallucination as _is_cjk_hallucination,
+    sanitize_stats_line as _sanitize_stats_line,
+    sanitize_transcript as _sanitize_transcript,
+)
 from meeting_minutes_app.meeting_pipeline import meeting_minutes as _mm
 from meeting_minutes_app.meeting_pipeline.meeting_minutes import (
     DEFAULT_STT_MODEL, FALLBACK_STT_MODEL, MAX_FILE_SIZE_MB, MAX_CHUNK_DURATION_SEC,
@@ -442,6 +446,17 @@ def run_stt(
     filtered = [s for s in all_segments if not _is_cjk_hallucination(s.get("text", ""))]
     if len(filtered) < len(all_segments):
         warn(f"  CJK 환각 필터: {len(all_segments) - len(filtered)}개 세그먼트 제거")
+    # 환각·반복 정화 — 되풀이 축약/제거 + 이질 문자(키릴 등) [불명] 표시.
+    # (회의록 생성 경로는 finalize에서 한 번 더 정화하지만, 여기서 정화하면
+    #  transcribe-only/텍스트 반환 경로도 같은 이득을 본다. 멱등이라 중복 무해)
+    if _mm._c("realtime.hallucination_filter", True):
+        try:
+            filtered, _stats = _sanitize_transcript(filtered, language or "")
+            _line = _sanitize_stats_line(_stats)
+            if _line:
+                warn(f"  전사 정화: {_line}")
+        except Exception as e:
+            warn(f"  전사 정화 건너뜀: {e}")
     ok(f"STT 완료: {len(filtered)}개 세그먼트 ({total_time:.1f}초)")
     return filtered
 

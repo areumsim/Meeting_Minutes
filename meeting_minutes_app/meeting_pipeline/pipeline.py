@@ -293,6 +293,7 @@ def process_single(
             base_memo=full_memo or None,
             source="batch",
             attendees=_attendee_candidates(segments_for_doc, _plan_match),
+            language=getattr(args, "language", "") or "",
         ),
         fz.FinalizeOptions(
             llm=llm,

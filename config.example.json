@@ -78,12 +78,13 @@
   },
   "realtime": {
     "_comment": "실시간 녹취(realtime_transcription.py) 기본값",
+    "_language_comment": "회의 언어를 직접 지정한다. auto 는 짧은 조각마다 언어를 재판정해 무음·잡음 구간이 엉뚱한 언어(러시아어 등)로 전사되는 원인이 되므로 비권장.",
     "_language_options": [
-      "en",
       "ko",
+      "en",
       "auto"
     ],
-    "language": "en",
+    "language": "ko",
     "translate": false,
     "chunk_duration": 3.0,
     "_two_pass_comment": "2단계 전사 보정 — 실시간 조각을 revise_window_sec 마다 재전사해 문장으로 교체(STT 비용 ~2배, 품질 대폭 개선)",
@@ -94,6 +95,17 @@
     "fast_max_chunk_sec": 5.0,
     "_silence_rms_comment": "HTTP 모드 무음 판정 int16 RMS 임계값. 마이크가 작게 들어오면(발화 중에도 무음 판정돼 1.5초 조각으로 잘림) 100~200으로 낮추고, 시끄러운 회의실이면(무음이 안 잡혀 항상 5초 컷) 500~800으로 올리세요.",
     "silence_rms": 300,
+    "_drop_silent_chunks_comment": "발화 에너지가 없는 구간(silence_rms 미만)은 STT에 보내지 않는다. 무음을 전사시키면 모델이 없는 말을 만들어내(외국어 조각·같은 문장 반복) 전사가 오염된다.",
+    "drop_silent_chunks": true,
+    "_prompt_context_comment": "청크 STT에 넘기는 문맥. static=주제·참석자만(권장), tail=직전 전사 문장까지(모델이 그 문장을 되풀이하면 반복 루프가 생김), off=문맥 없음",
+    "_prompt_context_options": [
+      "static",
+      "tail",
+      "off"
+    ],
+    "prompt_context": "static",
+    "_hallucination_filter_comment": "전사 정화 — 되풀이 문장 축약·제거 + 회의 언어에 없는 이질 문자(키릴 등)를 [불명]으로 표시(삭제 아님)",
+    "hallucination_filter": true,
     "_stt_concurrency_comment": "HTTP 모드 빠른 패스 STT 동시 호출 수(1~4). STT 응답이 느린 환경(프록시 등)에서 지연 누적을 막는다. 화면 표시 순서는 항상 보장됨.",
     "stt_concurrency": 2,
     "_type_options": [

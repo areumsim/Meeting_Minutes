@@ -143,7 +143,7 @@ SCHEMA: List[Dict[str, Any]] = [
         "desc": "실시간 녹음/전사 기본값입니다.",
         "fields": [
             {"section": "realtime", "key": "mode", "label": "전사 방식", "type": "select", "default": "http", "desc": "http=청크 전사(안정·저비용, 표시까지 2~6초). auto/ws=OpenAI GA 실시간 WebSocket(표시 ~1초, 비용 높음) — 표시가 느리다고 느끼면 auto를 권장(실패 시 http로 자동 폴백).", "options": [{"value": "http", "label": "http — 청크(안정·저비용)"}, {"value": "auto", "label": "auto — WS 실시간 우선·실패 시 http 폴백(저지연)"}, {"value": "ws", "label": "ws — WebSocket 전용(~1초 지연)"}]},
-            {"section": "realtime", "key": "language", "label": "기본 언어", "type": "select", "default": "en", "options": ["en", "ko", "auto"]},
+            {"section": "realtime", "key": "language", "label": "기본 언어", "type": "select", "default": "ko", "options": [{"value": "ko", "label": "ko — 한국어(권장)"}, {"value": "en", "label": "en — 영어"}, {"value": "auto", "label": "auto — 자동판정(비권장)"}], "desc": "auto는 짧은 조각마다 언어를 다시 판정해 무음·잡음 구간이 엉뚱한 언어(러시아어 등)로 잘못 전사될 수 있습니다. 회의 언어를 직접 지정하세요."},
             {"section": "realtime", "key": "type", "label": "기본 문서 유형", "type": "select", "default": "meeting", "options": ["meeting", "seminar", "lecture"]},
             {"section": "realtime", "key": "translate", "label": "번역 사용", "type": "bool", "default": False},
             {"section": "realtime", "key": "audio_backup", "label": "오디오 백업(PCM)", "type": "bool", "default": True, "desc": "크래시 복구용. 약 115MB/시간."},
@@ -154,6 +154,9 @@ SCHEMA: List[Dict[str, Any]] = [
             {"section": "realtime", "key": "fast_max_chunk_sec", "label": "실시간 청크 최대 길이(초)", "type": "number", "default": 5.0, "desc": "무음이 없어도 이 길이에서 잘라 표시합니다. 짧을수록 빨리 뜨고 조각납니다(조각은 보정 패스가 정리)."},
             {"section": "realtime", "key": "silence_rms", "label": "무음 판정 임계값(RMS)", "type": "number", "default": 300, "desc": "HTTP 모드 발화 경계 감지. 마이크 입력이 작아 전사가 잘게 끊기면 100~200으로 낮추고, 시끄러운 환경에서 항상 최대 길이로 잘리면 500~800으로 올리세요."},
             {"section": "realtime", "key": "stt_concurrency", "label": "실시간 STT 동시 호출 수", "type": "number", "default": 2, "desc": "HTTP 모드 빠른 패스 병렬 전사(1~4). STT 응답이 느린 네트워크에서 표시 지연이 누적되는 것을 막습니다. 표시 순서는 항상 유지됩니다."},
+            {"section": "realtime", "key": "drop_silent_chunks", "label": "무음 구간 전사 건너뛰기", "type": "bool", "default": True, "desc": "발화 에너지가 없는 구간(정적·잡음)은 STT에 보내지 않습니다. 무음을 전사시키면 모델이 없는 말을 만들어내(외국어 조각·같은 문장 반복) 전사가 오염됩니다. 조용히 말해도 전사가 안 되면 위 '무음 판정 임계값'을 낮추세요."},
+            {"section": "realtime", "key": "prompt_context", "label": "전사 문맥 전달 방식", "type": "select", "default": "static", "options": [{"value": "static", "label": "static — 주제·참석자만 전달(권장)"}, {"value": "tail", "label": "tail — 직전 전사 문장까지 전달"}, {"value": "off", "label": "off — 문맥 전달 안 함"}], "desc": "tail은 경계 단어 인식에 유리하지만, 모델이 직전 문장을 되풀이하면 그 결과가 다시 문맥이 되어 같은 문장이 계속 반복되는 문제가 있습니다."},
+            {"section": "realtime", "key": "hallucination_filter", "label": "환각·반복 자동 정화", "type": "bool", "default": True, "desc": "같은 문장의 되풀이를 축약하고, 회의 언어에 맞지 않는 이질 문자(키릴 등)는 [불명]으로 표시합니다. 내용을 지우지는 않습니다."},
             {"section": "realtime", "key": "ws_vad_type", "label": "WS VAD 방식", "type": "select", "default": "server_vad", "options": ["server_vad", "semantic_vad"]},
             {"section": "realtime", "key": "ws_vad_eagerness", "label": "WS 발화종료 민감도", "type": "select", "default": "medium", "options": ["low", "medium", "high", "auto"]},
             {"section": "realtime", "key": "ws_noise_reduction", "label": "WS 노이즈 리덕션", "type": "select", "default": "near_field", "options": ["near_field", "far_field"]},

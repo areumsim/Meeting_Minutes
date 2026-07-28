@@ -190,6 +190,7 @@ def transcribe_and_minutes(audio_path: str, doc_type: str = "meeting",
                 segments=segments, title=title, topic=topic, doc_type=doc_type,
                 session_dt=session_dt, base_memo=memo or None, source="vault_audio",
                 attendees=known_names or [],
+                language=str(mm._c("realtime.language", "") or ""),
             ),
             fz.FinalizeOptions(
                 llm=llm,

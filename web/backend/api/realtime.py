@@ -14,6 +14,7 @@ api/realtime.py — 실시간 STT API (WebSocket 오디오 입력)
 import os
 import re
 import json
+import array
 import asyncio
 import base64
 import time
@@ -32,8 +33,48 @@ from web.backend.paths import AR_ROOT  # noqa: F401 — ensures sys.path setup
 
 router = APIRouter(tags=["realtime"])
 
-from meeting_minutes_app.common.text_filters import is_cjk_hallucination as _is_cjk_hallucination
-from meeting_minutes_app.common.realtime_ws_session import build_ws_session_config
+from meeting_minutes_app.common.text_filters import (
+    SUSPECT_MARKER,
+    collapse_repetitions as _collapse_repetitions,
+    is_cjk_hallucination as _is_cjk_hallucination,
+    is_near_duplicate as _is_near_duplicate,
+    is_script_mismatch as _is_script_mismatch,
+    mark_suspect as _mark_suspect,
+    unique_ratio as _unique_ratio,
+)
+from meeting_minutes_app.common.realtime_ws_session import (
+    build_ws_session_config,
+    resolve_session_language as _resolve_stt_language,
+)
+
+
+def _pcm_rms(b: bytes, max_samples: int = 8000) -> float:
+    """int16 mono PCM 의 RMS. 긴 버퍼는 균일 서브샘플링으로 근사한다.
+
+    보정 윈도(25초×24kHz=60만 샘플)를 매번 전부 제곱합하면 이벤트 루프가 눈에
+    띄게 멈춘다. audioop 은 3.13 에서 제거돼 쓰지 않는다.
+    """
+    n = (len(b) // 2) * 2
+    if n <= 0:
+        return 0.0
+    a = array.array("h")
+    a.frombytes(bytes(b[:n]))
+    if not a:
+        return 0.0
+    step = max(1, len(a) // max_samples)
+    vals = a[::step] if step > 1 else a
+    if not vals:
+        return 0.0
+    return (sum(v * v for v in vals) / len(vals)) ** 0.5
+
+
+def _c_get(key: str, default: Any = None) -> Any:
+    """config 조회 — cfg 핸들이 없는 콜백(WS 이벤트 스레드)에서 사용."""
+    try:
+        from meeting_minutes_app.common import config_loader as cfg
+        return cfg.get(key, default)
+    except Exception:
+        return default
 
 
 def _norm_tokens(s: str) -> List[str]:
@@ -299,7 +340,9 @@ class BrowserRealtimeSession:
         try:
             with conn_mgr as conn:
                 # 전사 세션 설정 (GA: session.type='transcription')
-                session_cfg = build_ws_session_config(stt_model, language, cfg.get)
+                # 언어 고정(auto 금지) — HTTP 경로와 동일 정책
+                session_cfg = build_ws_session_config(
+                    stt_model, _resolve_stt_language(language, cfg.get), cfg.get)
 
                 conn.session.update(session=session_cfg)
 
@@ -460,6 +503,20 @@ class BrowserRealtimeSession:
             if not final_text or _is_cjk_hallucination(final_text):
                 self._cleanup_item(item_id)
                 return
+            # HTTP 경로와 동일한 환각 방어(WS 경로는 서버 VAD 덕에 발생이 드물지만
+            # 파리티를 맞춘다): 문장 내부 되풀이 축약 → 직전 확정문과 중복이면 폐기
+            # → 이질 문자는 삭제하지 않고 [불명] 표시.
+            if _c_get("realtime.hallucination_filter", True):
+                final_text = _collapse_repetitions(final_text)
+                prev = ""
+                with self._event_lock:
+                    if self.segments:
+                        prev = self.segments[-1].get("text") or ""
+                if not final_text or (prev and _is_near_duplicate(final_text, prev)):
+                    self._cleanup_item(item_id)
+                    return
+                if _is_script_mismatch(final_text, _resolve_stt_language(language, _c_get)):
+                    final_text = _mark_suspect(final_text)
 
             elapsed = time.time() - self._session_start
             with self._event_lock:
@@ -739,13 +796,25 @@ class BrowserRealtimeSession:
         except (TypeError, ValueError):
             STT_CONCURRENCY = 2
         STT_CONCURRENCY = min(max(STT_CONCURRENCY, 1), 4)
+        # 무음 청크를 STT 로 보내지 않는다 — 무음/잡음을 전사시키면 모델이 없는 말을
+        # 만들어내고(외국어 조각), 그것이 문맥으로 되먹여져 반복까지 유발한다.
+        DROP_SILENT = bool(cfg.get("realtime.drop_silent_chunks", True))
+        FILTER_ON = bool(cfg.get("realtime.hallucination_filter", True))
+        # 언어 고정(auto 금지) — 청크별 언어 재판정이 러시아어 환각의 직접 원인이었다.
+        stt_language = _resolve_stt_language(language, cfg.get)
 
         audio_buffer = bytearray()
         audio_pos_sec = 0.0             # 큐로 보낸 오디오 누적 길이(세그먼트 타임스탬프 기준)
         silence_sec = 0.0               # 현재 버퍼 끝의 연속 무음 길이
+        chunk_has_speech = False        # 현재 버퍼에 발화 에너지가 한 번이라도 있었는지
+        silent_chunks = 0               # STT 를 건너뛴 무음 청크 수 (종료 시 1회 로그)
+        silent_secs = 0.0
+        dropped_dup = 0                 # 직전과 동일해서 발행하지 않은 조각 수
+        marked_suspect = 0              # 환각 의심으로 표시한 조각 수
         stt_fail_streak = 0             # 연속 STT 실패 카운트 (조용한 실패 방지)
         stt_notified = False            # 사용자 통지는 1회만
-        prompt_tail = ""                # 직전 전사 꼬리 — 청크 STT의 문맥 prompt(환각·경계 유실 감소)
+        last_emitted_text = ""          # 직전 발행 텍스트(연속 중복·prompt 에코 억제)
+        prompt_tail = ""                # 직전 전사 꼬리 (prompt_context="tail" 일 때만 사용)
 
         # STT는 단일 소비자 태스크에서만 수행한다 → 수신 루프가 STT로 절대 막히지 않아
         # 연속 발화 중에도 오디오를 계속 받아들인다(과거엔 수신 루프에서 STT를 await해
@@ -773,15 +842,29 @@ class BrowserRealtimeSession:
         translate_sem = asyncio.Semaphore(2)  # 빠른 패스 번역 동시 실행 상한
         fast_tr_tasks: set = set()            # 진행 중 번역 태스크(종료 시 드레인)
 
-        def _frame_rms(b: bytes) -> float:
-            n = (len(b) // 2) * 2
-            if n <= 0:
-                return 0.0
-            a = array.array("h")
-            a.frombytes(bytes(b[:n]))
-            if not a:
-                return 0.0
-            return (sum(v * v for v in a) / len(a)) ** 0.5
+        # ── prompt 문맥 정책 ──
+        # 과거엔 직전 전사 꼬리를 다음 청크·윈도의 prompt 로 되먹였다. 모델이 그
+        # 문장을 되풀이하고 그 출력이 다시 꼬리가 되면서 같은 문장이 세션 내내
+        # 반복되는 자기강화 루프가 생겼다(에코 제거는 접두부만 잡아 한계).
+        # 기본은 세션 내내 불변인 "정적 힌트" — 루프가 원리적으로 불가능하다.
+        PROMPT_MODE = str(cfg.get("realtime.prompt_context", "static") or "static").strip().lower()
+        if PROMPT_MODE not in ("static", "tail", "off"):
+            PROMPT_MODE = "static"
+        _static_bits: List[str] = []
+        if topic:
+            _static_bits.append(f"주제: {topic}")
+        if speakers:
+            _static_bits.append(f"참석자: {speakers}")
+        if stt_language.startswith("ko"):
+            _static_bits.append("한국어 회의 녹음입니다.")
+        static_prompt = " ".join(_static_bits)[:400]
+
+        def _chunk_prompt() -> str:
+            if PROMPT_MODE == "off":
+                return ""
+            if PROMPT_MODE == "static":
+                return static_prompt
+            return f"{static_prompt} {prompt_tail}".strip()
 
         def _write_wav(chunk_bytes: bytes) -> str:
             tmp_wav = tempfile.NamedTemporaryFile(
@@ -827,13 +910,13 @@ class BrowserRealtimeSession:
             (동시 실행 중엔 문맥이 한 청크 전 것일 수 있다 — 힌트 용도라 무해.)
             """
             tmp_path = _write_wav(chunk_bytes)
-            used_prompt = prompt_tail
+            used_prompt = _chunk_prompt()
             try:
                 try:
                     segs = await asyncio.to_thread(
                         stt.transcribe_chunk,
                         openai_client, tmp_path, stt_model,
-                        language if language != "auto" else None,
+                        stt_language,
                         None, c_start, prompt=used_prompt or None,
                     )
                 except Exception as _e1:
@@ -845,7 +928,7 @@ class BrowserRealtimeSession:
                         segs = await asyncio.to_thread(
                             stt.transcribe_chunk,
                             openai_client, tmp_path, fb,
-                            language if language != "auto" else None,
+                            stt_language,
                             None, c_start, prompt=used_prompt or None,
                         )
                     else:
@@ -854,9 +937,11 @@ class BrowserRealtimeSession:
                     (s.get("text") or "").strip() for s in segs
                     if (s.get("text") or "").strip()
                 ).strip()
-                # 모델이 prompt(직전 문장)를 출력에 되풀이하면 그 부분을 제거 —
+                # 모델이 prompt(직전 문장·정적 힌트)를 출력에 되풀이하면 그 부분을
+                # 제거하고, 조각 안에서 되풀이되는 문장·구절도 1회로 축약한다 —
                 # 화면에 같은 문장이 청크마다 중복되는 원인.
-                return _strip_prompt_echo(text, used_prompt)
+                text = _strip_prompt_echo(text, used_prompt)
+                return _collapse_repetitions(text) if FILTER_ON else text
             finally:
                 try:
                     os.remove(tmp_path)
@@ -865,9 +950,19 @@ class BrowserRealtimeSession:
 
         async def _emit_text(text: str, c_start: float, c_end: float):
             """전사 결과 발행 — 메모리/DB 기록, 화면 전송, 번역·vault 검색 트리거."""
-            nonlocal prompt_tail
+            nonlocal prompt_tail, last_emitted_text, dropped_dup, marked_suspect
             if not text or _is_cjk_hallucination(text):
                 return
+            if FILTER_ON:
+                # 직전 조각과 같은 말이면 발행하지 않는다 — 사람이 이어 말한 것이
+                # 아니라 모델이 prompt/직전 출력을 되풀이한 경우다.
+                if last_emitted_text and _is_near_duplicate(text, last_emitted_text):
+                    dropped_dup += 1
+                    return
+                # 이질 문자(키릴 등)는 삭제하지 않고 표시만 — 오삭제 방지.
+                if _is_script_mismatch(text, stt_language):
+                    text = _mark_suspect(text)
+                    marked_suspect += 1
             seg = {
                 "start": c_start, "end": c_end, "text": text,
                 "text_original": text, "speaker": "",
@@ -876,7 +971,11 @@ class BrowserRealtimeSession:
                 self.segments.append(seg)
             if self.session_id:
                 db.add_segment(self.session_id, "", text, c_start, c_end)
-            prompt_tail = f"{prompt_tail} {text}"[-200:]
+            last_emitted_text = text
+            # 꼬리 문맥은 (a) tail 모드에서만, (b) 환각 표시가 붙지 않은 깨끗한
+            # 텍스트만, (c) 짧게(120자) 유지한다 — 루프 재발 방지.
+            if PROMPT_MODE == "tail" and not text.startswith(SUSPECT_MARKER):
+                prompt_tail = f"{prompt_tail} {text}"[-120:]
             # 영어(원문)를 번역 대기 없이 즉시 전송 — provisional 은 보정 패스가
             # 나중에 문장으로 교체할 수 있음을 프런트에 알린다(흐린 표시).
             await self.ws.send_json({
@@ -963,15 +1062,27 @@ class BrowserRealtimeSession:
                     stt_queue.task_done()
 
         async def _flush_chunk():
-            nonlocal audio_buffer, audio_pos_sec, silence_sec
+            nonlocal audio_buffer, audio_pos_sec, silence_sec, chunk_has_speech
+            nonlocal silent_chunks, silent_secs
             if not audio_buffer:
                 return
             dur = len(audio_buffer) / BYTES_PER_SEC
             c_start = audio_pos_sec
             audio_pos_sec += dur
+            if DROP_SILENT and not chunk_has_speech:
+                # 발화 에너지가 전혀 없던 구간은 전사하지 않는다(환각의 최대 원인).
+                # 타임라인(audio_pos_sec)은 그대로 전진시켜야 보정 윈도·PCM 슬라이싱
+                # 기준이 어긋나지 않는다.
+                silent_chunks += 1
+                silent_secs += dur
+                audio_buffer = bytearray()
+                silence_sec = 0.0
+                chunk_has_speech = False
+                return
             await stt_queue.put((bytes(audio_buffer), c_start, audio_pos_sec))
             audio_buffer = bytearray()
             silence_sec = 0.0
+            chunk_has_speech = False
 
         def _maybe_queue_revision():
             """flush 경계(=세그먼트 경계)에서 보정 윈도가 찼으면 발행.
@@ -1009,13 +1120,20 @@ class BrowserRealtimeSession:
                     chunk = bytes(self._pcm[b0:b1])
                     if len(chunk) < BYTES_PER_SEC:  # 1초 미만은 보정 실익 없음
                         continue
+                    if DROP_SILENT and _pcm_rms(chunk) < SILENCE_RMS:
+                        continue  # 발화가 없는 윈도는 재전사하지 않는다(환각 방지)
+                    revise_prompt = ""
+                    if PROMPT_MODE == "static":
+                        revise_prompt = static_prompt
+                    elif PROMPT_MODE == "tail":
+                        revise_prompt = f"{static_prompt} {revise_tail}".strip()
                     tmp_path = _write_wav(chunk)
                     try:
                         segs = await asyncio.to_thread(
                             stt.transcribe_chunk,
                             openai_client, tmp_path, revise_model,
-                            language if language != "auto" else None,
-                            None, t0, prompt=revise_tail or None,
+                            stt_language,
+                            None, t0, prompt=revise_prompt or None,
                         )
                     except Exception as e:
                         print(f"[revise] STT 실패(빠른 패스 결과 유지): {e}")
@@ -1029,17 +1147,31 @@ class BrowserRealtimeSession:
                         (s.get("text") or "").strip() for s in segs
                         if (s.get("text") or "").strip()
                     ).strip()
-                    # prompt(직전 윈도 문장) 에코 제거 후 문장 단위로 재분할 —
-                    # 에코가 남으면 보정 결과가 이전 윈도 내용까지 중복 포함한다.
-                    joined = _strip_prompt_echo(joined, revise_tail)
+                    # prompt(정적 힌트·직전 윈도 문장) 에코 제거 후 문장 단위로
+                    # 재분할 — 에코가 남으면 보정 결과가 이전 윈도 내용까지 중복 포함.
+                    joined = _strip_prompt_echo(joined, revise_prompt)
                     sentences = [t for t in _split_sentences(joined)
                                  if not _is_cjk_hallucination(t)]
+                    if FILTER_ON:
+                        sentences = [_collapse_repetitions(t) for t in sentences]
+                        sentences = [t for t in sentences if t]
+                        # 윈도 결과가 같은 문장의 되풀이로 채워졌다면(모델 반복 루프)
+                        # 교체를 포기하고 빠른 패스 결과를 유지한다 — 반복을 확정본으로
+                        # 굳히지 않는 것이 안전하다.
+                        if len(sentences) >= 4 and _unique_ratio(sentences) < 0.5:
+                            print(f"[revise] 반복 과다({t0:.0f}~{t1:.0f}s) → 빠른 패스 유지")
+                            continue
+                        sentences = [_mark_suspect(t) if _is_script_mismatch(t, stt_language)
+                                     else t for t in sentences]
                     if not sentences:
                         continue  # 빈/환각/전체-에코 결과면 교체하지 않음(안전)
                     segs = [{"text": t} for t in sentences]
                     _allocate_timestamps(segs, t0, t1)
-                    revise_tail = " ".join(s["text"] for s in segs)[-200:]
-                    prompt_tail = revise_tail  # 빠른 패스 문맥도 보정 텍스트로 갱신
+                    if PROMPT_MODE == "tail":
+                        clean = [s["text"] for s in segs
+                                 if not s["text"].startswith(SUSPECT_MARKER)]
+                        revise_tail = " ".join(clean)[-120:]
+                        prompt_tail = revise_tail  # 빠른 패스 문맥도 보정 텍스트로 갱신
                     new_segs = [{
                         "start": s["start"], "end": s["end"],
                         "text": s["text"], "text_original": s["text"],
@@ -1119,9 +1251,13 @@ class BrowserRealtimeSession:
                     audio_buffer.extend(_b)
                     if self._diarize_pp or self._two_pass:
                         self._pcm.extend(_b)
-                    # 무음 지속시간 추적(발화 경계 감지)
+                    # 무음 지속시간 추적(발화 경계 감지) + 이 버퍼에 발화가 있었는지 기록
                     fsec = (len(_b) // 2) / SR
-                    silence_sec = silence_sec + fsec if _frame_rms(_b) < SILENCE_RMS else 0.0
+                    if _pcm_rms(_b) >= SILENCE_RMS:
+                        silence_sec = 0.0
+                        chunk_has_speech = True
+                    else:
+                        silence_sec += fsec
 
                     buf_sec = len(audio_buffer) / BYTES_PER_SEC
                     # 발화 경계(무음)에서 자르거나, 무음이 없어도 최대 길이에서 강제 분할
@@ -1198,6 +1334,12 @@ class BrowserRealtimeSession:
                 await revise_task
             except Exception:
                 traceback.print_exc()
+
+        # 환각 방어 집계 — 조용히 동작하면 원인 추적이 어려우므로 세션당 1줄 남긴다.
+        if silent_chunks or dropped_dup or marked_suspect:
+            print(f"[http-stt] 환각 방어: 무음 청크 {silent_chunks}개({silent_secs:.0f}초) 건너뜀, "
+                  f"중복 조각 {dropped_dup}개 제외, 환각 의심 {marked_suspect}개 표시 "
+                  f"(lang={stt_language}, prompt={PROMPT_MODE})")
 
         # vault 검색 drain — _finalize()의 collected_notes() 완결성 보장 (WS 경로와 동일)
         if self._searcher is not None:
@@ -1429,6 +1571,7 @@ class BrowserRealtimeSession:
                 session_dt=session_dt,
                 source="web_realtime",
                 session_id=self.session_id,
+                language=_resolve_stt_language(language, mm._c),
             )
             options = fz.FinalizeOptions(
                 llm=llm,

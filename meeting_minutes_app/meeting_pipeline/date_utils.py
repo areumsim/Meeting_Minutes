@@ -44,6 +44,33 @@ def parse_iso_date_from_text(text: str, *, default_today: bool = False) -> str:
     return datetime.now().strftime("%Y-%m-%d") if default_today else ""
 
 
+def normalize_iso_date(text: str) -> str:
+    """임의 형식의 날짜 문자열에서 YYYY-MM-DD를 뽑는다(정렬·비교 키용).
+
+    지원: ISO(2026-07-08), 한글(2026년 06월 29일), 슬래시/닷(2026/7/8), 컴팩트(20260708),
+    시각이 붙은 형태(2026-07-08T14:00). 못 뽑으면 ''.
+
+    parse_iso_date_from_text 는 '-_.' 구분자·컴팩트만 다뤄 한글 날짜("2026년 06월 29일")를
+    놓쳤다 — 그 경우 정렬 키가 원문 그대로라 한글 '년'(U+B144)이 숫자보다 커서 한글 날짜
+    노트가 '가장 최근'으로 잘못 올라왔다. 이 함수는 구분자를 가리지 않고 연·월·일을 뽑는다."""
+    s = str(text or "").strip().strip('"')
+    if not s:
+        return ""
+    # 구분자(하이픈/한글/슬래시/닷/공백 등 1~4자)로 구분된 연·월·일
+    m = re.search(r"(20\d{2}|19\d{2})\D{1,4}(\d{1,2})\D{1,4}(\d{1,2})", s)
+    if m:
+        y, mo, d = map(int, m.groups())
+        if _valid_date(y, mo, d):
+            return f"{y:04d}-{mo:02d}-{d:02d}"
+    # 컴팩트 YYYYMMDD
+    m = re.search(r"(?<!\d)(20\d{2}|19\d{2})(\d{2})(\d{2})(?!\d)", s)
+    if m:
+        y, mo, d = map(int, m.groups())
+        if _valid_date(y, mo, d):
+            return f"{y:04d}-{mo:02d}-{d:02d}"
+    return ""
+
+
 def parse_session_dt_from_path(path: str, *, default: str = "") -> str:
     """Return Korean session datetime text from a filename or path."""
     s = str(path or "")

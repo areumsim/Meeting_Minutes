@@ -531,6 +531,17 @@ class TestDateUtils:
     def test_iso_to_yymmdd(self):
         assert du.iso_to_yymmdd("2026-07-02") == "260702"
 
+    def test_normalize_iso_date_formats(self):
+        # 실기기 인덱스에서 발견: frontmatter가 한글 날짜로 저장돼 정렬이 깨졌다.
+        assert du.normalize_iso_date("2026-07-08") == "2026-07-08"
+        assert du.normalize_iso_date("2026년 06월 29일 14:10") == "2026-06-29"
+        assert du.normalize_iso_date("2026/6/29") == "2026-06-29"
+        assert du.normalize_iso_date("2026.07.08") == "2026-07-08"
+        assert du.normalize_iso_date("20260708") == "2026-07-08"
+        assert du.normalize_iso_date("2026-07-08T14:00:00") == "2026-07-08"
+        assert du.normalize_iso_date("2026-13-40") == ""   # 유효하지 않은 날짜
+        assert du.normalize_iso_date("") == ""
+
 
 class _FakeIndexer:
     is_built = True
@@ -660,6 +671,13 @@ class TestRecencyDateKey:
         assert wa._recency_date_key({"date": "2026-07-24T15:00:00"}) == "2026-07-24"
         assert wa._recency_date_key({"date": ""}) == ""
         assert wa._recency_date_key({}) == ""
+
+    def test_korean_date_normalized(self):
+        # 한글 날짜가 '가장 최근'으로 잘못 정렬되던 실기기 버그 회귀 방지.
+        assert wa._recency_date_key({"date": "2026년 06월 29일 14:10"}) == "2026-06-29"
+        # 한글 6월이 ISO 7월보다 앞서야(작음) 한다 — 사전식 정렬이 시간순과 일치.
+        assert (wa._recency_date_key({"date": "2026년 06월 29일"})
+                < wa._recency_date_key({"date": "2026-07-08"}))
 
 
 class TestPromptIncludesDate:

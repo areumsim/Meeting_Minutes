@@ -42,14 +42,25 @@ def _resolve_note_date(meta: Dict[str, Any], rel_path: str) -> str:
 
     우선순위: frontmatter date > session_date > 파일명/경로에서 추출(YYMMDD 등).
     회의록·전사 노트는 frontmatter에 date가 있지만, 손으로 만든 노트는 파일명
-    ("260707 ...")에만 날짜가 있는 경우가 많아 파일명 폴백으로 견고화한다."""
+    ("260707 ...")에만 날짜가 있는 경우가 많아 파일명 폴백으로 견고화한다.
+
+    frontmatter 값이 한글 날짜("2026년 06월 29일") 등 비ISO 형식이어도 ISO로 정규화해
+    저장한다 — 그래야 날짜 정렬·표시가 일관된다(정규화 실패 시 원문 유지)."""
+    try:
+        from meeting_minutes_app.meeting_pipeline.date_utils import (
+            parse_iso_date_from_text, normalize_iso_date,
+        )
+    except Exception:
+        normalize_iso_date = None  # type: ignore
+        parse_iso_date_from_text = None  # type: ignore
     for k in ("date", "session_date"):
         v = str(meta.get(k) or "").strip().strip('"')
         if v:
+            if normalize_iso_date:
+                return normalize_iso_date(v) or v
             return v
     try:
-        from meeting_minutes_app.meeting_pipeline.date_utils import parse_iso_date_from_text
-        return parse_iso_date_from_text(rel_path)
+        return parse_iso_date_from_text(rel_path) if parse_iso_date_from_text else ""
     except Exception:
         return ""
 
@@ -664,6 +675,7 @@ class VaultIndexer:
         if not self._built:
             if not self.load():
                 return []
+        from meeting_minutes_app.meeting_pipeline.date_utils import normalize_iso_date
         tset = {str(t).lower() for t in types} if types else None
         rows: List[Tuple[str, str, Dict]] = []
         for rel, note in self._notes.items():
@@ -672,7 +684,8 @@ class VaultIndexer:
                 continue
             if tset is not None and str(note.get("type") or "").lower() not in tset:
                 continue
-            key = raw[:10].replace("/", "-").replace(".", "-")
+            # 한글 날짜("2026년 06월 29일") 등 형식 혼재를 ISO로 정규화해 정렬 오류 방지.
+            key = normalize_iso_date(raw) or raw[:10].replace("/", "-").replace(".", "-")
             rows.append((key, rel, note))
         rows.sort(key=lambda x: x[0], reverse=True)
         out: List[Dict[str, Any]] = []

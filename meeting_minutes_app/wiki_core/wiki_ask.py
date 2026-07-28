@@ -600,10 +600,20 @@ def _is_recency_query(text: str) -> bool:
 
 
 def _recency_date_key(note: Dict[str, Any]) -> str:
-    """작성일 정렬용 정규화 키. 형식이 섞여도(YYYY-MM-DD / YYYY/MM/DD / 시각 포함)
-    앞 10자를 '-'로 통일해 사전식 비교가 시간순과 일치하게 한다. 날짜 없으면 ''."""
+    """작성일 정렬용 정규화 키(YYYY-MM-DD). 형식이 섞여도(ISO/한글 '2026년 06월 29일'/
+    슬래시·닷/컴팩트/시각 포함) 연·월·일을 뽑아 사전식 비교가 시간순과 일치하게 한다.
+    못 뽑으면 앞 10자를 '-'로 통일(최후 폴백), 빈 값이면 ''."""
     d = str(note.get("date") or "").strip().strip('"')
-    return d[:10].replace("/", "-").replace(".", "-") if d else ""
+    if not d:
+        return ""
+    try:
+        from meeting_minutes_app.meeting_pipeline.date_utils import normalize_iso_date
+        iso = normalize_iso_date(d)
+        if iso:
+            return iso
+    except Exception:
+        pass
+    return d[:10].replace("/", "-").replace(".", "-")
 
 
 def _fname_iso(path: str) -> str:

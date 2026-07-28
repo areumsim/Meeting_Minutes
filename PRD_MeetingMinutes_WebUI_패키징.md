@@ -1,5 +1,12 @@
 # PRD — Meeting Minutes Generator WebUI 패키징 & 확장
 
+> ⚠️ **상태(2026-07-28)**: 이 문서는 2026-07-15 시점의 요구사항 정의(초안)로, 당시엔 PyInstaller
+> `.exe` onedir 배포를 전제로 작성됐다. 이후 실제 배포는 백신 스캔 지연 문제로 **임베디드 파이썬 +
+> `MeetingMinutes.bat` 포터블 방식**으로 전환됐다(`scripts/build/build_portable.ps1` →
+> `dist/MeetingMinutesPortable.zip`). 아래 본문의 `build_exe.bat`/PyInstaller 서술은 역사적 맥락이며,
+> 현재 배포 절차는 `docs/SETUP_NEW_TEAM.md` §7-A와 `CLAUDE.md`를 참고할 것. PyInstaller exe는 원격
+> MCP(`/mcp`)가 필요할 때의 대체 경로로만 유지된다.
+
 문서 버전: v0.1 (초안)
 작성일: 2026-07-15
 대상 제품: Meeting Minutes Generator v2.1 (음성/영상 → 회의록·요약·사실검증·Wiki)

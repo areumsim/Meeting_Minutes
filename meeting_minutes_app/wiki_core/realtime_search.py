@@ -11,24 +11,36 @@ CLI(realtime_transcription)와 웹(web/backend/api/realtime.py) 양쪽에서 사
   - offer_segment()는 STT 핫패스에서 호출되므로 절대 블로킹/raise 금지
   - 검색 백엔드: VaultIndexer(로컬 인덱스, ms 단위) 우선, Obsidian REST 폴백
     (wiki.realtime_search_backend: "auto"|"index"|"rest")
-  - 인덱스/Obsidian 둘 다 못 쓰면 조용히 비활성화 (실시간 스트림 영향 0)
+  - 인덱스/Obsidian 둘 다 못 쓰면 비활성화하되 **사유를 status()로 노출**한다
+    (과거엔 조용히 꺼져 "기능이 없는 것처럼" 보였다 — 실시간 스트림은 여전히 무영향)
   - config 게이트: wiki.realtime_vault_search / wiki.realtime_search_interval
 
+내부자료 우선(꼼꼼) 검색 — 인덱스 백엔드일 때:
+  ① 섹션(heading) 인덱스 search_sections  … 어느 섹션이 관련인지까지 회수
+  ② 논문/이론 폴더에 한정한 섹션 검색      … 로컬 논문·원문추출을 후보 풀에 보장 진입
+  ③ 노트 인덱스 search (TF-IDF+임베딩 RRF) … 교차언어(en↔ko)는 이 경로가 담당
+  → RRF 융합 + 논문 가중으로 정렬. 후보는 넉넉히 모으고(기본 20+) 표시만 상위 N개.
+  웹 검색은 이 모듈이 하지 않는다 — 항상 보완재로 호출자(웹 UI)에서 별도 처리.
+
 사용:
-    searcher = RealtimeVaultSearcher(topic=topic, on_notes=display_fn)
+    searcher = RealtimeVaultSearcher(topic=topic, on_notes=display_fn,
+                                     on_status=badge_fn)
+    searcher.warmup()                   # 백엔드 연결 상태를 미리 확인(논블로킹)
     ...
     searcher.offer_segment(text)        # 세그먼트 확정 시마다
     ...
-    titles = searcher.collected_titles()  # 종료 후 memo 병합용
+    titles = searcher.collected_titles()    # 종료 후 memo 병합용
+    ev = searcher.collected_evidence()       # 근거(점수·snippet·섹션·발화) 누적분
     searcher.shutdown(wait=True)
 """
 
 from __future__ import annotations
 
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 try:
     from meeting_minutes_app.common import config_loader as _cfg
@@ -42,11 +54,39 @@ def _c(key: str, default: Any = None) -> Any:
     return _cfg.get(key, default) if _cfg_ok else default
 
 
+#: 비활성 사유 코드 → 사용자에게 보여줄 한국어 문구 (Recorder 상태 배지 / CLI 안내)
+REASON_TEXT: Dict[str, str] = {
+    "": "",
+    "off": "설정에서 '실시간 볼트 검색'이 꺼져 있습니다.",
+    "no_vault": "노트 폴더(볼트)가 설정되지 않았습니다 — [설정]에서 지정하세요.",
+    "index_missing": "검색 인덱스가 없습니다 — [설정]의 '인덱스 재빌드'를 실행하세요.",
+    "obsidian_unreachable": "Obsidian REST에 연결할 수 없습니다.",
+    "no_backend": "검색 인덱스도 Obsidian도 사용할 수 없습니다 — 인덱스를 재빌드하세요.",
+}
+
+#: RRF 융합 상수 (vault_indexer._rrf_fuse와 동일 관례)
+_RRF_K = 60.0
+
+
+def _paper_dirs() -> Tuple[str, ...]:
+    """논문/이론/원문추출 폴더 — 로컬 논문을 웹 arXiv보다 먼저 인용하기 위한 우선 경로."""
+    dirs = _c("wiki.realtime_paper_dirs",
+              ["02_이론_학습", "01_References", "원문추출"]) or []
+    if not isinstance(dirs, (list, tuple)):
+        return ()
+    return tuple(str(d).strip().strip("/") for d in dirs if str(d).strip())
+
+
+def _is_paper_path(rel_path: str, paper_dirs: Sequence[str]) -> bool:
+    r = (rel_path or "").replace("\\", "/")
+    return any(d and (r.startswith(d + "/") or f"/{d}/" in r) for d in paper_dirs)
+
+
 class RealtimeVaultSearcher:
     """세그먼트 텍스트로 vault를 스로틀 검색하는 논블로킹 헬퍼.
 
-    on_notes(notes)는 검색 풀 스레드에서 호출된다 — 표시/전송의
-    스레드 안전성은 호출자 책임 (예: RecordingIndicator.claim/release,
+    on_notes(notes) / on_status(status)는 검색 풀 스레드에서 호출된다 —
+    표시/전송의 스레드 안전성은 호출자 책임 (예: RecordingIndicator.claim/release,
     _send_to_browser 큐).
     """
 
@@ -55,22 +95,30 @@ class RealtimeVaultSearcher:
         *,
         topic: str = "",
         on_notes: Optional[Callable[[List[Dict[str, Any]]], None]] = None,
+        on_status: Optional[Callable[[Dict[str, Any]], None]] = None,
         allow_launch: bool = False,
     ):
         self.topic = (topic or "").strip()
         self.on_notes = on_notes
+        self.on_status = on_status
         # Obsidian 앱 자동 실행 허용 여부 — CLI 녹음 중엔 포커스 강탈/최대 40초
         # 블록이 있어 금지, 웹 백엔드는 기존 동작 보존을 위해 허용
         self.allow_launch = allow_launch
 
-        self._gate = bool(_c("wiki.realtime_vault_search", False))
+        self._gate = bool(_c("wiki.realtime_vault_search", True))
         self._interval = max(int(_c("wiki.realtime_search_interval", 3) or 3), 1)
         self._backend_pref = str(_c("wiki.realtime_search_backend", "auto") or "auto")
+        # 내부 후보는 넉넉히 모으고(누적 검토용) 표시만 상위 N개로 제한한다
+        self._section_k = max(int(_c("wiki.realtime_section_candidates", 12) or 12), 1)
+        self._note_k = max(int(_c("wiki.realtime_note_candidates", 10) or 10), 1)
+        self._display_n = max(int(_c("wiki.realtime_display_count", 3) or 3), 1)
+        self._query_chars = max(int(_c("wiki.realtime_query_chars", 180) or 180), 20)
 
         self._counter = 0
         self._notes: List[Dict[str, Any]] = []
         self._lock = threading.Lock()
         self._last_shown_titles: frozenset = frozenset()
+        self._t0 = time.time()
 
         self._pool: Optional[ThreadPoolExecutor] = None
         if self._gate:
@@ -82,12 +130,71 @@ class RealtimeVaultSearcher:
         self._obs = None
         self._init_done = False
         self._disabled = False   # lazy init 실패 후 no-op 전환
+        self._reason = "" if self._gate else "off"
+        self._status_sent = False
 
     # ── 상태 ──────────────────────────────────────────────
 
     @property
     def enabled(self) -> bool:
         return self._gate and not self._disabled
+
+    @property
+    def backend(self) -> str:
+        if self._indexer is not None:
+            return "index"
+        if self._obs is not None:
+            return "rest"
+        return ""
+
+    def status(self) -> Dict[str, Any]:
+        """현재 연결 상태 — 웹 Recorder 상태 배지 / CLI 안내용(FR-1).
+
+        reason 이 빈 문자열이면 정상, 아니면 REASON_TEXT 의 사유 코드다.
+        initialized=False 는 "아직 첫 검색 전(연결 미확인)" 을 뜻한다.
+        """
+        return {
+            "enabled": self.enabled,
+            "gate": self._gate,
+            "backend": self.backend,
+            "reason": self._reason,
+            "reasonText": REASON_TEXT.get(self._reason, self._reason),
+            "initialized": self._init_done,
+        }
+
+    def warmup(self) -> None:
+        """백엔드 연결을 미리(논블로킹) 확인하고 on_status 로 상태를 1회 보고한다.
+
+        세션 시작 직후 호출하면 첫 발화를 기다리지 않고 배지를 띄울 수 있다.
+        게이트가 꺼져 있으면 풀이 없으므로 이 자리에서 바로 보고한다."""
+        try:
+            if self._pool is not None:
+                self._pool.submit(self._warmup_task)
+            else:
+                self._report_status()
+        except Exception:
+            pass
+
+    def _warmup_task(self) -> None:
+        try:
+            self._lazy_init()
+        except Exception:
+            pass
+        self._report_status()
+
+    def _report_status(self) -> None:
+        """on_status 를 1회만 호출 (사유가 바뀌면 다시 보고)."""
+        try:
+            if self.on_status is None:
+                return
+            key = (self._reason, self.backend, self._disabled)
+            if self._status_sent and key == getattr(self, "_status_key", None):
+                return
+            self._status_sent = True
+            self._status_key = key
+            self.on_status(self.status())
+        except Exception:
+            pass
 
     # ── 핫패스 API ────────────────────────────────────────
 
@@ -117,6 +224,37 @@ class RealtimeVaultSearcher:
             titles = [n.get("title", "") for n in self._notes]
         return list(dict.fromkeys(t for t in titles if t))
 
+    def collected_evidence(self, limit: int = 50,
+                           min_score: float = 0.0) -> List[Dict[str, Any]]:
+        """노트별 '가장 강한 근거' 1건씩 — SQLite 누적/회의록 병합용(FR-4/6).
+
+        같은 노트가 여러 발화에서 반복 매칭되면 rank_score 가 가장 높은 히트를
+        대표로 남기고 참조 횟수(hits)를 센다. 정렬은 rank_score 내림차순.
+        """
+        with self._lock:
+            notes = list(self._notes)
+        best: Dict[str, Dict[str, Any]] = {}
+        for n in notes:
+            key = str(n.get("filename") or n.get("title") or "")
+            if not key:
+                continue
+            cur = best.get(key)
+            if cur is None:
+                item = dict(n)
+                item["hits"] = 1
+                best[key] = item
+            else:
+                cur["hits"] = int(cur.get("hits", 1)) + 1
+                if float(n.get("rank_score", 0) or 0) > float(cur.get("rank_score", 0) or 0):
+                    hits = cur["hits"]
+                    item = dict(n)
+                    item["hits"] = hits
+                    best[key] = item
+        out = sorted(best.values(),
+                     key=lambda n: -float(n.get("rank_score", 0) or 0))
+        out = [n for n in out if float(n.get("rank_score", 0) or 0) >= min_score]
+        return out[:max(1, limit)]
+
     def shutdown(self, wait: bool = True) -> None:
         """검색 풀 drain 후 종료. collected_*()의 완결성을 보장하려면 wait=True."""
         try:
@@ -137,14 +275,20 @@ class RealtimeVaultSearcher:
             return
         self._init_done = True
 
+        reason = ""
         if self._backend_pref in ("auto", "index"):
             try:
                 from meeting_minutes_app.wiki_core.vault_indexer import VaultIndexer
                 idx = VaultIndexer.from_config()
-                if idx and idx.load():
+                if idx is None:
+                    reason = "no_vault"
+                elif idx.load():
                     self._indexer = idx
+                else:
+                    reason = "index_missing"
             except Exception:
                 self._indexer = None
+                reason = reason or "index_missing"
 
         if self._indexer is None and self._backend_pref in ("auto", "rest"):
             try:
@@ -155,20 +299,27 @@ class RealtimeVaultSearcher:
                         obs.ensure_running()
                     if obs.ping():
                         self._obs = obs
+                    else:
+                        reason = "obsidian_unreachable"
             except Exception:
                 self._obs = None
+                reason = reason or "obsidian_unreachable"
 
         if self._indexer is None and self._obs is None:
             self._disabled = True  # 이후 offer_segment는 전부 no-op
+            self._reason = reason or "no_backend"
+        else:
+            self._reason = ""
 
     def _search(self, text: str) -> None:
         """단일 세그먼트 검색 — 실패는 전부 무시 (실시간 스트림 보호)."""
         try:
             self._lazy_init()
+            self._report_status()
             if self._disabled:
                 return
 
-            query = (text[:60] + (" " + self.topic if self.topic else "")).strip()
+            query = self._build_query(text)
             if self._indexer is not None:
                 hits = self._search_index(query, text)
             else:
@@ -180,7 +331,7 @@ class RealtimeVaultSearcher:
                 self._notes.extend(hits)
 
             if self.on_notes:
-                top = sorted(hits, key=lambda n: -float(n.get("score", 0)))[:3]
+                top = hits[:self._display_n]
                 titles = frozenset(n["title"] for n in top)
                 # 같은 노트 세트가 연속 매칭되면 표시 생략 (터미널/UI 스팸 방지)
                 if titles and titles != self._last_shown_titles:
@@ -189,40 +340,149 @@ class RealtimeVaultSearcher:
         except Exception:
             pass
 
+    def _build_query(self, text: str) -> str:
+        """검색 쿼리 = 발화 앞부분 + 주제.
+
+        임베딩(교차언어) 경로는 문맥이 길수록 유리하고 TF-IDF는 토큰이 많아도
+        idf 가중으로 걸러지므로, 과거 60자보다 넉넉하게(기본 180자) 쓴다."""
+        return (text[:self._query_chars]
+                + (" " + self.topic if self.topic else "")).strip()
+
+    # ── 인덱스 백엔드: 내부자료 우선·꼼꼼 검색 (FR-11) ────
+
     def _search_index(self, query: str, segment_text: str) -> List[Dict[str, Any]]:
-        results = self._indexer.search(query, limit=5)
-        hits = []
-        for r in results or []:
-            path = str(r.get("path", "") or "")
-            title = str(r.get("wikilink_title") or r.get("title")
-                        or (Path(path).stem if path else ""))
+        """섹션 인덱스 → 논문 폴더 섹션 → 노트 인덱스(임베딩 RRF) 순으로 후보를
+        모아 RRF 융합한다. 반환은 rank_score 내림차순."""
+        idx = self._indexer
+        papers = _paper_dirs()
+
+        sections = self._safe(idx.search_sections, query, limit=self._section_k) or []
+        paper_sections = []
+        if papers:
+            paper_sections = self._safe(
+                idx.search_sections, query,
+                limit=max(3, self._section_k // 3),
+                path_prefixes=list(papers)) or []
+        notes = self._safe(idx.search, query, limit=self._note_k) or []
+
+        # 후보 레코드 조립 (노트 경로 단위로 병합 — 같은 노트의 최고 섹션만 대표로)
+        cand: Dict[str, Dict[str, Any]] = {}
+
+        def _touch(rel: str) -> Dict[str, Any]:
+            item = cand.get(rel)
+            if item is None:
+                item = {"path": rel, "heading": "", "snippet": "", "title": "",
+                        "score": 0.0, "date": "", "cosine": 0.0}
+                cand[rel] = item
+            return item
+
+        section_rank: Dict[str, int] = {}
+        for group in (sections, paper_sections):
+            for rank, s in enumerate(group):
+                rel = str(s.get("note_path") or "")
+                if not rel:
+                    continue
+                item = _touch(rel)
+                prev = section_rank.get(rel)
+                if prev is None or rank < prev:
+                    section_rank[rel] = rank
+                if not item["heading"] and s.get("heading"):
+                    item["heading"] = str(s.get("heading") or "")
+                    item["snippet"] = str(s.get("snippet") or "")[:200]
+                if not item["title"]:
+                    item["title"] = str(s.get("note_title") or "")
+                item["score"] = max(float(item["score"]),
+                                    float(s.get("score", 0) or 0))
+                item["date"] = item["date"] or str(s.get("date", "") or "")
+
+        note_rank: Dict[str, int] = {}
+        for rank, r in enumerate(notes):
+            rel = str(r.get("path") or "")
+            if not rel:
+                continue
+            item = _touch(rel)
+            note_rank[rel] = rank
+            item["title"] = (str(r.get("wikilink_title") or r.get("title") or "")
+                             or item["title"])
+            if not item["snippet"]:
+                item["snippet"] = str(r.get("snippet", "") or "")[:200]
+            item["score"] = max(float(item["score"]), float(r.get("score", 0) or 0))
+            item["date"] = item["date"] or str(r.get("date", "") or "")
+            item["cosine"] = max(float(item["cosine"]),
+                                 float(r.get("cosine", 0) or 0))
+
+        hits: List[Dict[str, Any]] = []
+        for rel, item in cand.items():
+            title = item["title"] or (Path(rel).stem if rel else "")
             if not title:
                 continue
+            rrf = 0.0
+            if rel in section_rank:
+                rrf += 1.0 / (_RRF_K + section_rank[rel] + 1)
+            if rel in note_rank:
+                rrf += 1.0 / (_RRF_K + note_rank[rel] + 1)
+            is_paper = _is_paper_path(rel, papers)
+            if is_paper:
+                # 로컬 논문/이론/원문추출을 같은 순위대에서 앞에 세운다 (FR-11)
+                rrf *= 1.2
             hits.append({
-                "filename": path,
+                "filename": rel,
                 "title": title,
-                "score": round(float(r.get("score", 0) or 0), 4),
+                "score": round(float(item["score"]), 4),
+                "rank_score": round(rrf, 6),
+                "cosine": round(float(item["cosine"]), 4),
                 "matches": [],
-                "snippet": str(r.get("snippet", "") or "")[:200],
+                "snippet": item["snippet"],
+                "heading": item["heading"],
+                "section_path": (f"{title} › {item['heading']}"
+                                 if item["heading"] else title),
                 "source": "index",
-                "segment_text": segment_text[:80],
+                "source_type": "paper" if is_paper else "note",
+                "found_by": ("section" if rel in section_rank and rel in note_rank
+                             else ("section" if rel in section_rank else "note")),
+                "date": item["date"],
+                "segment_text": segment_text[:200],
+                "elapsed_sec": round(time.time() - self._t0, 1),
             })
+        hits.sort(key=lambda n: -float(n.get("rank_score", 0) or 0))
         return hits
 
     def _search_rest(self, query: str, segment_text: str) -> List[Dict[str, Any]]:
-        results = self._obs.search_simple(query, context_length=150, limit=5)
+        results = self._safe(self._obs.search_simple, query,
+                             context_length=150, limit=self._note_k) or []
+        papers = _paper_dirs()
         hits = []
-        for r in results or []:
+        for rank, r in enumerate(results):
             filename = str(r.get("filename", "") or "")
             if not filename:
                 continue
+            rel = filename.replace("\\", "/")
+            is_paper = _is_paper_path(rel, papers)
+            rrf = 1.0 / (_RRF_K + rank + 1)
             hits.append({
                 "filename": filename,
-                "title": Path(filename.replace("\\", "/")).stem,
+                "title": Path(rel).stem,
                 "score": round(float(r.get("score", 0) or 0), 3),
+                "rank_score": round(rrf * (1.2 if is_paper else 1.0), 6),
+                "cosine": 0.0,
                 "matches": (r.get("matches") or [])[:2],
                 "snippet": "",
+                "heading": "",
+                "section_path": Path(rel).stem,
                 "source": "rest",
-                "segment_text": segment_text[:80],
+                "source_type": "paper" if is_paper else "note",
+                "found_by": "note",
+                "date": "",
+                "segment_text": segment_text[:200],
+                "elapsed_sec": round(time.time() - self._t0, 1),
             })
+        hits.sort(key=lambda n: -float(n.get("rank_score", 0) or 0))
         return hits
+
+    @staticmethod
+    def _safe(fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
+        """검색 호출 1건 실패가 나머지 후보 수집을 막지 않게 한다."""
+        try:
+            return fn(*args, **kwargs)
+        except Exception:
+            return None

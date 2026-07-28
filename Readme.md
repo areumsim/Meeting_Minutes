@@ -310,13 +310,13 @@ PoC 후보 3개 제품명은 회의록에 명시됨.
 ```mermaid
 flowchart LR
     A[음성/영상 파일] --> B[ffmpeg\n변환/압축]
-    B --> C[STT API\ngpt-4o-transcribe]
+    B --> C[STT API\ngpt-4o-mini-transcribe]
     C --> D[화자 추론\ninfer_speaker_names]
-    D --> E{번역?}
+    D --> G[STT 교정\nrefine_script]
+    G --> E{번역?}
     E -- 예 --> F[번역 API\n컨텍스트 윈도우]
-    E -- 아니오 --> G[STT 교정\nrefine_script]
-    F --> G
-    G --> H[LLM\n회의록 생성\n청크 자동 분할]
+    E -- 아니오 --> H
+    F --> H[LLM\n회의록 생성\n청크 자동 분할]
     H --> I[LLM\n요약 생성]
     I --> J[LLM\n액션 아이템]
     J --> K[output/날짜_제목/]
@@ -405,7 +405,7 @@ flowchart LR
 | **번역 컨텍스트 윈도우** | 앞 5개 세그먼트를 힌트로 제공해 번역 용어 일관성 향상 |
 | **고정 헤더 UI** | 실시간 녹취 중 제목·경과시간·예상비용이 상단 2줄에 항상 표시 |
 | **스크롤 잠금** | `s+Enter` 로 화면 고정 — 이전 대화를 위로 스크롤하여 확인 가능 |
-| **요약 TXT 저장** | 요약본을 `.md`와 `.txt` 두 형식으로 저장, 이메일에 `.txt` 첨부 |
+| **요약 저장/첨부** | 배치는 요약본을 `summary.md`로 저장(실시간 녹취 경로는 `summary.txt`도 별도 생성). 이메일에는 요약을 `.txt`로 변환해 첨부 |
 | **크래시 복구** | JSONL + os.fsync + 오디오 PCM 백업으로 세션 보호 |
 | **디버그 로그** | `--debug` 시 `output/debug.log` 생성 / 런처 로그는 `data/logs/run_py.log`에 저장 |
 | **설정 파일** | `config.json` 으로 반복 옵션 저장 |
@@ -424,7 +424,7 @@ output/
 ├── 2025-02-20_Q1정기회의/           # 회의별 서브폴더 (날짜_제목)
 │   ├── script.md                    # 스크립트
 │   ├── script_ko.md                 # 한국어 번역 스크립트 (--translate-script)
-│   ├── refined_script.txt           # STT 교정 스크립트 (맥락·주제 기반 보정)
+│   ├── script_refined.txt           # STT 교정 스크립트 (맥락·주제 기반 보정) — 실시간 경로는 refined_script.txt
 │   ├── minutes.md                   # 기록 문서 (회의록/세미나/강의)
 │   ├── summary.md                   # 요약본
 │   ├── actions.json                 # 액션 아이템 JSON (meeting 전용)
@@ -548,14 +548,14 @@ cp   config.example.json config.json   # Mac/Linux
   "indexing": {
     "index_path": "data/vault_index.json",
     "vault_path": "",
-    "auto_reindex_after_write": false
+    "auto_reindex_after_write": true
   },
   "wiki": {
     "enabled": true,
     "vault_enrich": true,
     "claim_verify": true,
     "claim_verify_max": 8,
-    "context_max_chars": 2000,
+    "context_max_chars": 6000,
     "online_search_enabled": false,
     "claim_web_verify": false,
     "realtime_vault_search": false
@@ -636,7 +636,7 @@ $env:OPENAI_API_KEY    = "sk-proj-..."
 $env:ANTHROPIC_API_KEY = "sk-ant-..."
 $env:EMAIL_SENDER      = "sender@naver.com"
 $env:EMAIL_PASSWORD    = "앱 비밀번호"
-$env:EMAIL_RECIPIENT   = "recipient@company.com"
+$env:EMAIL_RECIPIENTS  = "recipient@company.com"   # 쉼표로 여러 명 (실시간 녹취는 단수 EMAIL_RECIPIENT도 허용)
 
 # Mac/Linux
 export OPENAI_API_KEY="sk-proj-..."
@@ -778,7 +778,7 @@ python run_meeting.py batch meeting.mp4 --debug
 | `--profile` | 저장된 프로필 이름 적용 | - |
 | `--model` | STT 모델 | config `models.stt` 값 (코드 fallback: gpt-4o-mini-transcribe) |
 | `--llm` | gpt / claude | gpt |
-| `--language` | STT 언어 (en, ko, auto) | 설정 `realtime.language`(기본 en) |
+| `--language` | STT 언어 (ko, en) | ko |
 | `--translate` | 영→한 번역 | OFF |
 | `--translate-script` | 스크립트 번역본도 생성 | OFF |
 | `--memo` | 메모 파일 | - |
@@ -872,7 +872,7 @@ LLM이 발화 내용·맥락을 분석해 실명 또는 역할명으로 자동 �
 ```bash
 EMAIL_SENDER     = sender@naver.com
 EMAIL_PASSWORD   = 앱비밀번호
-EMAIL_RECIPIENT  = recipient@company.com
+EMAIL_RECIPIENTS = recipient@company.com   # 쉼표로 여러 명 가능
 ```
 
 ### Slack / Teams

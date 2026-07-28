@@ -7,10 +7,11 @@
 
 ## 진입점 (Entry Points)
 
-네 가지 실행 경로가 있으며, 모두 동일한 핵심 모듈(`meeting_minutes`, `meeting_workflow`)을 공유한다.
+여러 실행 경로가 있으며, 모두 동일한 핵심 모듈(`meeting_minutes`, `meeting_workflow`)을 공유한다.
 
 | 명령 / 엔드포인트 | 모듈 | 설명 |
 |---|---|---|
+| `python run_meeting.py realtime` (`record`) | `run_realtime.py` · `realtime_transcription.py` | 로컬 마이크 실시간 녹취 → 전사 → 회의록 |
 | `python run_meeting.py ingest <file>` | `ingestion_pipeline.py` | 오디오 파일 → Obsidian 노트 + 이메일 |
 | `python run_meeting.py batch <file>` | `meeting_minutes.py` | STT → 회의록 → `output/` 저장 + 설정 시 Obsidian 발행 |
 | `WebSocket /ws/realtime` | `web/backend/api/realtime.py` | 서버 프록시형 실시간 전사 옵션 → 스트리밍 전사 → 회의록 |
@@ -44,8 +45,7 @@ flowchart TD
     A[segments + 메타데이터\nSessionInputs] --> B[plan_context\n계획 회의 매칭]
     B --> C[extra_memo\n호출자 추가 메모 병합]
     C --> D[context\nbuild_generation_context_memo\n도메인 스코프 검색 포함]
-    D --> D2[wiki_context.json 저장\nartifacts_dir]
-    D2 --> E[refine\n스크립트 교정]
+    D --> E[refine\n스크립트 교정]
     E --> F[minutes\ngenerate_minutes]
     F --> G[actions\nmeeting 타입만]
     G --> H[claim_verify\nwiki.claim_verify=true]
@@ -57,7 +57,8 @@ flowchart TD
     K --> K3[write_meeting_note\nREST PUT]
     K --> K4[_reindex_if_configured\nvault_index.json 갱신]
     K --> K5[_send_notification\nemail/slack/teams/all]
-    K1 & K2 & K3 & K4 & K5 --> L[wiki_proposal\nmeeting + 관련노트 있을 때]
+    K1 & K2 & K3 & K4 & K5 --> W[wiki_context.json 저장\nartifacts_dir · publish 이후 stage 11]
+    W --> L[wiki_proposal\nmeeting + 관련노트 있을 때]
     L --> M[registry\naction/decision, meeting 타입만]
     M --> N[graph_sync\ndo_graph_sync=true 일 때]
 ```
@@ -681,8 +682,8 @@ flowchart TD
 ### 인덱스 갱신 이슈
 
 `obs.put_note()` 후 `data/vault_index.json`은 자동 갱신되지 않는다 (기존 제한). 대응:
-- `config.indexing.auto_reindex_after_write=true` 시 저장 후 자동 재빌드
-- 기본값 `false` — 매번 수 초 재빌드 비용 방지. `python run_meeting.py reindex` 수동 실행 권장
+- `config.indexing.auto_reindex_after_write=true`(**기본값**) 시 저장 후 자동 재빌드(인덱스+그래프). 임베딩은 증분이라 새 노트만 재계산(저렴·후처리라 대기 없음)
+- 대용량 볼트에서 매번 수 초가 부담이면 `false`로 끄고 `python run_meeting.py reindex` 수동 실행
 
 ---
 
@@ -716,7 +717,7 @@ LLM은 다음 고정 답변 구조를 반드시 따르도록 강제된다:
 |---|---|---|---|
 | OpenAI Realtime API | 낮은 지연 실시간 전사 | `realtime_transcription.py` · `web/backend/api/realtime.py` · `web/frontend/src/lib/api.ts` | Realtime은 기본 화자분리 없음. 브라우저/모바일은 직접 연결, 서버 수신 오디오는 WebSocket 프록시 옵션 |
 | OpenAI Chat API | 회의록·요약·액션·사실검증 | `LLMClient._gpt()` | gpt-4o 기본, 폴백 역할 |
-| Anthropic API | 회의록·요약 생성 (기본 LLM) | `LLMClient._claude()` | claude-opus-4-6, web_search tool 지원 |
+| Anthropic API | 회의록·요약 생성 (`models.llm=claude` 선택 시) | `LLMClient._claude()` | claude-opus-4-8 기본, web_search tool 지원. **기본 LLM은 GPT**(`models.llm=gpt`) |
 | Obsidian REST API | 노트 읽기/쓰기/검색 | `obsidian.ObsidianClient` | https://127.0.0.1:27124 Bearer token |
 | Supermemory API | 크로스세션 팩트 메모리 저장·검색 | `supermemory_client.SupermemoryClient` | 클라우드 또는 `npx supermemory local` (MIT, 로컬) |
 | SMTP | 회의록 이메일 발송 | `notifier.Notifier` | Gmail/Naver/Outlook 자동 인식 |
@@ -741,7 +742,7 @@ LLM은 다음 고정 답변 구조를 반드시 따르도록 강제된다:
 | `wiki.vault_enrich` | `true` | 생성 후 엔티티 기반 관련 노트 추가 |
 | `wiki.claim_verify` | `true` | 사실 검증 활성화 |
 | `wiki.claim_verify_max` | `8` | 최대 검증 주장 수 (비용 제한용) |
-| `wiki.context_max_chars` | `2000` | 노트당 주입 최대 글자 수 |
+| `wiki.context_max_chars` | `6000` | 노트당 주입 최대 글자 수 (코드 fallback은 2000, 배포 config.example 기본은 6000) |
 | `wiki.online_search_enabled` | `false` | 웹 리서치 (Anthropic web_search tool) |
 | `wiki.claim_web_verify` | `false` | 불확실·충돌 주장에 웹 전문가 의견 검색 (API 비용 발생) |
 | `wiki.domain_relevance_keywords` | `[]`(내장 기본값 사용) | vault 검색 관련도 가산점 마커(`note_domain_score()`). 두 번째 도메인 추가 시 그 도메인 마커도 여기 합쳐야 검색 상위 노출됨 |
@@ -750,12 +751,12 @@ LLM은 다음 고정 답변 구조를 반드시 따르도록 강제된다:
 | `wiki_knowledge.action_registry_enabled` | `true` | 회의 후 action_registry.json 누적 |
 | `wiki_knowledge.decision_registry_enabled` | `true` | 회의 후 decision_registry.json 누적 |
 | `wiki_knowledge.registry_context_max_chars` | `4000` | 생성 프롬프트에 주입되는 이전 결정/미완료 액션 섹션 글자 제한 |
-| `wiki_knowledge.embedding_enabled` | `false` | 임베딩 하이브리드 검색 (TF-IDF + 코사인 RRF 융합). 실패 시 TF-IDF 폴백 |
+| `wiki_knowledge.embedding_enabled` | `true` | 임베딩 하이브리드 검색 (TF-IDF + 코사인 RRF 융합). 실패 시 TF-IDF 폴백 |
 | `wiki_knowledge.embedding_model` | `"text-embedding-3-small"` | 임베딩 모델 (OpenAI) |
 | `wiki_knowledge.embedding_dims` | `256` | 임베딩 차원 축소 (인덱스 크기/속도 절충) |
 | `wiki_knowledge.embedding_min_cosine` | `0.25` | 의미 검색 인정 최소 코사인 유사도 |
 | `wiki_knowledge.section_index_enabled` | `true` | 섹션(heading) 단위 인덱싱. claim_verify/context memo/wiki_ask가 whole-note 대신 관련 섹션을 근거로 우선 사용. 변경 후 `reindex` 필요 |
-| `wiki_knowledge.proposal_llm_enabled` | `false` | LLM 기반 proposal 초안 생성 (향후 확장 후보) |
+| `wiki_knowledge.proposal_llm_enabled` | `false` | LLM 기반 proposal 초안 생성 (구현됨 — 기본은 규칙 기반, true 시 노트별 LLM 초안, 실패 시 규칙 폴백) |
 | `wiki_knowledge.auto_apply_updates` | `false` | **항상 false — Obsidian 원본 자동 수정 금지** |
 | `wiki_knowledge.graph_enabled` | `true` | Wiki Knowledge Graph 동기화(registry/vault 백필 + 세션 실시간 동기화) — 파생 데이터라 기본 활성 |
 | `wiki_knowledge.graph_retrieval_expand_enabled` | `true` | 회의록 생성 컨텍스트를 그래프로 1-hop 확장(`graph_expand_titles()`) — 그래프 DB가 비어 있어도 조용히 건너뛰므로 기본 활성. 효과를 보려면 `scripts/graph_backfill.py`로 먼저 백필 |
@@ -763,7 +764,7 @@ LLM은 다음 고정 답변 구조를 반드시 따르도록 강제된다:
 | `supermemory.enabled` | `false` | Supermemory 팩트 메모리 활성화 — Obsidian 저장 시 동시 저장, 다음 회의 컨텍스트·사실 검증 시 자동 참조 |
 | `supermemory.api_key` | `""` | Supermemory API 키 (클라우드) 또는 로컬 서버는 빈 값 허용 |
 | `supermemory.base_url` | `"https://api.supermemory.ai"` | 자체 호스팅 시 `http://localhost:6767` |
-| `notify.on_finish` | `"email"` | 완료 후 알림 채널 |
+| `notify.on_finish` | `"none"` | 완료 후 알림 채널 (none/email/slack/teams/all) |
 | `email.markdown_attachment` | `"txt"` | 첨부 형식 (txt=UTF-8 BOM 변환 / markdown=원본) |
 
 ---
@@ -1059,7 +1060,7 @@ PyInstaller `.exe` 배포(`scripts/build/build_exe.spec`)는 원격 MCP 서버(`
 
 | 기능 | config 키 | 이유 |
 |---|---|---|
-| LLM 기반 proposal 초안 생성 | `wiki_knowledge.proposal_llm_enabled` | 규칙 기반 추출로 MVP 충분, 비용 절감 |
+| ~~LLM 기반 proposal 초안 생성~~ (구현됨) | `wiki_knowledge.proposal_llm_enabled` | **구현 완료** — 기본은 규칙 기반(비용 절감), `true` 시 노트별 LLM 초안(실패 시 규칙 폴백) |
 | Vector DB (FAISS/Qdrant 등) | — | 노트 단위 임베딩 하이브리드 검색은 구현 완료(`wiki_knowledge.embedding_enabled`, RRF 융합) — Vault 규모 증가 시 전용 저장소 검토 |
 | 섹션 단위 임베딩 + Reranker | — | 현재는 노트 단위 임베딩 + 섹션 단위 TF-IDF 조합 |
 | Graph DB / GraphRAG | `wiki_knowledge.graph_enabled` | 구현 완료 (경량 SQLite, `wiki_core/graph_db.py`) — "Wiki Knowledge Graph" 절 참고 |

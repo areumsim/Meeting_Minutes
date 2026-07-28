@@ -168,7 +168,7 @@ meeting-minutes mcp-token --name 홍길동
 |------|------|
 | `✗ 연결 실패` | Obsidian 실행 중인지 + Local REST API 플러그인 켜졌는지 확인 |
 | 회의록이 비거나 401 | `config.json` API 키 확인 |
-| Claude 404(model) | `config.json`의 `claude_model`을 `claude-sonnet-4-6`로 |
+| Claude 404(model) | `config.json`의 `claude_model`을 유효한 값(예: `claude-opus-4-8`·`claude-sonnet-5`·`claude-haiku-4-5`)으로 변경 |
 | 메일 안 옴 | `config.json` `email` 의 sender/password(앱 비밀번호)/recipient 확인 |
 | 한글 깨짐(Windows) | 명령 앞에 `set PYTHONUTF8=1` |
 | Obsidian에 저장 안 됨 | `python run_meeting.py obsidian --ping` 먼저 확인 |

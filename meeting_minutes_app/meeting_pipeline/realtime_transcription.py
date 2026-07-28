@@ -1463,15 +1463,25 @@ class RealtimeSession:
         self._worker: Optional[threading.Thread] = None
 
         # 실시간 vault 검색 (wiki.realtime_vault_search 게이트, 논블로킹) —
-        # 회의 중 관련 노트를 📎 줄로 표시하고 종료 후 회의록 컨텍스트에 병합
+        # 회의 중 관련 노트를 📎 줄로 표시하고 종료 후 회의록 컨텍스트에 병합.
+        # 실시간 '웹' 보완은 웹 UI 전용이며 CLI는 내부 노트 검색만 수행한다(FR-12).
         self.vault_searcher = None
         try:
             from meeting_minutes_app.wiki_core.realtime_search import RealtimeVaultSearcher
-            _searcher = RealtimeVaultSearcher(topic=self.topic,
-                                              on_notes=self._display_related_notes)
+            _searcher = RealtimeVaultSearcher(
+                topic=self.topic,
+                on_notes=self._display_related_notes,
+                on_status=self._display_search_status)
             if _searcher.enabled:
                 self.vault_searcher = _searcher
-                print(f"  {C_GREEN}[Wiki]{C_RESET} 실시간 vault 검색 활성")
+                print(f"  {C_GREEN}[Wiki]{C_RESET} 실시간 관련 노트 검색 활성 "
+                      f"{C_GRAY}(내부자료 우선 — 섹션·논문 노트 포함){C_RESET}")
+                _searcher.warmup()   # 인덱스 연결을 미리 확인(논블로킹) → 사유 즉시 안내
+            else:
+                _st = _searcher.status()
+                if _st.get("reasonText"):
+                    print(f"  {C_YELLOW}[Wiki]{C_RESET} 실시간 관련 노트 검색 꺼짐 — "
+                          f"{C_GRAY}{_st['reasonText']}{C_RESET}")
         except Exception:
             self.vault_searcher = None
 
@@ -1535,25 +1545,57 @@ class RealtimeSession:
         self.recorder = None      # WS 모드에서는 WebSocketAudioStreamer 사용
         self.transcriber = None   # WS 모드에서는 WebSocketTranscriber 사용
 
+    def _print_indicator_safe(self, line: str) -> None:
+        """인디케이터와 충돌하지 않게 한 줄 출력 (검색 풀 스레드에서 호출됨)."""
+        if self.indicator and self.indicator._scroll_locked:
+            self.indicator.buffer_line(line)
+            return
+        if self.indicator:
+            self.indicator.claim()
+        print(line, flush=True)
+        if self.indicator:
+            self.indicator.release()
+
+    def _display_search_status(self, status) -> None:
+        """실시간 검색 백엔드 상태/비활성 사유를 1회 안내 (FR-1)."""
+        try:
+            if status.get("enabled"):
+                return
+            reason = status.get("reasonText") or ""
+            if not reason:
+                return
+            self._print_indicator_safe(
+                f"\n  {C_YELLOW}[Wiki]{C_RESET} {C_GRAY}관련 노트 검색 비활성 — "
+                f"{reason}{C_RESET}")
+        except Exception:
+            pass
+
     def _display_related_notes(self, notes):
         """실시간 vault 검색 결과를 터미널에 한 줄로 표시.
 
         RealtimeVaultSearcher의 검색 풀 스레드에서 호출된다 —
-        전사 출력과 같은 claim/release/buffer_line 규율로 직렬화."""
+        전사 출력과 같은 claim/release/buffer_line 규율로 직렬화.
+        근거 추적(FR-3)을 위해 섹션경로·점수·경로를 함께 보여준다."""
         try:
-            titles = " · ".join(f"[[{n.get('title', '')}]]" for n in notes[:3]
-                                if n.get("title"))
-            if not titles:
+            parts = []
+            for n in notes[:3]:
+                title = n.get("title", "")
+                if not title:
+                    continue
+                icon = "🎓" if n.get("source_type") == "paper" else "📄"
+                heading = n.get("heading") or ""
+                label = f"[[{title}#{heading}]]" if heading else f"[[{title}]]"
+                score = float(n.get("score", 0) or 0)
+                parts.append(f"{icon} {label} ({score:.2f})")
+            if not parts:
                 return
+            titles = " · ".join(parts)
+            paths = " | ".join(str(n.get("filename", "")) for n in notes[:3]
+                               if n.get("filename"))
             line = f"\n  {C_GRAY}📎 관련: {titles}{C_RESET}"
-            if self.indicator and self.indicator._scroll_locked:
-                self.indicator.buffer_line(line)
-            else:
-                if self.indicator:
-                    self.indicator.claim()
-                print(line, flush=True)
-                if self.indicator:
-                    self.indicator.release()
+            if paths:
+                line += f"\n     {C_GRAY}↳ {paths}{C_RESET}"
+            self._print_indicator_safe(line)
         except Exception:
             pass
 

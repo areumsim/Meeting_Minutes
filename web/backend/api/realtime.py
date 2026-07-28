@@ -182,6 +182,9 @@ class BrowserRealtimeSession:
         self._notes_lock = threading.Lock()
         self._web_pool = ThreadPoolExecutor(max_workers=1)  # 웹 검색 보완용
         self._segment_counter = 0  # 웹 검색 throttle용
+        # 웹은 보완재 — 내부(vault) 검색이 후보를 찾아낸 구간에서는 웹 검색을 건너뛴다
+        # (wiki.realtime_web_only_if_no_vault_hit). 내부 후보 누적 개수의 증가로 판정.
+        self._internal_seen_count = 0
 
         # F2 화자분리 후처리(opt-in): 실시간 전사는 화자 라벨을 못 만들므로, 활성화 시
         # 스트리밍 PCM을 모아 두었다가 종료 후 diarize 모델로 재전사해 speaker를 채운다.
@@ -208,13 +211,7 @@ class BrowserRealtimeSession:
         topic = self.config.get("topic", "")
         speakers = self.config.get("speakers", "")
 
-        # 실시간 vault 검색 (config.wiki.realtime_vault_search 게이트는 모듈 내부에서 검사)
-        try:
-            from meeting_minutes_app.wiki_core.realtime_search import RealtimeVaultSearcher
-            self._searcher = RealtimeVaultSearcher(
-                topic=topic, on_notes=self._emit_related_notes, allow_launch=True)
-        except Exception:
-            self._searcher = None
+        self._searcher = self._create_searcher(topic)
 
         # DB 세션 생성
         self.session_id = db.create_session(
@@ -565,18 +562,7 @@ class BrowserRealtimeSession:
             if self._searcher is not None:
                 self._searcher.offer_segment(final_text)
             self._segment_counter += 1
-            try:
-                from meeting_minutes_app.common import config_loader as _rc
-                online_search_on = bool(_rc.get("wiki.online_search_enabled", False))
-                web_interval = int(_rc.get("wiki.realtime_web_search_interval", 0) or 0)
-            except Exception:
-                online_search_on = False
-                web_interval = 0
-            if online_search_on and web_interval > 0 and self._segment_counter % web_interval == 0:
-                self._web_pool.submit(
-                    self._web_research_segment,
-                    final_text,
-                )
+            self._maybe_web_research(final_text)
 
             self._cleanup_item(item_id)
 
@@ -681,10 +667,27 @@ class BrowserRealtimeSession:
                 "translateError": str(e),
             })
 
+    def _create_searcher(self, topic: str):
+        """실시간 관련 노트 검색기 생성 (config.wiki.realtime_vault_search 게이트는
+        모듈 내부에서 검사). warmup()으로 백엔드 연결을 미리 확인해 첫 발화를
+        기다리지 않고 상태 배지를 띄운다 — 비활성이면 사유까지(과거엔 조용히
+        no-op이라 원인 불명이었다). 생성 실패는 녹음을 막지 않는다."""
+        try:
+            from meeting_minutes_app.wiki_core.realtime_search import RealtimeVaultSearcher
+            searcher = RealtimeVaultSearcher(
+                topic=topic, on_notes=self._emit_related_notes,
+                on_status=self._emit_search_status, allow_launch=True)
+            searcher.warmup()
+            return searcher
+        except Exception:
+            return None
+
     def _emit_related_notes(self, notes: List[Dict]) -> None:
         """RealtimeVaultSearcher 검색 풀 스레드에서 호출 — 관련 노트를 브라우저로 push.
 
-        페이로드는 기존 related_notes 이벤트의 superset (title/snippet 추가).
+        페이로드는 기존 related_notes 이벤트의 superset — 근거 추적(FR-3)을 위해
+        섹션경로·heading·score·출처유형을 함께 싣는다. 표시 정책(비방해·내부 우선)은
+        프런트(Recorder)가 담당한다.
         """
         try:
             self._send_to_browser({
@@ -694,8 +697,14 @@ class BrowserRealtimeSession:
                         "filename": n.get("filename", ""),
                         "title": n.get("title", ""),
                         "score": round(float(n.get("score", 0) or 0), 3),
+                        "rankScore": round(float(n.get("rank_score", 0) or 0), 6),
                         "matches": (n.get("matches") or [])[:2],
                         "snippet": n.get("snippet", ""),
+                        "heading": n.get("heading", ""),
+                        "sectionPath": n.get("section_path", ""),
+                        "sourceType": n.get("source_type", "note"),
+                        "foundBy": n.get("found_by", ""),
+                        "segmentText": n.get("segment_text", ""),
                     }
                     for n in notes
                 ],
@@ -704,20 +713,81 @@ class BrowserRealtimeSession:
         except Exception:
             pass  # 전송 실패는 무시 (실시간 스트림에 영향 없어야 함)
 
+    def _emit_search_status(self, status: Dict) -> None:
+        """실시간 검색 백엔드 연결 상태/비활성 사유를 배지용으로 push (FR-1).
+
+        notes 는 비우고 status 만 실어 보낸다 — 프런트는 기존 목록을 유지한다.
+        """
+        try:
+            self._send_to_browser({
+                "type": "related_notes",
+                "notes": [],
+                "status": {
+                    "enabled": bool(status.get("enabled")),
+                    "gate": bool(status.get("gate")),
+                    "backend": status.get("backend", ""),
+                    "reason": status.get("reason", ""),
+                    "reasonText": status.get("reasonText", ""),
+                },
+                "elapsed": time.time() - self._session_start,
+            })
+        except Exception:
+            pass
+
+    def _maybe_web_research(self, text: str) -> None:
+        """웹 보완 검색 트리거 — 게이트/스로틀 + '내부에서 못 찾았을 때만' 정책(FR-11).
+
+        내부(vault) 후보가 새로 잡힌 구간에서는 웹을 건너뛴다. 항상 웹도 함께 보려면
+        wiki.realtime_web_only_if_no_vault_hit=false.
+        """
+        try:
+            from meeting_minutes_app.common import config_loader as _rc
+            online_search_on = bool(_rc.get("wiki.online_search_enabled", False))
+            web_interval = int(_rc.get("wiki.realtime_web_search_interval", 0) or 0)
+            vault_first = bool(_rc.get("wiki.realtime_web_only_if_no_vault_hit", True))
+        except Exception:
+            return
+        if not online_search_on or web_interval <= 0:
+            return
+        if self._segment_counter % web_interval != 0:
+            return
+        if vault_first and self._searcher is not None and self._searcher.enabled:
+            found = len(self._searcher.collected_notes())
+            if found > self._internal_seen_count:
+                self._internal_seen_count = found
+                return  # 내부자료로 충분 — 웹 호출(비용·지연) 생략
+        self._web_pool.submit(self._web_research_segment, text)
+
     def _web_research_segment(self, text: str) -> None:
-        """세그먼트 텍스트로 웹 검색 보완 (백그라운드 스레드, 비차단)."""
+        """세그먼트 텍스트로 웹 검색 보완 (백그라운드 스레드, 비차단).
+
+        결과는 회의록 memo 병합용으로 누적하고, 화면에는 내부 결과와 같은 바에
+        웹(🌐) 출처로 뒤이어 표시한다(FR-10 — 내부가 앞줄).
+        """
         try:
             from meeting_minutes_app.common import config_loader as _rc
             from meeting_minutes_app.meeting_pipeline import meeting_minutes as mm
             llm = mm.LLMClient(preferred=_rc.get("models.llm", "gpt") or "gpt")
             result = llm.web_research(text[:60])
             if result and result.get("text"):
+                sources = result.get("sources", [])[:3]
                 with self._notes_lock:
                     self._web_findings.append({
                         "segment_text": text[:80],
                         "result": result.get("text", "")[:500],
-                        "sources": result.get("sources", [])[:3],
+                        "sources": sources,
                     })
+                self._emit_related_notes([{
+                    "filename": (sources[0] if sources else ""),
+                    "title": (str(sources[0])[:60] if sources else "웹 검색 결과"),
+                    "score": 0.0,
+                    "rank_score": 0.0,
+                    "snippet": result.get("text", "")[:200],
+                    "section_path": "",
+                    "source_type": "web",
+                    "found_by": "web",
+                    "segment_text": text[:200],
+                }])
         except Exception:
             pass
 
@@ -987,8 +1057,13 @@ class BrowserRealtimeSession:
                 _t = asyncio.create_task(_translate_fast(seg))
                 fast_tr_tasks.add(_t)
                 _t.add_done_callback(fast_tr_tasks.discard)
+            # 실시간 관련정보: 내부(vault) 검색은 항상, 웹 보완은 게이트+내부 미발견 시만.
+            # (과거엔 HTTP 청크 경로에 웹 보완 트리거가 아예 없어, 기본 모드에서
+            #  realtime_web_search_interval 을 켜도 아무 일도 일어나지 않았다.)
             if self._searcher is not None:
                 self._searcher.offer_segment(text)
+            self._segment_counter += 1
+            self._maybe_web_research(text)
 
         stt_sem = asyncio.Semaphore(STT_CONCURRENCY)
         stt_workers: set = set()

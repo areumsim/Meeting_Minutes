@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from "react";
+﻿import React, { useState, useEffect, useRef, useCallback } from "react";
 import {
   Mic, Square, Play, Pause, Loader2, Volume2,
   Activity, Settings2, User, ChevronDown, Info, BookOpen,
@@ -18,6 +18,31 @@ interface RelatedNote {
   title: string;
   score: number;
   snippet?: string;
+  heading?: string;         // 매칭된 섹션(헤딩) — 근거 추적용
+  sectionPath?: string;     // "노트 › 헤딩"
+  sourceType?: string;      // note(📄) | paper(🎓) | web(🌐)
+  foundBy?: string;         // section | note | web
+  segmentText?: string;     // 이 노트를 띄운 발화
+  rankScore?: number;
+}
+
+// 실시간 검색 백엔드 상태(FR-1) — 왜 안 뜨는지 조용히 알려주는 배지용
+interface WikiSearchStatus {
+  enabled: boolean;
+  gate: boolean;
+  backend: string;
+  reason: string;
+  reasonText: string;
+}
+
+const SOURCE_ICON: Record<string, string> = { paper: "🎓", web: "🌐", note: "📄" };
+
+// 내부(📄/🎓)를 웹(🌐)보다 앞줄에 두고, 그 안에서는 랭크 점수 순으로 정렬한다.
+function sortRelated(notes: RelatedNote[]): RelatedNote[] {
+  const weight = (n: RelatedNote) =>
+    n.sourceType === "web" ? 2 : n.sourceType === "paper" ? 0 : 1;
+  return [...notes].sort((a, b) =>
+    weight(a) - weight(b) || (b.rankScore ?? b.score ?? 0) - (a.rankScore ?? a.score ?? 0));
 }
 
 // 음성 인식(STT) 모델 선택지 — config_schema의 models.stt 옵션과 동일하게 유지.
@@ -48,6 +73,10 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
   const [httpFallback, setHttpFallback] = useState(false);
   // 백엔드 모드 — 서버가 STT/실시간 vault 검색/회의록 생성 수행 (API 키 미노출)
   const [relatedNotes, setRelatedNotes] = useState<RelatedNote[]>([]);
+  const [wikiStatus, setWikiStatus] = useState<WikiSearchStatus | null>(null);
+  // 관련 노트 근거(점수·섹션경로·snippet·발화) 펼침 — 사용자가 눌렀을 때만 펼친다
+  // (자동 갱신으로는 절대 레이아웃이 움직이지 않게 하기 위함, FR-10)
+  const [wikiExpanded, setWikiExpanded] = useState(false);
   const [costRates, setCostRates] = useState<CostRates | null>(null);
   // 이번 녹음에 쓸 STT 모델(설정 기본값이 자동 채워지며, 이 값만 바꿔도 설정은 안 바뀜)
   const [sttModel, setSttModel] = useState<string>("");
@@ -378,22 +407,33 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
         }
 
         case "related_notes":
-          // 실시간 vault 검색 결과 — 발화 중 관련 위키 노트 힌트
-          setRelatedNotes(prev => {
-            const merged = [...(msg.notes || []).map((n: any) => ({
-              filename: n.filename || "",
-              title: n.title || (n.filename || "").split(/[\\/]/).pop()?.replace(/\.md$/, "") || "",
-              score: n.score || 0,
-              snippet: n.snippet || "",
-            })), ...prev];
-            const seen = new Set<string>();
-            return merged.filter(n => {
-              const key = n.filename || n.title;
-              if (!key || seen.has(key)) return false;
-              seen.add(key);
-              return true;
-            }).slice(0, 20);
-          });
+          // 실시간 관련 노트 — 내부(vault) 검색 결과 + (게이트 시) 웹 보완.
+          // status 만 실려 오는 이벤트는 배지 갱신용(notes 는 비어 있음).
+          if (msg.status) setWikiStatus(msg.status as WikiSearchStatus);
+          if ((msg.notes || []).length > 0) {
+            setRelatedNotes(prev => {
+              const merged = [...(msg.notes || []).map((n: any) => ({
+                filename: n.filename || "",
+                title: n.title || (n.filename || "").split(/[\\/]/).pop()?.replace(/\.md$/, "") || "",
+                score: n.score || 0,
+                snippet: n.snippet || "",
+                heading: n.heading || "",
+                sectionPath: n.sectionPath || "",
+                sourceType: n.sourceType || "note",
+                foundBy: n.foundBy || "",
+                segmentText: n.segmentText || "",
+                rankScore: n.rankScore ?? 0,
+              })), ...prev];
+              const seen = new Set<string>();
+              const deduped = merged.filter(n => {
+                const key = n.filename || n.title;
+                if (!key || seen.has(key)) return false;
+                seen.add(key);
+                return true;
+              });
+              return sortRelated(deduped).slice(0, 20);
+            });
+          }
           break;
 
         case "status":
@@ -505,6 +545,8 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
       setStatus("connecting");
       setLiveTranscript([]);
       setRelatedNotes([]);
+      setWikiStatus(null);
+      setWikiExpanded(false);
       setDuration(0);
       setHttpFallback(false);
       try {
@@ -873,6 +915,8 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
     setIsPaused(false);
     setLiveTranscript([]);
     setRelatedNotes([]);
+    setWikiStatus(null);
+    setWikiExpanded(false);
     setDuration(0);
     setSessionId(null);
     setWsStatus("");
@@ -892,6 +936,8 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
     wsRef.current = null;
     setLiveTranscript([]);
     setRelatedNotes([]);
+    setWikiStatus(null);
+    setWikiExpanded(false);
     setDuration(0);
     setSessionId(null);
     setWsStatus("");
@@ -981,37 +1027,96 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
           </div>
         )}
 
-        {/* Live Wiki — 실시간 vault 검색 관련 노트 (백엔드 모드, wiki.realtime_vault_search) */}
-        <AnimatePresence>
-          {relatedNotes.length > 0 && (
-            <motion.div
-              initial={{ height: 0, opacity: 0 }}
-              animate={{ height: "auto", opacity: 1 }}
-              exit={{ height: 0, opacity: 0 }}
-              className="bg-emerald-50 border-b border-emerald-100 shrink-0 overflow-hidden"
-            >
-              <div className="px-4 md:px-8 py-2.5 flex items-center gap-2 overflow-x-auto">
-                <span className="flex items-center gap-1.5 text-[10px] font-black uppercase tracking-widest text-emerald-600 shrink-0">
-                  <BookOpen className="w-3.5 h-3.5" /> Live Wiki
+        {/* 관련 노트 바 (wiki.realtime_vault_search) — 비방해 표시 규칙(FR-10):
+            · 녹음 중에는 높이가 고정된 얇은 바를 항상 띄워 둔다 → 검색 결과가 새로
+              들어와도 전사 본문이 밀리지 않는다(자동 리플로우 0).
+            · 팝업·토스트·소리·포커스 이동 없음. 근거 펼치기는 사용자가 눌렀을 때만.
+            · 내부(📄 노트 / 🎓 논문)를 웹(🌐)보다 앞줄에 둔다(sortRelated).
+            · 백엔드 미연결/비활성 사유도 같은 바에 조용히 배지로 표시(FR-1). */}
+        {(isRecording || relatedNotes.length > 0 || (wikiStatus && !wikiStatus.enabled)) && (
+          <div className="bg-emerald-50/70 border-b border-emerald-100 shrink-0">
+            <div className="px-4 md:px-8 h-9 flex items-center gap-2 overflow-x-auto overflow-y-hidden">
+              <span className="flex items-center gap-1.5 text-[10px] font-black uppercase tracking-widest text-emerald-600 shrink-0">
+                <BookOpen className="w-3.5 h-3.5" /> 관련 노트
+              </span>
+
+              {/* 상태 배지 — 꺼짐/미연결 사유 (전사를 방해하지 않는 회색 톤) */}
+              {wikiStatus && !wikiStatus.enabled && (
+                <span
+                  title={wikiStatus.reasonText}
+                  className="shrink-0 text-[11px] bg-white border border-zinc-200 text-zinc-500 px-2 py-0.5 rounded-full whitespace-nowrap max-w-[60vw] truncate"
+                >
+                  검색 꺼짐 — {wikiStatus.reasonText}
                 </span>
-                {relatedNotes.slice(0, 8).map((n) => (
-                  <span
-                    key={n.filename || n.title}
-                    title={n.snippet || n.filename}
-                    className="shrink-0 text-xs font-medium bg-white border border-emerald-200 text-emerald-800 px-2.5 py-1 rounded-full whitespace-nowrap"
-                  >
-                    [[{n.title}]]
-                  </span>
+              )}
+
+              {relatedNotes.slice(0, 8).map((n) => (
+                <button
+                  key={n.filename || n.title}
+                  type="button"
+                  onClick={() => setWikiExpanded(true)}
+                  title={`${n.sectionPath || n.title}\n${n.snippet || n.filename}`}
+                  className="shrink-0 text-xs font-medium bg-white border border-emerald-200 text-emerald-800 px-2.5 py-1 rounded-full whitespace-nowrap hover:border-emerald-400 transition-colors"
+                >
+                  {SOURCE_ICON[n.sourceType || "note"] || "📄"} [[{n.title}
+                  {n.heading ? `#${n.heading}` : ""}]]
+                </button>
+              ))}
+              {relatedNotes.length > 8 && (
+                <span className="shrink-0 text-[10px] text-emerald-500 font-bold">
+                  +{relatedNotes.length - 8}
+                </span>
+              )}
+              {relatedNotes.length === 0 && (!wikiStatus || wikiStatus.enabled) && (
+                <span className="shrink-0 text-[11px] text-emerald-600/60">
+                  {wikiStatus?.enabled ? "발화와 관련된 내부 노트를 찾는 중…" : "대기 중…"}
+                </span>
+              )}
+              {relatedNotes.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setWikiExpanded((v) => !v)}
+                  className="ml-auto shrink-0 flex items-center gap-1 text-[10px] font-bold text-emerald-600 hover:text-emerald-800"
+                >
+                  <ChevronDown className={`w-3.5 h-3.5 transition-transform ${wikiExpanded ? "" : "-rotate-90"}`} />
+                  {wikiExpanded ? "근거 접기" : "근거 보기"}
+                </button>
+              )}
+            </div>
+
+            {/* 근거 상세 — 사용자가 펼쳤을 때만. 자체 스크롤이라 전사 영역을 잠식하지 않는다. */}
+            {wikiExpanded && relatedNotes.length > 0 && (
+              <div className="px-4 md:px-8 pb-2 max-h-44 overflow-y-auto border-t border-emerald-100">
+                {relatedNotes.map((n) => (
+                  <div key={`ev-${n.filename || n.title}`} className="py-1.5 border-b border-emerald-100/60 last:border-0">
+                    <div className="flex items-baseline gap-2 flex-wrap">
+                      <span className="text-xs font-bold text-emerald-900">
+                        {SOURCE_ICON[n.sourceType || "note"] || "📄"} {n.sectionPath || n.title}
+                      </span>
+                      <span className="text-[10px] font-mono text-zinc-400 tabular-nums">
+                        score {(n.score ?? 0).toFixed(2)}
+                        {n.foundBy ? ` · ${n.foundBy === "section" ? "섹션 일치" : n.foundBy === "web" ? "웹" : "노트 일치"}` : ""}
+                      </span>
+                      {n.filename && (
+                        <span className="text-[10px] text-zinc-400 truncate max-w-[40vw]">{n.filename}</span>
+                      )}
+                    </div>
+                    {n.snippet && (
+                      <p className="text-[11px] text-zinc-600 mt-0.5 line-clamp-2">{n.snippet}</p>
+                    )}
+                    {n.segmentText && (
+                      <p className="text-[10px] text-zinc-400 mt-0.5 italic truncate">발화: {n.segmentText}</p>
+                    )}
+                  </div>
                 ))}
-                {relatedNotes.length > 8 && (
-                  <span className="shrink-0 text-[10px] text-emerald-500 font-bold">
-                    +{relatedNotes.length - 8}
-                  </span>
-                )}
+                <p className="text-[10px] text-zinc-400 pt-1.5">
+                  녹음 중에는 노트로 이동하지 않습니다(녹음 보호). 종료 후 회의 상세의
+                  <b> 참조된 관련 노트</b>에서 클릭해 열 수 있습니다.
+                </p>
               </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
+            )}
+          </div>
+        )}
 
         <div className="flex-1 flex flex-col p-4 md:p-10">
           {/* Settings Toggle */}

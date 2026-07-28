@@ -238,6 +238,7 @@ SCHEMA: List[Dict[str, Any]] = [
             {"section": "wiki", "key": "realtime_note_candidates", "label": "실시간 노트 후보 수", "type": "number", "default": 10, "desc": "발화별로 모을 노트 단위 후보 개수(키워드+의미 검색 융합). 영어 발화로 한국어 노트를 찾는 교차언어 검색은 이 경로가 담당합니다."},
             {"section": "wiki", "key": "realtime_display_count", "label": "실시간 표시 개수", "type": "number", "default": 3, "desc": "녹음 화면 상단 칩으로 한 번에 표시할 관련 노트 수. 전사 화면을 방해하지 않도록 작게 두세요."},
             {"section": "wiki", "key": "realtime_web_search_interval", "label": "실시간 웹검색 간격(세그먼트)", "type": "number", "default": 0, "desc": "0=사용 안 함(권장). '온라인 검색 보완'이 켜져 있을 때만 동작하고, 웹 UI 녹음 전용입니다(터미널 CLI 녹음에는 적용되지 않음). 내부 노트 결과 뒤에 보완재로만 표시됩니다."},
+            {"section": "wiki", "key": "realtime_web_only_if_no_vault_hit", "label": "웹검색은 내부 미발견 시만", "type": "bool", "default": True, "desc": "켜 두면(권장) 내부 노트에서 관련 자료를 찾은 구간에서는 웹 호출을 건너뜁니다 — 웹은 보완재. 끄면 간격마다 항상 웹도 조회합니다(비용 증가)."},
             {"section": "wiki", "key": "claim_verify_max", "label": "검증할 최대 주장 수", "type": "number", "default": 8},
             {"section": "wiki", "key": "claim_web_verify", "label": "주장 웹 검증", "type": "bool", "default": False},
             {"section": "wiki_knowledge", "key": "proposal_llm_enabled", "label": "제안 LLM 생성", "type": "bool", "default": False},

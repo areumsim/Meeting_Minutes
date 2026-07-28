@@ -19,7 +19,7 @@ from __future__ import annotations
 import re
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 for _s in (sys.stdout, sys.stderr):
     if getattr(_s, "encoding", None) and _s.encoding.lower() in ("cp949", "euc-kr", "ansi"):
@@ -423,8 +423,13 @@ class WikiQA:
                         if path_key and path_key not in seen_paths:
                             seen_paths.add(path_key)
                             obs_results.append(hit)
+                from meeting_minutes_app.wiki_core.vault_indexer import _is_indexable_note
                 for i, r in enumerate(obs_results):
                     fname = r.get("filename", "")
+                    # 비-.md / 그림자 사본(*.txt.md 등)은 회의로 오인용되므로 제외(인덱서와 동일 기준).
+                    _fn = str(fname).replace("\\", "/")
+                    if not _fn.lower().endswith(".md") or not _is_indexable_note(_fn):
+                        continue
                     title = Path(fname.replace("\\", "/")).stem
                     norm = _norm_title(title)
                     if not norm or _seen_equiv(norm, seen_titles):
@@ -506,6 +511,20 @@ class WikiQA:
             _ranged = [r for r in results if _in_range(r)]
             if _ranged:
                 results = _ranged
+
+        # 회의 시점질의(예: "가장 최근 회의 3개")는 최종적으로 회의류 노트만 남긴다 —
+        # 비회의 파일이 '작성일'만으로 상위에 오르는 것을 차단(근본원인 B/G). 게이트는
+        # 회의 의도(_MEETING_PAT 또는 플래너 types가 회의류)일 때로 한정해 'aggregate'(비회의)
+        # 시점질의는 건드리지 않는다. 필터 결과가 비면 원본을 유지(과필터 방지).
+        _meeting_scope = bool(_MEETING_PAT.search(question)) or bool(
+            {str(t).lower() for t in (plan.get("types") or [])}
+            & {"meeting", "seminar", "lecture"})
+        if _time_query and _meeting_scope:
+            _mdirs = _c("indexing.meeting_dirs",
+                        ["00_Meetings", "회의", "Meetings", "회의별"]) or []
+            _filtered = [r for r in results if _is_meeting_note(r, _mdirs)]
+            if _filtered:
+                results = _filtered
 
         # raw score는 index/REST 간 스케일이 달라 자체 랭킹으로 정렬
         results.sort(key=lambda x: -x.get("rank_score", 0))
@@ -597,6 +616,25 @@ _MEETING_PAT = re.compile(r"회의|미팅|세미나|강의|meeting|seminar", re.
 def _is_recency_query(text: str) -> bool:
     """질문이 시점/최근성을 묻는지 여부 — 맞으면 컨텍스트를 작성일 내림차순 우선 정렬한다."""
     return bool(_RECENCY_PAT.search(str(text or "")))
+
+
+def _is_meeting_note(note: Dict[str, Any], meeting_dirs: Sequence[str] = ()) -> bool:
+    """노트가 '회의류'(회의/미팅/세미나/강의)인지 판정 — 시점질의 최종 필터용.
+
+    실제 회의 노트도 frontmatter type이 비어 있는 경우가 많아, type 외에 회의 폴더 경로·
+    제목/파일명의 회의 키워드로도 인정한다. 이로써 비회의 파일(requirements.txt 등)이
+    '작성일'만으로 '가장 최근 회의' 상위에 오르는 것을 차단한다."""
+    t = str(note.get("type") or "").lower()
+    if t in ("meeting", "seminar", "lecture"):
+        return True
+    path = str(note.get("path") or "").replace("\\", "/")
+    for m in meeting_dirs or ():
+        if m and str(m).replace("\\", "/") in path:
+            return True
+    base = Path(path).name
+    if _MEETING_PAT.search(str(note.get("title") or "")) or _MEETING_PAT.search(base):
+        return True
+    return False
 
 
 def _recency_date_key(note: Dict[str, Any]) -> str:

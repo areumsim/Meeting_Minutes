@@ -246,7 +246,11 @@
     "_auto_reindex_after_write_comment": "true 시 회의 처리·노트 저장 직후 검색 인덱스+지식 그래프를 자동 재빌드해 위키/그래프가 항상 최신. 기본 true(임베딩은 증분이라 새 노트만 재계산 → 저렴, 후처리라 대기 없음). 대용량 볼트에서 매번 수 초가 부담이면 false. 수동: python run_meeting.py reindex",
     "auto_reindex_after_write": true,
     "_vault_path_comment": "비우면 obsidian.vault_path 를 공유. 직접 파일시스템 접근 경로이며 Local REST API 볼트와 같아야 검색/저장 경로가 어긋나지 않습니다.",
-    "vault_path": ""
+    "vault_path": "",
+    "_exclude_dirs_comment": "인덱싱에서 제외할 경로 조각(부분 문자열). 바이너리/코드 원본 아카이브를 노트로 오인용하는 것 방지. 그림자 사본(requirements.txt.md 등)은 자동 제외되므로 폴더만 지정. 예: [\"99_원본파일\", \"바이너리\", \"/.trash/\"].",
+    "exclude_dirs": ["99_원본파일", "바이너리", "/.trash/"],
+    "_meeting_dirs_comment": "'회의' 노트로 인정할 폴더 조각(부분 문자열). frontmatter type이 비어 있어도 이 폴더 아래 노트는 '가장 최근 회의' 시점질의에서 회의로 취급. 예: [\"00_Meetings\", \"회의\", \"Meetings\", \"회의별\"].",
+    "meeting_dirs": ["00_Meetings", "회의", "Meetings", "회의별"]
   },
   "wiki": {
     "_comment": "LLM Wiki Q&A 및 실시간 사실 검증 설정.",

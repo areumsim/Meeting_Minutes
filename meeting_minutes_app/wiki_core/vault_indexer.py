@@ -59,10 +59,48 @@ def _resolve_note_date(meta: Dict[str, Any], rel_path: str) -> str:
             if normalize_iso_date:
                 return normalize_iso_date(v) or v
             return v
-    try:
-        return parse_iso_date_from_text(rel_path) if parse_iso_date_from_text else ""
-    except Exception:
+    # 파일명 → 직속 부모폴더 순으로만 날짜 추출한다. 전체 경로를 스캔하면 조부모 이상
+    # 폴더명의 날짜가 새어 엉뚱한(대개 오래된) 날짜가 붙는다 — 예:
+    # ".../251117_양자회의/qc_code251106/NEXT_STEPS.md.md" 가 조부모 '251117'을 상속.
+    if not parse_iso_date_from_text:
         return ""
+    try:
+        p = Path(rel_path)
+        for cand in (p.name, p.parent.name):
+            d = parse_iso_date_from_text(cand)
+            if d:
+                return d
+    except Exception:
+        pass
+    return ""
+
+
+# 텍스트추출 그림자 사본(requirements.txt.md, foo.md.md, bar.json.md 등)의 원본 확장자.
+# 바이너리/코드 원본의 부산물이라 '노트'가 아니며, '가장 최근 회의'로 오인용되던 원인이다.
+_SHADOW_EXTS: set = {
+    ".txt", ".md", ".json", ".csv", ".tsv", ".py", ".ipynb", ".yaml", ".yml",
+    ".pptx", ".ppt", ".docx", ".doc", ".xlsx", ".xls", ".pdf", ".log", ".html",
+}
+
+
+def _is_indexable_note(rel_path: str, exclude_dirs: Sequence[str] = ()) -> bool:
+    """볼트의 .md 파일을 '노트'로 인덱싱할지 판정한다.
+
+    제외 대상:
+      (1) 텍스트추출 그림자 사본 — .md를 떼어낸 stem이 또 다른 알려진 확장자로 끝남
+          (requirements.txt.md → stem 'requirements.txt' → 제외).
+      (2) exclude_dirs 경로 substring에 걸리는 파일(바이너리 원본 아카이브 등).
+    회의가 아닌 파일이 회의로 인용되던 문제(P: 최근회의 오인용)의 1차 방어선."""
+    base = os.path.basename(rel_path)
+    stem = base[:-3] if base.lower().endswith(".md") else base
+    if Path(stem).suffix.lower() in _SHADOW_EXTS:
+        return False
+    rel_norm = rel_path.replace("\\", "/")
+    for pat in exclude_dirs or ():
+        p = str(pat or "").replace("\\", "/")
+        if p and p in rel_norm:
+            return False
+    return True
 
 
 # 한국어 조사·어미 bigram 제거용 불용어 (음절 bigram 레벨)
@@ -234,8 +272,16 @@ class VaultIndexer:
         md_files = glob.glob(os.path.join(self.vault_path, "**", "*.md"), recursive=True)
         # 언더스코어로 시작하는 템플릿/인덱스 노트 제외 (false positive 방지)
         md_files = [f for f in md_files if not os.path.basename(f).startswith("_")]
+        # 그림자 사본(*.txt.md 등)·바이너리 아카이브 폴더 제외 — 회의 오인용 1차 방어.
+        exclude_dirs = _c("indexing.exclude_dirs",
+                          ["99_원본파일", "바이너리", "/.trash/"]) or []
+        md_files = [
+            f for f in md_files
+            if _is_indexable_note(
+                os.path.relpath(f, self.vault_path).replace("\\", "/"), exclude_dirs)
+        ]
         if verbose:
-            print(f"[indexer] {len(md_files)}개 .md 파일 발견 (_시작 제외)")
+            print(f"[indexer] {len(md_files)}개 .md 파일 발견 (_시작·그림자·제외폴더 제외)")
 
         try:
             from meeting_minutes_app.wiki_core.obsidian import parse_frontmatter, safe_filename
@@ -677,13 +723,27 @@ class VaultIndexer:
                 return []
         from meeting_minutes_app.meeting_pipeline.date_utils import normalize_iso_date
         tset = {str(t).lower() for t in types} if types else None
+        # 회의류 요청인데 실제 회의 노트의 상당수가 frontmatter type이 비어 있어(수기 작성 등)
+        # 순수 type 필터로는 최신 회의를 놓친다. 회의 폴더 아래이면서 type이 미지정인 노트는
+        # 구제한다. type이 명시된 비회의(reference 등)는 폴더와 무관하게 제외(오탐 최소화).
+        meeting_family = bool(tset and (tset & {"meeting", "seminar", "lecture"}))
+        meeting_dirs = _c("indexing.meeting_dirs",
+                          ["00_Meetings", "회의", "Meetings", "회의별"]) or []
+
+        def _in_meeting_dir(rel_path: str) -> bool:
+            r = rel_path.replace("\\", "/")
+            return any(m and str(m).replace("\\", "/") in r for m in meeting_dirs)
+
         rows: List[Tuple[str, str, Dict]] = []
         for rel, note in self._notes.items():
             raw = str(note.get("date") or "").strip().strip('"')
             if not raw:
                 continue
-            if tset is not None and str(note.get("type") or "").lower() not in tset:
-                continue
+            if tset is not None:
+                ntype = str(note.get("type") or "").lower()
+                if ntype not in tset and not (
+                        meeting_family and not ntype and _in_meeting_dir(rel)):
+                    continue
             # 한글 날짜("2026년 06월 29일") 등 형식 혼재를 ISO로 정규화해 정렬 오류 방지.
             key = normalize_iso_date(raw) or raw[:10].replace("/", "-").replace(".", "-")
             rows.append((key, rel, note))

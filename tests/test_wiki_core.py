@@ -665,6 +665,88 @@ class TestRecentNotes:
         assert titles.index("중간 세미나") < titles.index("옛 회의")
 
 
+class TestIndexableNoteFilter:
+    """[실전 버그] 텍스트추출 그림자 사본(requirements.txt.md 등)이 회의로 오인용되던 문제."""
+
+    def test_excludes_shadow_copies(self):
+        assert not vi._is_indexable_note("a/requirements.txt.md")
+        assert not vi._is_indexable_note("b/NEXT_STEPS.md.md")
+        assert not vi._is_indexable_note("c/data.json.md")
+        assert not vi._is_indexable_note("d/slides.pptx.md")
+
+    def test_keeps_real_notes(self):
+        assert vi._is_indexable_note("회의별/260625 메가존 해커톤 회의.md")
+        assert vi._is_indexable_note("notes/2026-07-08.md")
+        assert vi._is_indexable_note("프로젝트 계획.md")
+
+    def test_exclude_dirs_substring(self):
+        ex = ["99_원본파일", "바이너리"]
+        assert not vi._is_indexable_note("Archive/QC/99_원본파일(바이너리)/x.md", ex)
+        assert vi._is_indexable_note("Meetings/x.md", ex)
+
+
+class TestResolveNoteDate:
+    """[실전 버그] frontmatter 없는 노트가 조부모 폴더명 날짜를 훔쳐 오래된 오답 날짜를 갖던 문제."""
+
+    def test_no_grandparent_date_leak(self):
+        # 251117(조부모)에서 날짜를 끌어오면 안 됨 — 파일명·직속부모엔 날짜 없음
+        assert vi._resolve_note_date({}, "251117_양자회의/child/NEXT_STEPS.md") == ""
+
+    def test_immediate_parent_date_kept(self):
+        # 직속 부모 폴더의 날짜는 정상 노트를 위해 보존
+        assert vi._resolve_note_date({}, "260625 회의/transcript.md") == "2026-06-25"
+
+    def test_filename_date_priority(self):
+        assert vi._resolve_note_date({}, "회의별/260625 메가존.md") == "2026-06-25"
+
+    def test_frontmatter_date_wins(self):
+        assert vi._resolve_note_date({"date": "2026-07-08"}, "260625 폴더/x.md") == "2026-07-08"
+
+
+class TestRecentNotesFolderRescue:
+    """[실전 버그] frontmatter type이 비어 있는 실제 회의가 recent_notes 유형필터에서 탈락하던 문제."""
+
+    def _ix(self):
+        ix = vi.VaultIndexer(vault_path="unused", index_path="unused.json")
+        ix._built = True
+        ix._notes = {
+            "00_Meetings/팀회의/260701 팀회의.md": {
+                "title": "260701 팀회의", "wikilink_title": "260701 팀회의",
+                "snippet": "s", "date": "2026-07-01", "type": "", "tf": {}},
+            "01_References/some_ref.md": {
+                "title": "참고", "wikilink_title": "참고", "snippet": "s",
+                "date": "2026-07-05", "type": "reference", "tf": {}},
+        }
+        ix._idf = {}
+        return ix
+
+    def test_rescues_empty_type_meeting_in_folder(self):
+        got = self._ix().recent_notes(limit=10, types=("meeting", "seminar", "lecture"))
+        titles = [r["title"] for r in got]
+        assert "260701 팀회의" in titles   # type='' 이지만 회의폴더 → 구제
+        assert "참고" not in titles          # type=reference → 폴더 무관하게 제외
+
+
+class TestIsMeetingNote:
+    """시점질의 최종 회의 필터(_is_meeting_note) — 정크가 작성일만으로 상위 오르는 것 차단."""
+
+    def test_type_meeting(self):
+        assert wa._is_meeting_note({"type": "meeting", "path": "x.md"})
+        assert wa._is_meeting_note({"type": "seminar", "path": "x.md"})
+
+    def test_meeting_folder(self):
+        assert wa._is_meeting_note({"type": "", "path": "00_Meetings/x.md"}, ["00_Meetings"])
+
+    def test_title_keyword(self):
+        assert wa._is_meeting_note(
+            {"type": "", "path": "a/260701 팀회의.md", "title": "260701 팀회의"})
+
+    def test_rejects_non_meeting(self):
+        assert not wa._is_meeting_note(
+            {"type": "reference", "path": "01_Ref/requirements.txt.md",
+             "title": "requirements.txt"}, ["00_Meetings"])
+
+
 class TestRecencyDateKey:
     def test_normalizes_separators_and_trims_time(self):
         assert wa._recency_date_key({"date": "2026/07/24"}) == "2026-07-24"

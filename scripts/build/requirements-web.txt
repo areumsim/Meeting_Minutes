@@ -5,9 +5,10 @@
 #
 # requirements.txt 대비 제외한 것(웹 UI 런타임에서 import 되지 않음. 마이크는
 # 브라우저가 처리하고, 실시간 STT는 서버가 HTTP/WebSocket 로 OpenAI 에 위임):
-#   - sounddevice, numpy       (CLI 실시간 녹음 전용)
+#   - sounddevice              (CLI 실시간 녹음 전용)
 #   - webrtcvad(-wheels)        (CLI VAD 전용)
-# 이는 build_exe.spec 의 excludes(numpy/sounddevice/webrtcvad 등)와 같은 취지다.
+# 이는 build_exe.spec 의 excludes(sounddevice/webrtcvad 등)와 같은 취지다.
+# (numpy 는 아래 faster-whisper 가 onnxruntime 경유로 끌어오므로 결과적으로 포함된다.)
 
 # LLM / HTTP
 openai>=1.107.1
@@ -31,6 +32,14 @@ pydantic~=2.0
 
 # 회사망 SSL 검사 대응 — OS(Windows) 인증서 저장소 신뢰 (web/backend/app.py 에서 주입)
 truststore>=0.10
+
+# STT 최종 백업(오프라인) — OpenAI·Groq 가 모두 실패했을 때 이 PC 에서 전사.
+# ctranslate2·av·onnxruntime·numpy·tokenizers·huggingface_hub 를 함께 끌어온다
+# (설치 용량 ≈ +180MB). 네이티브 DLL 이 임베디드 파이썬에서 로딩되는지는
+# build_portable.ps1 7단계 스모크의 `import faster_whisper` 가 검증한다.
+# 모델 가중치는 번들하지 않는다 — 사용자가 웹 [설정] → [로컬 백업 모델 준비]로
+# MeetingMinutesData\data\models 에 미리 내려받는다(전사 중 다운로드 금지 정책).
+faster-whisper>=1.2
 
 # 주의: fastmcp(/mcp 원격 커넥터)는 의도적으로 제외한다.
 #  - fastmcp 는 mcp 를 끌어오고, mcp 는 Windows 에서 pywin32(pywintypes)를 import 하는데

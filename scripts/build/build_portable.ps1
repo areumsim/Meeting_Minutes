@@ -207,6 +207,9 @@ $env:MM_DATA_DIR = Join-Path $OutDir 'MeetingMinutesData'   # import 시 데이�
 $smokeFile = Join-Path $env:TEMP ('mmp_smoke_' + [System.IO.Path]::GetRandomFileName() + '.py')
 @'
 import fastapi, uvicorn, starlette, openai, anthropic, websockets, watchdog, truststore
+# 로컬 STT 최종 백업 — ctranslate2/onnxruntime 네이티브 DLL 이 임베디드 파이썬에서
+# 로딩되는지 여기서 검증한다(깨지면 배포 후 최후 백업이 조용히 죽는다).
+import faster_whisper
 import meeting_minutes_app
 from web.backend import app  # FastAPI 앱 로드(라우터/DB 초기화 경로까지 탐)
 print("IMPORT_OK")

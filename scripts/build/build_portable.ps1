@@ -167,6 +167,28 @@ Copy-Item (Join-Path $ScriptDir 'MeetingMinutes.bat') (Join-Path $OutDir 'Meetin
 Copy-Item (Join-Path $ScriptDir 'Troubleshoot.bat')   (Join-Path $OutDir 'Troubleshoot.bat') -Force
 Copy-Item (Join-Path $ScriptDir '사용법_포터블.txt')   (Join-Path $OutDir '사용법.txt') -Force
 
+# 빌드 각인 — "이 zip 이 어느 커밋 빌드인가"를 배포본 안에서 확인할 수 있게 한다.
+# (실제로 두 번 겪은 사고: ① 커밋 HEAD로 빌드해 미커밋 기능이 빠짐 ② 빌드 도중
+#  들어온 커밋이 zip 에 안 들어감. dirty=True 면 미커밋 변경이 섞인 빌드다.)
+$commit = ''; $dirty = ''
+try {
+    $prevEap2 = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+    $commit = (& git -C $Root rev-parse --short HEAD 2>$null) -join ''
+    $dirty  = (& git -C $Root status --porcelain 2>$null) -join "`n"
+    $ErrorActionPreference = $prevEap2
+} catch { }
+$buildInfo = @(
+    "Meeting Minutes portable build",
+    ("built_at : " + (Get-Date -Format 'yyyy-MM-dd HH:mm:ss')),
+    ("commit   : " + ($(if ($commit) { $commit } else { 'unknown (git 없음)' }))),
+    ("dirty    : " + ($(if ($dirty) { 'YES — 미커밋 변경이 포함된 빌드' } else { 'no' }))),
+    ("python   : " + $pyVer),
+    "",
+    "이 파일은 문제 신고 시 어느 빌드인지 확인하는 용도입니다."
+) -join "`r`n"
+Set-Content -Path (Join-Path $OutDir 'BUILD_INFO.txt') -Value $buildInfo -Encoding utf8
+Write-Host ("  BUILD_INFO: commit=" + $commit + " dirty=" + $(if ($dirty) { 'YES' } else { 'no' }))
+
 # ── 7. 스모크 체크 (임베디드 파이썬이 핵심 모듈을 import + 앱을 로드하는지) ──
 # 주의: `python -c "..."` 는 Windows PowerShell 5.1 이 큰따옴표를 제거해 코드가 깨진다.
 # 임시 .py 파일에 써서 실행한다(따옴표 문제 회피).

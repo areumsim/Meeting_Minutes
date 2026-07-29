@@ -685,6 +685,65 @@ class TestIndexableNoteFilter:
         assert vi._is_indexable_note("Meetings/x.md", ex)
 
 
+class TestSectionsInNotes:
+    """후보 노트 안에서만 근거 섹션을 특정한다 (실시간 경로용 — 전체 섹션 스캔 회피).
+
+    전체 볼트 섹션 검색(search_sections)은 노트 수에 선형이라 실시간 경로에서 비싸다
+    (실측 802노트·12,140섹션에서 ~256ms). 이 메서드는 후보만 보므로 규모와 무관하다.
+    """
+
+    def _ix(self):
+        ix = vi.VaultIndexer(vault_path="unused", index_path="unused.json")
+        ix._built = True
+        ix._idf = {"큐비트": 2.0, "로드맵": 1.5, "예산": 3.0}
+        ix._notes = {
+            "a.md": {
+                "title": "A", "wikilink_title": "A", "snippet": "sa", "date": "",
+                "type": "", "tf": {},
+                "sections": [
+                    {"heading": "개요", "level": 2, "snippet": "개요 본문",
+                     "tf": {"큐비트": 0.1}},
+                    {"heading": "큐비트 로드맵", "level": 2, "snippet": "로드맵 본문",
+                     "tf": {"큐비트": 0.5, "로드맵": 0.4}},
+                ]},
+            "b.md": {
+                "title": "B", "wikilink_title": "B", "snippet": "sb", "date": "",
+                "type": "", "tf": {},
+                "sections": [
+                    {"heading": "예산", "level": 2, "snippet": "예산 본문",
+                     "tf": {"예산": 0.3}},
+                ]},
+            "c.md": {   # 섹션 인덱스 없이 빌드된 노트
+                "title": "C", "wikilink_title": "C", "snippet": "sc", "date": "",
+                "type": "", "tf": {}},
+        }
+        return ix
+
+    def test_picks_best_matching_section(self):
+        got = self._ix().sections_in_notes("큐비트 로드맵 논의", ["a.md"])
+        assert got["a.md"]["heading"] == "큐비트 로드맵"
+        assert got["a.md"]["snippet"] == "로드맵 본문"
+        assert got["a.md"]["score"] > 0
+
+    def test_only_requested_notes_scanned(self):
+        got = self._ix().sections_in_notes("큐비트 예산", ["b.md"])
+        assert list(got) == ["b.md"]       # a.md 는 후보가 아니므로 결과 없음
+
+    def test_unmatched_note_omitted(self):
+        got = self._ix().sections_in_notes("전혀 다른 주제", ["a.md", "b.md"])
+        assert got == {}
+
+    def test_note_without_sections_omitted(self):
+        got = self._ix().sections_in_notes("큐비트", ["c.md"])
+        assert got == {}
+
+    def test_empty_query_or_paths(self):
+        ix = self._ix()
+        assert ix.sections_in_notes("", ["a.md"]) == {}
+        assert ix.sections_in_notes("큐비트", []) == {}
+        assert ix.sections_in_notes("큐비트", ["없는노트.md"]) == {}
+
+
 class TestResolveNoteDate:
     """[실전 버그] frontmatter 없는 노트가 조부모 폴더명 날짜를 훔쳐 오래된 오답 날짜를 갖던 문제."""
 

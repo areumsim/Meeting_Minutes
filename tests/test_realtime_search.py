@@ -17,30 +17,34 @@ from meeting_minutes_app.wiki_core import realtime_search as rs
 
 
 class FakeIndexer:
-    """search()/search_sections() 를 흉내내는 가짜 인덱서.
+    """search()/sections_in_notes() 를 흉내내는 가짜 인덱서.
 
-    sections 는 path_prefixes 인자에 따라 필터해 실제 VaultIndexer 와 같은
-    의미(논문 폴더 한정 검색)를 갖게 한다.
+    search 는 path_prefixes 인자에 따라 필터해 실제 VaultIndexer 와 같은 의미
+    (논문 폴더 한정 검색)를 갖게 한다. sections_in_notes 는 노트별 최적 섹션
+    (근거 위치 특정)을 돌려준다 — 랭킹에는 관여하지 않는다.
     """
 
     def __init__(self, results=None, sections=None):
         self.results = results if results is not None else []
-        self.sections = sections if sections is not None else []
-        self.queries = []
-        self.section_queries = []
+        #: {rel_path: {"heading","snippet","score"}}
+        self.sections = sections if sections is not None else {}
+        self.queries = []          # (query, path_prefixes)
+        self.located = []          # sections_in_notes 로 넘어온 후보 목록
 
     def search(self, query, limit=5, path_prefixes=None):
-        self.queries.append(query)
-        return self.results[:limit]
-
-    def search_sections(self, query, limit=10, path_prefixes=None):
-        self.section_queries.append((query, tuple(path_prefixes or ())))
-        rows = self.sections
+        self.queries.append((query, tuple(path_prefixes or ())))
+        rows = self.results
         if path_prefixes:
-            pref = tuple(str(p).strip("/") + "/" for p in path_prefixes)
-            rows = [s for s in rows
-                    if str(s.get("note_path", "")).replace("\\", "/").startswith(pref)]
+            pref = tuple(str(p).strip("/") for p in path_prefixes)
+            rows = [r for r in rows
+                    if any(str(r.get("path", "")).replace("\\", "/").startswith(p + "/")
+                           or f"/{p}/" in str(r.get("path", "")).replace("\\", "/")
+                           for p in pref)]
         return rows[:limit]
+
+    def sections_in_notes(self, query, rel_paths):
+        self.located.append(list(rel_paths))
+        return {rel: self.sections[rel] for rel in rel_paths if rel in self.sections}
 
 
 class FakeObs:
@@ -83,14 +87,21 @@ INDEX_HIT = {
     "score": 1.23,
 }
 
-SECTION_HIT = {
-    "note_path": "00_Meetings/주간회의.md",
-    "note_title": "주간회의",
+NOTE_HIT_MEETING = {
+    "path": "00_Meetings/주간회의.md",
+    "title": "주간회의",
+    "wikilink_title": "주간회의",
+    "snippet": "주간회의 노트 스니펫",
+    "score": 0.42,
+    "date": "2026-07-20",
+}
+
+#: sections_in_notes 반환 형태 (근거 위치 특정 결과)
+SECTION_OF_MEETING = {
     "heading": "큐비트 로드맵",
     "level": 2,
     "snippet": "로드맵 논의 내용...",
     "score": 0.91,
-    "date": "2026-07-20",
 }
 
 
@@ -140,7 +151,7 @@ class TestSearch:
         assert n["source"] == "index"
         assert n["segment_text"].startswith("양자컴퓨팅 로드맵")
         # topic이 쿼리에 포함됨
-        assert "양자" in idx.queries[0]
+        assert "양자" in idx.queries[0][0]
         # on_notes 호출됨 (top3)
         assert collected and collected[0][0]["title"] == "양자컴퓨팅"
 
@@ -194,65 +205,96 @@ class TestSearch:
 
 
 class TestInternalFirst:
-    """FR-11 — 섹션 인덱스 우선 + 논문 폴더 우선 + 넉넉한 후보 수집."""
+    """FR-11 — 노트 랭킹 주축 + 논문 폴더 보강 + 후보 안에서 근거 섹션 특정.
 
-    def test_section_hit_carries_heading_and_path(self, monkeypatch):
+    랭킹 구조는 실측(docs/검색랭킹_이론과근거.md)으로 고른 것이다. 여기서 고정하는
+    계약: (a) 볼트 전체 섹션 검색을 랭킹에 섞지 않는다, (b) 논문 폴더는 점수 가산이
+    아니라 별도 검색 + 동점 tie-break 로만 우대한다.
+    """
+
+    def test_section_located_within_candidate(self, monkeypatch):
         s = make_searcher(monkeypatch)
-        inject_indexer(s, [], [SECTION_HIT])
+        inject_indexer(s, [NOTE_HIT_MEETING],
+                       {"00_Meetings/주간회의.md": SECTION_OF_MEETING})
         s._search("큐비트 로드맵 관련 발화")
         n = s.collected_notes()[0]
         assert n["heading"] == "큐비트 로드맵"
         assert n["section_path"] == "주간회의 › 큐비트 로드맵"
         assert n["found_by"] == "section"
-        assert n["snippet"] == "로드맵 논의 내용..."
+        assert n["snippet"] == "로드맵 논의 내용..."   # 섹션 스니펫이 노트 스니펫을 대체
 
-    def test_section_and_note_hit_merged_once(self, monkeypatch):
-        """같은 노트가 섹션·노트 양쪽에서 걸리면 1건으로 병합되고 섹션경로를 갖는다."""
+    def test_section_lookup_scoped_to_candidates(self, monkeypatch):
+        """섹션 채점은 후보 노트에만 — 볼트 전체 섹션 스캔을 하지 않는다(지연 방지)."""
         s = make_searcher(monkeypatch)
-        note = {**INDEX_HIT, "path": "00_Meetings/주간회의.md",
-                "wikilink_title": "주간회의"}
-        inject_indexer(s, [note], [SECTION_HIT])
+        idx = inject_indexer(s, [INDEX_HIT, NOTE_HIT_MEETING], {})
         s._search("발화")
-        notes = s.collected_notes()
-        assert len(notes) == 1
-        assert notes[0]["heading"] == "큐비트 로드맵"
-        assert notes[0]["found_by"] == "section"
+        assert idx.located == [["01_References/양자컴퓨팅.md", "00_Meetings/주간회의.md"]]
+        assert not hasattr(idx, "search_sections")   # 전체 섹션 검색은 쓰지 않는다
 
-    def test_paper_dir_note_ranked_first(self, monkeypatch):
-        """동일 순위대에서 논문/이론 폴더 노트가 앞에 온다."""
+    def test_no_section_match_falls_back_to_note_snippet(self, monkeypatch):
+        s = make_searcher(monkeypatch)
+        inject_indexer(s, [NOTE_HIT_MEETING], {})
+        s._search("발화")
+        n = s.collected_notes()[0]
+        assert n["heading"] == ""
+        assert n["found_by"] == "note"
+        assert n["section_path"] == "주간회의"
+        assert n["snippet"] == "주간회의 노트 스니펫"
+
+    def test_paper_note_wins_tie_but_gets_no_bonus(self, monkeypatch):
+        """점수가 같으면 논문이 앞. 단 순위가 앞선 일반 노트를 추월하지는 않는다."""
         s = make_searcher(monkeypatch,
                           extra_cfg={"wiki.realtime_paper_dirs": ["02_이론_학습"]})
-        일반 = {"note_path": "00_Meetings/주간회의.md", "note_title": "주간회의",
-                "heading": "H", "level": 2, "snippet": "s", "score": 9.0}
-        논문 = {"note_path": "02_이론_학습/QAOA.md", "note_title": "QAOA",
-                "heading": "요약", "level": 2, "snippet": "s", "score": 0.1}
-        # 일반 노트가 섹션 검색에서 1위, 논문 노트는 논문 한정 검색에서만 1위
-        inject_indexer(s, [], [일반, 논문])
+        일반 = {"path": "00_Meetings/주간회의.md", "wikilink_title": "주간회의",
+                "snippet": "s", "score": 9.0}
+        논문 = {"path": "02_이론_학습/QAOA.md", "wikilink_title": "QAOA",
+                "snippet": "s", "score": 0.1}
+        # 노트 검색 1위=일반, 2위=논문 → 가산점이 없으므로 순서 유지
+        inject_indexer(s, [일반, 논문], {})
         s._search("QAOA 이야기")
-        notes = s.collected_notes()
-        assert notes[0]["filename"] == "02_이론_학습/QAOA.md"
-        assert notes[0]["source_type"] == "paper"
-        assert notes[1]["source_type"] == "note"
+        assert [n["title"] for n in s.collected_notes()] == ["주간회의", "QAOA"]
+        # 논문 한정 검색으로만 들어온 후보는 동점(같은 rank) 시 앞에 온다
+        s2 = make_searcher(monkeypatch,
+                           extra_cfg={"wiki.realtime_paper_dirs": ["02_이론_학습"],
+                                      "wiki.realtime_note_candidates": 1})
+        inject_indexer(s2, [일반, 논문], {})
+        s2._search("QAOA 이야기")
+        titles = [n["title"] for n in s2.collected_notes()]
+        assert titles == ["주간회의", "QAOA"]   # 논문은 보강 arm 으로 뒤에 합류
 
     def test_paper_dir_search_uses_prefix_filter(self, monkeypatch):
         s = make_searcher(monkeypatch,
-                          extra_cfg={"wiki.realtime_paper_dirs": ["02_이론_학습"]})
-        idx = inject_indexer(s, [], [])
+                          extra_cfg={"wiki.realtime_paper_dirs": ["02_이론_학습"],
+                                     "wiki.realtime_paper_candidates": 4})
+        idx = inject_indexer(s, [INDEX_HIT], {})
         s._search("발화")
-        # 전체 섹션 검색 1회 + 논문 폴더 한정 1회
-        assert len(idx.section_queries) == 2
-        assert idx.section_queries[0][1] == ()
-        assert idx.section_queries[1][1] == ("02_이론_학습",)
+        # 노트 검색 1회 + 논문 폴더 한정 1회
+        assert len(idx.queries) == 2
+        assert idx.queries[0][1] == ()
+        assert idx.queries[1][1] == ("02_이론_학습",)
+
+    def test_paper_stage_guarantees_pool_entry(self, monkeypatch):
+        """일반 검색 상한에 밀린 논문 노트도 보강 arm 으로 후보에 들어온다."""
+        s = make_searcher(monkeypatch,
+                          extra_cfg={"wiki.realtime_paper_dirs": ["01_References"],
+                                     "wiki.realtime_note_candidates": 2})
+        rows = [{"path": f"00_Meetings/n{i}.md", "wikilink_title": f"n{i}",
+                 "snippet": "s", "score": 9 - i} for i in range(3)]
+        rows.append({**INDEX_HIT})    # 01_References/양자컴퓨팅.md — 상한 밖 4번째
+        inject_indexer(s, rows, {})
+        s._search("발화")
+        titles = [n["title"] for n in s.collected_notes()]
+        assert titles[:2] == ["n0", "n1"]      # 일반 상한 2건
+        assert "양자컴퓨팅" in titles           # 논문은 보강으로 진입
 
     def test_candidate_pool_wider_than_display(self, monkeypatch):
         shown = []
         s = make_searcher(monkeypatch, on_notes=shown.append,
-                          extra_cfg={"wiki.realtime_section_candidates": 12,
+                          extra_cfg={"wiki.realtime_note_candidates": 12,
                                      "wiki.realtime_display_count": 3})
-        sections = [{"note_path": f"00_Meetings/n{i}.md", "note_title": f"n{i}",
-                     "heading": "h", "level": 2, "snippet": "s",
-                     "score": 10 - i} for i in range(12)]
-        inject_indexer(s, [], sections)
+        rows = [{"path": f"00_Meetings/n{i}.md", "wikilink_title": f"n{i}",
+                 "snippet": "s", "score": 10 - i} for i in range(12)]
+        inject_indexer(s, rows, {})
         s._search("발화")
         assert len(shown[0]) == 3            # 표시는 상위 3
         assert len(s.collected_notes()) == 12  # 후보는 넉넉히 누적
@@ -262,33 +304,33 @@ class TestInternalFirst:
         idx = inject_indexer(s, [INDEX_HIT])
         long_text = "가" * 200
         s._search(long_text)
-        assert len(idx.queries[0]) == 180
+        assert len(idx.queries[0][0]) == 180
 
     def test_same_title_different_paths_deduped(self, monkeypatch):
         """원문추출 사본 등 같은 제목의 노트가 여러 폴더에 있어도 칩은 1건만."""
         s = make_searcher(monkeypatch)
-        sections = [
-            {"note_path": "원문추출/논문A.md", "note_title": "논문A", "heading": "h",
-             "level": 2, "snippet": "s1", "score": 5.0},
-            {"note_path": "01_References/논문A.md", "note_title": "논문A",
-             "heading": "h", "level": 2, "snippet": "s2", "score": 4.0},
-            {"note_path": "00_Meetings/다른노트.md", "note_title": "다른노트",
-             "heading": "h", "level": 2, "snippet": "s3", "score": 1.0},
+        rows = [
+            {"path": "원문추출/논문A.md", "wikilink_title": "논문A",
+             "snippet": "s1", "score": 5.0},
+            {"path": "01_References/논문A.md", "wikilink_title": "논문A",
+             "snippet": "s2", "score": 4.0},
+            {"path": "00_Meetings/다른노트.md", "wikilink_title": "다른노트",
+             "snippet": "s3", "score": 1.0},
         ]
-        inject_indexer(s, [], sections)
+        inject_indexer(s, rows, {})
         s._search("발화")
         notes = s.collected_notes()
         assert [n["title"] for n in notes] == ["논문A", "다른노트"]
         assert notes[0]["filename"] == "원문추출/논문A.md"   # 상위 1건만 남는다
 
-    def test_search_sections_failure_falls_back_to_notes(self, monkeypatch):
-        """섹션 인덱스가 없는(구버전) 인덱스여도 노트 검색 결과는 살아남는다."""
+    def test_sections_in_notes_failure_keeps_results(self, monkeypatch):
+        """섹션 인덱스가 없는(구버전) 인덱서여도 결과는 살아남는다(heading 만 빈다)."""
         s = make_searcher(monkeypatch)
-        idx = inject_indexer(s, [INDEX_HIT], [])
+        idx = inject_indexer(s, [INDEX_HIT], {})
 
         def boom(*a, **kw):
-            raise RuntimeError("섹션 인덱스 없음")
-        idx.search_sections = boom
+            raise RuntimeError("sections_in_notes 없음")
+        idx.sections_in_notes = boom
         s._search("발화")
         assert len(s.collected_notes()) == 1
         assert s.collected_notes()[0]["found_by"] == "note"
@@ -311,13 +353,11 @@ class TestEvidence:
 
     def test_evidence_sorted_by_rank_score(self, monkeypatch):
         s = make_searcher(monkeypatch)
-        sections = [
-            {"note_path": "a.md", "note_title": "A", "heading": "h",
-             "level": 2, "snippet": "s", "score": 5.0},
-            {"note_path": "b.md", "note_title": "B", "heading": "h",
-             "level": 2, "snippet": "s", "score": 1.0},
+        rows = [
+            {"path": "a.md", "wikilink_title": "A", "snippet": "s", "score": 5.0},
+            {"path": "b.md", "wikilink_title": "B", "snippet": "s", "score": 1.0},
         ]
-        inject_indexer(s, [], sections)
+        inject_indexer(s, rows, {})
         s._search("발화")
         ev = s.collected_evidence()
         assert [e["title"] for e in ev] == ["A", "B"]
@@ -325,9 +365,9 @@ class TestEvidence:
 
     def test_evidence_limit(self, monkeypatch):
         s = make_searcher(monkeypatch)
-        sections = [{"note_path": f"{i}.md", "note_title": f"n{i}", "heading": "h",
-                     "level": 2, "snippet": "s", "score": 10 - i} for i in range(8)]
-        inject_indexer(s, [], sections)
+        rows = [{"path": f"{i}.md", "wikilink_title": f"n{i}", "snippet": "s",
+                 "score": 10 - i} for i in range(8)]
+        inject_indexer(s, rows, {})
         s._search("발화")
         assert len(s.collected_evidence(limit=3)) == 3
 
@@ -419,13 +459,12 @@ class TestShutdown:
         slow_done = threading.Event()
 
         class SlowIndexer:
+            """sections_in_notes 가 없는 구버전 인덱서 — 후보는 그대로 살아야 한다."""
+
             def search(self, query, limit=5, path_prefixes=None):
                 time.sleep(0.2)
                 slow_done.set()
                 return [INDEX_HIT]
-
-            def search_sections(self, query, limit=10, path_prefixes=None):
-                return []
 
         s._indexer = SlowIndexer()
         s._init_done = True

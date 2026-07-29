@@ -263,7 +263,7 @@ python run_meeting.py prep-brief --title "주간 회의" --reindex
 - 관련 노트 본문 일부는 회의록 생성 memo에 들어가며, 발행된 Obsidian 노트에는 관련 노트 링크로 남습니다.
 - CLI 실시간과 서버 `/ws/realtime`은 종료 후 누적 세그먼트를 기준으로 같은 컨텍스트를 한 번 주입합니다. 웹 standalone/mobile direct OpenAI 경로는 Vault/Wiki/사실검증을 우회하므로 운영 기록용 기본 경로로 보지 않습니다.
 - Obsidian은 로컬 Wiki입니다. 최신 인터넷 정보는 `wiki.online_search_enabled`가 켜진 경우 별도 웹 리서치 memo로 보완합니다.
-- 녹음 **중**에는 `wiki.realtime_vault_search`(기본 켜짐)가 발화별로 관련 노트를 찾아 화면에 조용히 표시합니다. 검색 순서는 **내부자료 우선** — 섹션(heading) 인덱스 → 논문/이론 폴더(`wiki.realtime_paper_dirs`) → 노트 인덱스(TF-IDF+임베딩). 인덱스·노트 폴더가 없으면 사유가 배지로 표시됩니다.
+- 녹음 **중**에는 `wiki.realtime_vault_search`(기본 켜짐)가 발화별로 관련 노트를 찾아 화면에 조용히 표시합니다. **내부자료 우선** — 노트 인덱스(TF-IDF+임베딩 RRF)로 순위를 정하고, 논문/이론 폴더(`wiki.realtime_paper_dirs`)를 따로 검색해 로컬 논문이 후보에서 빠지지 않게 하며, 찾은 노트 안에서 관련 섹션(`#헤딩`)까지 짚어 근거로 보여줍니다. 인덱스·노트 폴더가 없으면 사유가 배지로 표시됩니다. 랭킹 설계 근거는 `docs/검색랭킹_이론과근거.md`.
 - 실시간 **웹** 보완(`wiki.realtime_web_search_interval`>0)은 **웹 UI 녹음 전용**이며 내부에서 못 찾은 구간에서만 동작합니다. 터미널 CLI 실시간 녹음은 내부 노트 검색만 합니다.
 - 종료 후 관련 노트는 근거(관련도·섹션경로·snippet·발화)와 함께 남아 회의 상세의 **참조된 관련 노트**에서 다시 볼 수 있고, 회의록 말미 `## 🔗 관련 노트`에 자동 삽입됩니다. 라이브 확인 절차는 `docs/SMOKE_실시간_관련노트.md`.
 - `wiki.claim_verify=true`이면 회의록 생성 후 Vault 근거와 비교해 `## 사실 검증` 섹션을 추가합니다. 결과에는 판정, 신뢰도, 근거 노트가 포함됩니다.
@@ -563,8 +563,8 @@ cp   config.example.json config.json   # Mac/Linux
     "claim_web_verify": false,
     "realtime_vault_search": true,
     "realtime_search_interval": 3,
-    "realtime_section_candidates": 12,
     "realtime_note_candidates": 10,
+    "realtime_paper_candidates": 4,
     "realtime_display_count": 3,
     "realtime_paper_dirs": ["02_이론_학습", "01_References", "원문추출"],
     "realtime_web_search_interval": 0,

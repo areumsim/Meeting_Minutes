@@ -16,10 +16,11 @@ CLI(realtime_transcription)와 웹(web/backend/api/realtime.py) 양쪽에서 사
   - config 게이트: wiki.realtime_vault_search / wiki.realtime_search_interval
 
 내부자료 우선(꼼꼼) 검색 — 인덱스 백엔드일 때:
-  ① 섹션(heading) 인덱스 search_sections  … 어느 섹션이 관련인지까지 회수
-  ② 논문/이론 폴더에 한정한 섹션 검색      … 로컬 논문·원문추출을 후보 풀에 보장 진입
-  ③ 노트 인덱스 search (TF-IDF+임베딩 RRF) … 교차언어(en↔ko)는 이 경로가 담당
-  → RRF 융합 + 논문 가중으로 정렬. 후보는 넉넉히 모으고(기본 20+) 표시만 상위 N개.
+  ① 노트 인덱스 search (TF-IDF+임베딩 RRF) … 랭킹의 주축, 교차언어(en↔ko)도 담당
+  ② 논문/이론 폴더 한정 노트 검색           … 로컬 논문·원문추출의 후보 풀 진입 보장
+  ③ 후보 노트 안에서만 섹션 채점             … "어느 대목이 근거인가"(표시·인용용)
+  → 순위는 ①②의 RRF 랭크, 동점이면 논문 노트 우선. 후보는 넉넉히(기본 14) 모으고
+    표시만 상위 N개. 랭킹 구조는 실측으로 고른 것 — docs/검색랭킹_이론과근거.md 참고.
   웹 검색은 이 모듈이 하지 않는다 — 항상 보완재로 호출자(웹 UI)에서 별도 처리.
 
 사용:
@@ -126,8 +127,8 @@ class RealtimeVaultSearcher:
         self._interval = max(int(_c("wiki.realtime_search_interval", 3) or 3), 1)
         self._backend_pref = str(_c("wiki.realtime_search_backend", "auto") or "auto")
         # 내부 후보는 넉넉히 모으고(누적 검토용) 표시만 상위 N개로 제한한다
-        self._section_k = max(int(_c("wiki.realtime_section_candidates", 12) or 12), 1)
         self._note_k = max(int(_c("wiki.realtime_note_candidates", 10) or 10), 1)
+        self._paper_k = max(int(_c("wiki.realtime_paper_candidates", 4) or 4), 1)
         self._display_n = max(int(_c("wiki.realtime_display_count", 3) or 3), 1)
         self._query_chars = max(int(_c("wiki.realtime_query_chars", 180) or 180), 20)
 
@@ -368,100 +369,83 @@ class RealtimeVaultSearcher:
     # ── 인덱스 백엔드: 내부자료 우선·꼼꼼 검색 (FR-11) ────
 
     def _search_index(self, query: str, segment_text: str) -> List[Dict[str, Any]]:
-        """섹션 인덱스 → 논문 폴더 섹션 → 노트 인덱스(임베딩 RRF) 순으로 후보를
-        모아 RRF 융합한다. 반환은 rank_score 내림차순."""
+        """후보 = 노트 인덱스(TF-IDF+임베딩 RRF) + 논문/이론 폴더 한정 노트 검색,
+        근거 위치(섹션)는 그 후보 안에서만 특정한다. 반환은 rank_score 내림차순.
+
+        설계 근거(실측 2026-07-29, 802노트·12,140섹션 볼트 / 합성 쿼리 24건):
+          · 볼트 전체 섹션 검색을 랭킹 arm 으로 동일가중 융합하면 노트 회수가
+            나빠졌다(R@3 0.71 vs 0.75) — 섹션 TF-IDF 점수는 짧은 섹션에서 과대평가돼
+            노이즈가 섞인다. 섹션은 '어느 대목이 근거인가'에만 쓰는 게 맞다.
+          · 논문 폴더 점수 1.2배 가산은 두 구조 모두에서 랭킹을 악화시켰다
+            (MRR 0.648→0.681, 0.576→0.664). 폴더 소속은 관련도의 근거가 아니므로
+            **동점 tie-break** 로만 쓴다. 후보 풀 진입은 논문 한정 검색이 보장한다.
+          · 전체 섹션 스캔은 노트 수에 선형(~256ms) — 후보 안에서만 보면 ~0.5ms.
+        자세한 수치·해석: docs/검색랭킹_이론과근거.md
+        """
         idx = self._indexer
         papers = _paper_dirs()
 
-        sections = self._safe(idx.search_sections, query, limit=self._section_k) or []
-        paper_sections = []
-        if papers:
-            paper_sections = self._safe(
-                idx.search_sections, query,
-                limit=max(3, self._section_k // 3),
-                path_prefixes=list(papers)) or []
         notes = self._safe(idx.search, query, limit=self._note_k) or []
+        paper_notes = []
+        if papers:
+            # 로컬 논문/원문추출이 일반 노트에 밀려 후보에 못 들어오는 것을 막는 보강 arm
+            paper_notes = self._safe(idx.search, query, limit=self._paper_k,
+                                     path_prefixes=list(papers)) or []
 
-        # 후보 레코드 조립 (노트 경로 단위로 병합 — 같은 노트의 최고 섹션만 대표로)
+        # 후보 조립 — 삽입 순서(노트 랭킹 → 논문 보강)를 유지해 동점 시 순서가 안정적
         cand: Dict[str, Dict[str, Any]] = {}
-
-        def _touch(rel: str) -> Dict[str, Any]:
-            item = cand.get(rel)
-            if item is None:
-                item = {"path": rel, "heading": "", "snippet": "", "title": "",
-                        "score": 0.0, "date": "", "cosine": 0.0}
-                cand[rel] = item
-            return item
-
-        section_rank: Dict[str, int] = {}
-        for group in (sections, paper_sections):
-            for rank, s in enumerate(group):
-                rel = str(s.get("note_path") or "")
-                if not rel:
-                    continue
-                item = _touch(rel)
-                prev = section_rank.get(rel)
-                if prev is None or rank < prev:
-                    section_rank[rel] = rank
-                if not item["heading"] and s.get("heading"):
-                    item["heading"] = str(s.get("heading") or "")
-                    item["snippet"] = str(s.get("snippet") or "")[:200]
-                if not item["title"]:
-                    item["title"] = str(s.get("note_title") or "")
-                item["score"] = max(float(item["score"]),
-                                    float(s.get("score", 0) or 0))
-                item["date"] = item["date"] or str(s.get("date", "") or "")
-
         note_rank: Dict[str, int] = {}
-        for rank, r in enumerate(notes):
-            rel = str(r.get("path") or "")
-            if not rel:
-                continue
-            item = _touch(rel)
-            note_rank[rel] = rank
-            item["title"] = (str(r.get("wikilink_title") or r.get("title") or "")
-                             or item["title"])
-            if not item["snippet"]:
-                item["snippet"] = str(r.get("snippet", "") or "")[:200]
-            item["score"] = max(float(item["score"]), float(r.get("score", 0) or 0))
-            item["date"] = item["date"] or str(r.get("date", "") or "")
-            item["cosine"] = max(float(item["cosine"]),
-                                 float(r.get("cosine", 0) or 0))
+        for group, offset in ((notes, 0), (paper_notes, len(notes))):
+            for rank, r in enumerate(group):
+                rel = str(r.get("path") or "")
+                if not rel or rel in cand:
+                    continue
+                note_rank[rel] = offset + rank
+                cand[rel] = {
+                    "title": str(r.get("wikilink_title") or r.get("title") or ""),
+                    "snippet": str(r.get("snippet", "") or "")[:200],
+                    "score": float(r.get("score", 0) or 0),
+                    "cosine": float(r.get("cosine", 0) or 0),
+                    "date": str(r.get("date", "") or ""),
+                }
+        if not cand:
+            return []
+
+        # 근거 위치 특정 — 후보 노트들의 섹션만 채점.
+        # 메서드가 없는 구버전 인덱서(또는 섹션 인덱스 없이 빌드된 인덱스)에서도
+        # 후보 자체는 그대로 살려야 한다 → getattr 로 존재 여부부터 확인한다.
+        _locate = getattr(idx, "sections_in_notes", None)
+        located = (self._safe(_locate, query, list(cand)) or {}) if _locate else {}
 
         hits: List[Dict[str, Any]] = []
         for rel, item in cand.items():
             title = item["title"] or (Path(rel).stem if rel else "")
             if not title:
                 continue
-            rrf = 0.0
-            if rel in section_rank:
-                rrf += 1.0 / (_RRF_K + section_rank[rel] + 1)
-            if rel in note_rank:
-                rrf += 1.0 / (_RRF_K + note_rank[rel] + 1)
+            sec = located.get(rel) or {}
+            heading = str(sec.get("heading") or "")
+            snippet = str(sec.get("snippet") or "")[:200] or item["snippet"]
             is_paper = _is_paper_path(rel, papers)
-            if is_paper:
-                # 로컬 논문/이론/원문추출을 같은 순위대에서 앞에 세운다 (FR-11)
-                rrf *= 1.2
             hits.append({
                 "filename": rel,
                 "title": title,
                 "score": round(float(item["score"]), 4),
-                "rank_score": round(rrf, 6),
+                "rank_score": round(1.0 / (_RRF_K + note_rank[rel] + 1), 6),
                 "cosine": round(float(item["cosine"]), 4),
                 "matches": [],
-                "snippet": item["snippet"],
-                "heading": item["heading"],
-                "section_path": (f"{title} › {item['heading']}"
-                                 if item["heading"] else title),
+                "snippet": snippet,
+                "heading": heading,
+                "section_path": f"{title} › {heading}" if heading else title,
                 "source": "index",
                 "source_type": "paper" if is_paper else "note",
-                "found_by": ("section" if rel in section_rank and rel in note_rank
-                             else ("section" if rel in section_rank else "note")),
+                "found_by": "section" if heading else "note",
                 "date": item["date"],
                 "segment_text": segment_text[:200],
                 "elapsed_sec": round(time.time() - self._t0, 1),
             })
-        hits.sort(key=lambda n: -float(n.get("rank_score", 0) or 0))
+        # 동점이면 내부 논문/이론 노트를 앞에 (FR-11 — 가산점 대신 tie-break)
+        hits.sort(key=lambda n: (-float(n.get("rank_score", 0) or 0),
+                                n.get("source_type") != "paper"))
         return _dedupe_by_title(hits)
 
     def _search_rest(self, query: str, segment_text: str) -> List[Dict[str, Any]]:

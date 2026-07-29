@@ -235,7 +235,7 @@ flowchart TD
     C --> E[completed → DB 저장]
     C --> F[_translate_segment\n비동기 EN→KO\n선택적]
     C --> G{3세그먼트마다\nrealtime_search_interval}
-    G --> H[RealtimeVaultSearcher\nThreadPool 논블로킹\n섹션→논문폴더→노트 RRF]
+    G --> H[RealtimeVaultSearcher\nThreadPool 논블로킹\n노트 RRF + 논문보강 → 섹션 위치특정]
     H --> I[related_notes 이벤트\n내부 앞줄·웹 뒤\n+ 비활성 사유 배지]
     G --> G2{웹 보완 게이트\n내부 미발견 시만}
     G2 --> I
@@ -259,7 +259,7 @@ flowchart TD
 | 항목 | 배치 ingestion | 실시간 WebSocket |
 |---|---|---|
 | STT | `gpt-4o-transcribe-diarize` 우선 (`/v1/audio/transcriptions`) | Realtime transcription, 기본 화자분리 없음 |
-| vault 검색 | 세션 완료 후 2패스 | 세그먼트마다 비동기(내부자료 우선: 섹션→논문폴더→노트 RRF) + 세션 종료 후 통합 |
+| vault 검색 | 세션 완료 후 2패스 | 세그먼트마다 비동기(내부자료 우선: 노트 RRF + 논문폴더 보강, 후보 안에서 섹션 위치특정) + 세션 종료 후 통합 |
 | 실시간 웹 보완 | 해당 없음 | 웹 UI 녹음 전용(`online_search_enabled`+`realtime_web_search_interval`>0), 내부 미발견 시만. **CLI 실시간엔 없음** |
 | 회의록 생성 | 전체 전사 후 1회 | 세션 종료 후 1회 |
 | 사실 검증 | ✅ (current_title 필터) | ✅ CLI/서버 WebSocket, ❌ standalone/mobile direct |
@@ -272,13 +272,19 @@ flowchart TD
 호출자(CLI `realtime_transcription`, 웹 `api/realtime.py`)에 둔다. `offer_segment()`는 STT
 핫패스에서 호출되므로 **논블로킹·예외 무전파**가 계약이다.
 
-**검색 순서(내부자료 우선).** ① `search_sections()` 섹션(heading) 인덱스 → ② 논문/이론 폴더
-(`wiki.realtime_paper_dirs`)에 한정한 섹션 검색(로컬 논문의 후보 풀 진입 보장, 동순위 1.2배 가중)
-→ ③ `search()` 노트 인덱스(TF-IDF+임베딩 RRF — 영↔한 교차언어 회수는 이 경로가 담당).
-세 결과를 노트 경로 단위로 병합하고 RRF(k=60)로 융합해 `rank_score` 내림차순 정렬한다.
-후보는 넉넉히 모으고(기본 섹션 12 + 노트 10) **표시만 상위 3개**, 나머지는 종료 후 누적 검토에서 본다.
+**검색 순서(내부자료 우선).** ① `search()` 노트 인덱스(TF-IDF+임베딩 RRF) — 랭킹의 주축이자
+영↔한 교차언어 회수 담당 → ② 논문/이론 폴더(`wiki.realtime_paper_dirs`) 한정 노트 검색 —
+로컬 논문이 상한에 밀려 후보에서 빠지는 것을 막는 보강 arm → ③ `sections_in_notes()` 로
+**후보 노트 안에서만** 섹션을 채점해 "어느 대목이 근거인가"를 특정(랭킹에는 관여하지 않음).
+순위는 ①②의 RRF 랭크이고, 동점이면 논문 노트를 앞세운다(가산점 아님). 후보는 넉넉히
+(기본 노트 10 + 논문 4) 모으고 **표시만 상위 3개**, 나머지는 종료 후 누적 검토에서 본다.
 웹 검색은 이 모듈이 하지 않는다 — 항상 보완재로 호출자(웹 UI)에서만, 그리고 내부에서
 못 찾은 구간에서만(`wiki.realtime_web_only_if_no_vault_hit`).
+
+이 구조는 실측으로 고른 것이다(802노트·12,140섹션 볼트, 합성 쿼리 24건): 볼트 전체 섹션 검색을
+랭킹 arm 으로 융합하면 노트 회수가 떨어지고(R@3 0.75→0.71) 지연이 9배(26ms→244ms) 늘었으며,
+논문 폴더 점수 1.2배 가산은 MRR 을 0.664→0.576 으로 떨어뜨렸다. 수치·해석·재현 방법은
+`docs/검색랭킹_이론과근거.md`(+ `scripts/bench_realtime_ranking.py`) 참고.
 
 **비활성 사유 노출.** 인덱스/Obsidian이 모두 없으면 과거처럼 조용히 no-op 하지 않고 사유
 (`off`/`no_vault`/`index_missing`/`obsidian_unreachable`/`no_backend`)를 `status()`로 알린다.
@@ -785,7 +791,7 @@ LLM은 다음 고정 답변 구조를 반드시 따르도록 강제된다:
 | `wiki.realtime_vault_search` | `true` | 녹음 중 발화별 관련 노트 검색(내부자료 우선). 인덱스/볼트 미설정 시 조용히 비활성 + 웹 UI에 사유 배지 |
 | `wiki.realtime_search_interval` | `3` | N개 세그먼트마다 1회 검색(스로틀) |
 | `wiki.realtime_search_backend` | `"auto"` | `auto`=인덱스 우선·REST 폴백 / `index` / `rest` |
-| `wiki.realtime_section_candidates` / `realtime_note_candidates` | `12` / `10` | 발화별 내부 후보 수(섹션/노트). 표시는 상위 N개, 나머지는 종료 후 누적 검토용 |
+| `wiki.realtime_note_candidates` / `realtime_paper_candidates` | `10` / `4` | 발화별 내부 후보 수(노트 / 논문폴더 한정 보강). 표시는 상위 N개, 나머지는 종료 후 누적 검토용 |
 | `wiki.realtime_display_count` | `3` | 녹음 화면 칩으로 한 번에 표시할 개수 |
 | `wiki.realtime_query_chars` | `180` | 검색 쿼리로 쓸 발화 앞부분 길이(교차언어·의미검색 회수에 영향) |
 | `wiki.realtime_paper_dirs` | `["02_이론_학습","01_References","원문추출"]` | 로컬 논문/이론 폴더 — 후보 풀 진입 보장 + 동순위 우선(웹 arXiv보다 먼저 인용) |

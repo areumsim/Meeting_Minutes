@@ -278,6 +278,39 @@ class TestBackfillFromVault:
         # 세미나1 -> 양자 컴퓨팅, 세미나1 -> 서지훈 (참조 노트 자신은 스스로를 링크하지 않음)
         assert len(edges) == 2
 
+    def test_shadow_copies_and_excluded_dirs_are_skipped(self, tmp_path, monkeypatch):
+        """그래프 스캔은 인덱서와 **같은 노트 판정**을 써야 한다.
+
+        갈라져 있었다: 인덱서는 그림자 사본(*.txt.md 등)과 indexing.exclude_dirs 를
+        제외하는데 graph_sync 는 `_` 접두만 걸렀다. 실제 볼트에서 인덱서 473개 vs
+        그래프 805개 — 그 차이만큼 위키 검색에는 없는 노트가 그래프 노드로 들어갔다
+        (그림자 사본이 회의로 오인용되던 문제와 같은 뿌리)."""
+        vault = tmp_path / "vault"
+        vault.mkdir()
+        monkeypatch.setattr(graph_db, "DB_PATH", tmp_path / "wiki_graph.db")
+        from meeting_minutes_app.common import config_loader
+        monkeypatch.setattr(
+            config_loader, "get",
+            lambda key, default=None: (
+                str(vault) if key == "indexing.vault_path"
+                else ["99_원본파일"] if key == "indexing.exclude_dirs"
+                else default),
+        )
+        _write_note(vault, "00_Meetings/진짜회의.md",
+                    {"title": "진짜회의", "type": "meeting"}, "내용")
+        # 그림자 사본 — 텍스트추출 부산물이라 노트가 아니다
+        _write_note(vault, "00_Meetings/requirements.txt.md",
+                    {"title": "requirements.txt"}, "raw 텍스트")
+        _write_note(vault, "00_Meetings/발표자료.pptx.md",
+                    {"title": "발표자료.pptx"}, "raw 텍스트")
+        # exclude_dirs 에 걸리는 바이너리 아카이브
+        _write_note(vault, "99_원본파일/원본.md", {"title": "원본"}, "raw")
+        # 언더스코어 접두(템플릿·색인) — 기존 규칙도 유지돼야 한다
+        _write_note(vault, "00_Meetings/_index.md", {"title": "_index"}, "색인")
+
+        counts = graph_sync.backfill_from_vault(dry_run=True)
+        assert counts["notes_found"] == 1, "그림자 사본·제외폴더·_접두가 새어 들어왔다"
+
     def test_unresolved_wikilink_is_skipped_not_errored(self, tmp_path, monkeypatch):
         vault, db_path = self._setup_vault(tmp_path, monkeypatch)
         _write_note(vault, "00_Meetings/일반회의.md",

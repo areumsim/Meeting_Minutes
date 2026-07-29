@@ -13,7 +13,8 @@
 - **Phase 0 구현 완료** — FR-1·3·4·5·6·10·11·12 + FR-13(구현O·판정 보류). 신규 의존성 0개.
   커밋 `191b3f5`(부활·사유노출) → `7c9e467`(비방해 표시·웹은 보완재) → `02a4244`(누적·재열람·회의록 병합)
   → `0926625`(문서·스모크 절차) → `4e8e759`·`64c3819`(중복 칩 제거 · **랭킹 휴리스틱 2개 실측 반박·교체**).
-  회귀 테스트 포함 전체 스위트 489 passed / 1 skipped.
+  회귀 테스트 포함 전체 스위트 통과(2026-07-29 기준 515 passed / 1 skipped — 최신 수치는
+  `CLAUDE.md` 참조. 이 문서에 절대 수치를 박아 두면 커밋마다 낡는다).
 - **코드 리뷰 후속 수정(2026-07-29)** — 아래 4건은 v1.0 이 ✅ 로 판정했지만 **실효가 없었다.**
   실측으로 확인하고 고쳤다. 재측정 결과 shipped 랭킹 지표는 전부 불변(R@3 .96 / MRR .920),
   구현·벤치 일치 24/24.
@@ -65,11 +66,17 @@
 - 공유 모듈 `meeting_minutes_app/wiki_core/realtime_search.py` 에 `RealtimeVaultSearcher`
   클래스가 존재한다. 회의 중 발화 세그먼트가 확정될 때마다 관련 vault 노트를 **논블로킹**
   백그라운드로 검색해 호출자에게 전달한다.
-- CLI 경로: `meeting_pipeline/realtime_transcription.py:1495` 에서 생성·사용.
-- 웹 경로: `web/backend/api/realtime.py:671`(`_make_vault_searcher`) 에서 생성,
-  `:685 _emit_related_notes()` 가 WebSocket으로 `type: "related_notes"` 이벤트를 브라우저에 push.
+- CLI 경로: `meeting_pipeline/realtime_transcription.py` 의 `RealtimeSession.__init__`
+  (`self.vault_searcher` 초기화 블록)에서 생성하고, `RealtimeTranscriber`/`ws_transcriber`에
+  넘겨 `offer_segment()` 로 먹인다.
+- 웹 경로: `web/backend/api/realtime.py` 의 `_create_searcher()` 에서 생성,
+  `_emit_related_notes()` 가 WebSocket으로 `type: "related_notes"` 이벤트를 브라우저에 push.
 - 웹 UI: `web/frontend/src/components/Recorder.tsx` 의 **관련 노트** 바
-  (`:420 related_notes` 핸들러, `:1048~` 렌더링)가 관련 노트를 `[[제목#섹션]]` 칩으로 표시.
+  (`related_notes` 이벤트 핸들러 + `sortRelated`/`wikiExpanded` 렌더 블록)가 관련 노트를
+  `[[제목#섹션]]` 칩으로 표시.
+
+> 이 문서의 코드 참조는 **줄 번호 대신 함수·심볼 이름**을 쓴다 — 줄 번호는 커밋 한 번에
+> 어긋나고, 실제로 이 PRD의 참조 대부분이 그렇게 낡았다(2026-07-29 정정).
 - 도입 시점: 커밋 `d03657d` ("feat: unify finalize pipeline ... + realtime search").
 
 **왜 안 보였나 (핵심 원인 3가지)** — 재발 방지용 이력. 1·2는 해소, 3은 미해소:
@@ -98,10 +105,10 @@
 | 세션 내 누적 | 프론트 `Recorder.tsx`가 `related_notes`를 이전 결과와 **머지·dedup**(filename/title 기준)해 세션 동안 축적, 상위 8개 + `+N` 표시 |
 | 종료 후 병합 훅 | `collected_titles()` — 세션 종료 후 회의록 memo에 관련 노트 제목 병합용 API 존재 (Phase 0에서 근거까지 넘기는 `collected_evidence()` 추가) |
 | 스팸 억제 | 상위 3개, 직전과 동일 노트 세트면 표시 생략(`_last_shown_titles`) |
-| **섹션(heading) 인덱스 이미 존재** | `vault_indexer.py:313` `wiki_knowledge.section_index_enabled`(**default True**) → 노트를 `#` 헤딩 단위 섹션으로 인덱싱, `search_sections()`(`:779`)로 heading 단위 검색. 인용 정확도용. **PageIndex 트리의 얕은 버전이 이미 있음** |
-| **내부자료 우선 검증 이미 존재** | `meeting_workflow.claim_verify()`(`:620`) — 주 도메인 주장은 **vault 우선**(`_gather_claim_vault_context` "오프라인 우선", 섹션 인덱스 우선), vault로 불확실할 때만 논문(`_paper_verify_claim`, arXiv 우선)·웹으로. 도메인 외 웹검증 결과는 참고노트로 **축적**(다음 회의부터 로컬 검증) |
-| 실시간 웹검색(웹 전용) | `realtime.py:741~`(`_maybe_web_research`) — `wiki.online_search_enabled`+`wiki.realtime_web_search_interval`>0일 때만 발화별 `web_research`. **CLI 실시간엔 없음**(FR-12에서 이 동작을 정본으로 확정) |
-| 종료 후 병합 | `finalize.py:190` — 실시간 관련 노트 제목 + 웹검색 보완 블록을 회의록 memo에 병합 |
+| **섹션(heading) 인덱스 이미 존재** | `vault_indexer.py` `wiki_knowledge.section_index_enabled`(**default True**) → 노트를 `#` 헤딩 단위 섹션으로 인덱싱, `search_sections()`로 heading 단위 검색. 인용 정확도용. **PageIndex 트리의 얕은 버전이 이미 있음** |
+| **내부자료 우선 검증 이미 존재** | `meeting_workflow.claim_verify()` — 주 도메인 주장은 **vault 우선**(`_gather_claim_vault_context` "오프라인 우선", 섹션 인덱스 우선), vault로 불확실할 때만 논문(`_paper_verify_claim`, arXiv 우선)·웹으로. 도메인 외 웹검증 결과는 참고노트로 **축적**(다음 회의부터 로컬 검증) |
+| 실시간 웹검색(웹 전용) | `realtime.py`의 `_maybe_web_research()` — `wiki.online_search_enabled`+`wiki.realtime_web_search_interval`>0일 때만 발화별 `web_research`. **CLI 실시간엔 없음**(FR-12에서 이 동작을 정본으로 확정) |
+| 종료 후 병합 | `finalize.py`의 memo 주입 블록(`_related_evidence_memo()` + `extra_related_titles`) — 실시간 관련 노트 제목 + 근거 + 웹검색 보완 블록을 회의록 memo에 병합 |
 
 ### 2.2 빠져 있던 것 / 약했던 것 (이번 PRD 대상 → **Phase 0에서 전부 해소**)
 
@@ -164,16 +171,22 @@ CLI/웹 양 경로에서 실제 마이크 녹음으로 `related_notes`가 뜨는
 
 ### 4.2 P1 — 누적 검토 (핵심 확장)
 
-**FR-4 회의 간 누적 저장 (사이드카)** — ✅ 완료 (`02a4244`, SQLite 부분만)
+**FR-4 회의 간 누적 저장 (사이드카)** — ✅ 완료 (`02a4244`, SQLite 부분만 · **웹 세션 한정**)
 세션 동안 수집된 관련 노트를 근거(세그먼트 텍스트·점수·snippet·시각·회의 id)와 함께
 **영속 저장**한다. 메타데이터는 SQLite(`web/meeting_assistant.db`), 벡터는 turbovec 인덱스(`data/*.tvim`)에
 **온라인 ingest**(train/rebuild 없이 add만) — 회의가 쌓일수록 인덱스가 자연 성장한다. 원본 vault는 불변.
 → 구현: SQLite `related_notes` 테이블(session_id+note_path upsert, hits 누적, `idx_related_path`).
 **벡터 사이드카(`*.tvim`)는 Phase 1** — 현 규모에선 불필요(§5.0).
+⚠ **범위: 웹 세션만.** 저장은 `web/backend/api/realtime.py`가 `db.add_related_notes()`를 부르는
+경로에서만 일어난다. CLI 실시간(`run_meeting.py realtime`)은 근거를 회의록 병합에는 쓰지만
+사이드카에 남기지 않는다 — 웹 UI가 출하 표면이고 SQLite는 웹 앱의 저장소라서다.
 
-**FR-5 누적 검토 뷰** — ✅ 완료 (`02a4244`)
+**FR-5 누적 검토 뷰** — ✅ 완료 (`02a4244`, **웹 UI 한정**)
 회의별 "이번 회의에서 참조된 관련 노트" 목록 + **교차 회의 집계**("이 노트가 최근 N개 회의에서
-몇 번 참조됐나")를 볼 수 있는 화면/CLI를 제공. 발화 맥락(세그먼트)과 함께 되짚어볼 수 있어야 한다.
+몇 번 참조됐나")를 볼 수 있는 화면을 제공. 발화 맥락(세그먼트)과 함께 되짚어볼 수 있다.
+⚠ **CLI 검토 명령은 없다**(초안에는 "화면/CLI"로 적혀 있었다). 조회는 웹 회의 상세와
+`GET /api/sessions/{id}/related-notes`뿐이다 — FR-4가 웹 세션만 저장하므로 CLI 조회는
+보여줄 데이터가 없다. 필요해지면 Phase 1에서 FR-4의 CLI 저장과 함께 다룬다.
 
 **FR-6 회의록 자동 병합 강화** — ✅ 완료 (`02a4244`)
 현재 `collected_titles()`(제목만) → **제목 + 근거 링크**를 회의록의 `🔗 관련 노트` 섹션에
@@ -184,6 +197,12 @@ CLI/웹 양 경로에서 실제 마이크 녹음으로 `related_notes`가 뜨는
 노이즈는 **순위 상한** `wiki.related_notes_max_rank`(기본 0=끔)로 컷한다.
 ⚠ 2026-07-29 리뷰까지 이 임계값은 `rank_score`(상한 0.0164) 하한이었고 설정 노출도 없어
 **사실상 미작동**이었다 — 순위 기반으로 교체하고 UI에 노출했다.
+⚠ 그 교체 직후에도 결함이 남아 있었다(2026-07-29 2차 리뷰): 컷 기준이 **통합 순번**(`rank`)이라
+논문 arm(② 논문/이론 폴더 한정 검색)의 1위가 노트 후보 수(기본 10)만큼 밀린 값을 가졌다.
+그래서 이 설정을 1~10 중 무엇으로 켜도 **논문 arm 만이 찾은 노트가 100% 탈락**해 FR-11과
+인수기준 #5가 무효화됐다(기본 0이라 출하되지는 않았고, 설정 설명은 하필 "예: 5"를 권했다).
+→ 컷 기준을 **arm 내부 순위**(근거 필드 `arm_rank`)로 바꿨다. 정렬·표시는 계속 `rank_score`를
+쓴다 — `arm_rank` 로 정렬하면 실측에서 반박된 '논문 폴더 우대'와 같아지기 때문이다(§5.1).
 
 ### 4.3 P2 — PageIndex식 구조 인덱스 (관련성↑) — ❌ **Phase 1 미착수 (FR-7/8/9 전부)**
 
@@ -404,7 +423,7 @@ model2vec 는 전부 **Windows 휠이 있어 포터블 번들 가능**하지만(
 
 ## 7. 수용 기준 (Acceptance) — 판정 2026-07-29
 
-범례: ✅ 충족(코드+자동테스트 489 passed/1 skipped) · ⚠️ 구현O·**라이브 미검증** · ❌ Phase 1.
+범례: ✅ 충족(코드+자동테스트 그린) · ⚠️ 구현O·**라이브 미검증** · ❌ Phase 1.
 (4·5·11은 v1.0에서 ✅였으나 리뷰에서 실효 없음이 드러나 수정 후 재확인한 항목이다 — 위 '구현 현황' 참고.)
 
 **기능·표시**

@@ -97,7 +97,12 @@ def build_related_notes_section(evidence: Optional[List[Dict[str, Any]]],
     전체를 키로 써서 같은 제목이 헤딩만 다르게 두 줄 남을 수 있었다.
 
     max_rank: 노이즈 컷(FR-6). 실시간 검색에서 이 순위(0-기반)보다 아래였던 노트는
-    싣지 않는다. None/음수면 제한 없음. rank 정보가 없는 근거는 통과시킨다.
+    싣지 않는다. None/음수면 제한 없음. 순위 정보가 없는 근거는 통과시킨다.
+
+    순위는 `arm_rank`(자기 검색 arm 안에서의 순위)를 먼저 본다. `rank`는 arm ②(논문
+    폴더 한정 검색)를 arm ① 뒤에 이어 붙인 **통합 순번**이어서, 논문 arm 의 1위가
+    후보 수(기본 10)만큼 밀린 값을 갖는다 — 그것으로 컷하면 max_rank 를 1~10 중 무엇으로
+    두든 논문 arm 만이 찾은 노트가 100% 탈락해 FR-11(내부 논문 우선)이 무효화됐다.
     """
     rows: List[str] = []
     seen: set = set()
@@ -107,7 +112,9 @@ def build_related_notes_section(evidence: Optional[List[Dict[str, Any]]],
         if not link or title_key in seen:
             continue
         if max_rank is not None and max_rank >= 0:
-            rank = item.get("rank")
+            rank = (item or {}).get("arm_rank")
+            if rank is None:
+                rank = (item or {}).get("rank")
             if rank is not None and int(rank) > max_rank:
                 continue
         seen.add(title_key)

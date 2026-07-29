@@ -350,6 +350,37 @@ class TestInternalFirst:
         assert titles[:2] == ["n0", "n1"]      # 일반 상한 2건
         assert "양자컴퓨팅" in titles           # 논문은 보강으로 진입
 
+    def test_arm_rank_is_per_arm_while_rank_stays_combined(self, monkeypatch):
+        """순위 컷이 논문 arm 을 전멸시키지 않게 하는 필드(회의록 max_rank 전용).
+
+        rank 는 arm ②(논문 폴더 한정)를 arm ① 뒤에 이어 붙인 **통합 순번**이라 논문
+        arm 의 1위가 노트 후보 수만큼 밀린 값을 갖는다. 그것으로 노이즈 컷을 하면
+        wiki.related_notes_max_rank 를 1~10 중 무엇으로 둬도 논문 arm 만이 찾은 노트가
+        100% 탈락했다. arm_rank 는 자기 arm 안에서의 순위여서 arm 간 비교가 된다.
+
+        정렬·표시는 계속 rank_score(=통합 순번 기반)를 쓴다 — arm_rank 로 정렬하면
+        실측에서 반박된 '논문 폴더 우대'와 같아진다."""
+        s = make_searcher(monkeypatch,
+                          extra_cfg={"wiki.realtime_paper_dirs": ["01_References"],
+                                     "wiki.realtime_note_candidates": 2})
+        rows = [{"path": f"00_Meetings/n{i}.md", "wikilink_title": f"n{i}",
+                 "snippet": "s", "score": 9 - i} for i in range(2)]
+        rows.append({**INDEX_HIT})     # 01_References — 노트 상한 밖, 논문 arm 으로 진입
+        inject_indexer(s, rows, {})
+        s._search("발화")
+
+        notes = s.collected_notes()
+        by_title = {n["title"]: n for n in notes}
+        assert by_title["n0"]["rank"] == 0 and by_title["n0"]["arm_rank"] == 0
+
+        논문 = by_title["양자컴퓨팅"]
+        assert 논문["source_type"] == "paper"
+        assert 논문["rank"] == 2          # 통합 순번은 노트 후보 수만큼 밀려 있다
+        assert 논문["arm_rank"] == 0      # 자기 arm 에서는 1위
+
+        # 표시 순서는 그대로 — 논문을 끌어올리지 않는다
+        assert [n["title"] for n in notes] == ["n0", "n1", "양자컴퓨팅"]
+
     def test_candidate_pool_wider_than_display(self, monkeypatch):
         shown = []
         s = make_searcher(monkeypatch, on_notes=shown.append,

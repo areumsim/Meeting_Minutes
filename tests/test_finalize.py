@@ -348,6 +348,31 @@ class TestBuildRelatedNotesSection:
         norank = fz.build_related_notes_section([{"title": "C"}], max_rank=0)
         assert "[[C]]" in norank
 
+    def test_max_rank_uses_arm_rank_so_paper_arm_survives(self):
+        """순위 컷은 arm_rank(검색 arm 내부 순위)로 한다.
+
+        rank 는 arm ②(논문 폴더 한정 검색)를 arm ① 뒤에 이어 붙인 **통합 순번**이라,
+        논문 arm 의 1위가 노트 후보 수(기본 10)만큼 밀린 값을 갖는다. 그것으로 컷하면
+        max_rank 를 1~10 중 무엇으로 둬도 논문 arm 만이 찾은 노트가 100% 탈락해
+        FR-11(내부 논문 우선)과 인수기준 #5가 무효화된다."""
+        ev = [
+            {"title": "노트1위", "rank": 0, "arm_rank": 0},
+            # 논문 arm 의 1위 — 통합 순번으로는 10위지만 자기 arm 에서는 1위다
+            {"title": "논문1위", "rank": 10, "arm_rank": 0, "source_type": "paper"},
+            # 논문 arm 에서도 하위 → 컷돼야 한다(컷이 무력화되면 안 된다)
+            {"title": "논문8위", "rank": 17, "arm_rank": 7, "source_type": "paper"},
+        ]
+        md = fz.build_related_notes_section(ev, max_rank=2)
+        assert "[[노트1위]]" in md
+        assert "[[논문1위]]" in md
+        assert "[[논문8위]]" not in md
+
+    def test_max_rank_falls_back_to_rank_when_no_arm_rank(self):
+        """arm_rank 가 없는 옛 근거(이전 세션의 SQLite 누적분 등)는 rank 로 컷한다."""
+        ev = [{"title": "A", "rank": 0}, {"title": "B", "rank": 7}]
+        md = fz.build_related_notes_section(ev, max_rank=2)
+        assert "[[A]]" in md and "[[B]]" not in md
+
     def test_same_title_different_paths_collapse_to_one_row(self):
         """같은 제목의 다른 노트는 한 줄로 — 회의록은 [[제목]]으로 적어 구분이 안 된다.
         헤딩만 다른 경우도 포함(과거엔 [[제목#헤딩]] 전체를 키로 써서 두 줄 남았다)."""

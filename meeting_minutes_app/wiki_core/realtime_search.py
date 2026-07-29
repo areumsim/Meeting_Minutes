@@ -445,12 +445,16 @@ class RealtimeVaultSearcher:
         # 후보 조립 — 삽입 순서(노트 랭킹 → 논문 보강)를 유지해 동점 시 순서가 안정적
         cand: Dict[str, Dict[str, Any]] = {}
         note_rank: Dict[str, int] = {}
+        arm_rank: Dict[str, int] = {}
         for group, offset in ((notes, 0), (paper_notes, len(notes))):
             for rank, r in enumerate(group):
                 rel = str(r.get("path") or "")
                 if not rel or rel in cand:
                     continue
                 note_rank[rel] = offset + rank
+                # arm 내부 순위 — arm ② 는 offset 만큼 밀려 있어 note_rank 로는 arm 간
+                # 비교가 안 된다(회의록 노이즈 컷이 그 때문에 논문 arm 을 전멸시켰다).
+                arm_rank[rel] = rank
                 cand[rel] = {
                     "title": str(r.get("wikilink_title") or r.get("title") or ""),
                     "snippet": str(r.get("snippet", "") or "")[:200],
@@ -482,8 +486,14 @@ class RealtimeVaultSearcher:
                 "score": round(float(item["score"]), 4),
                 # rank = 이 발화에서의 0-기반 순위, rank_score = 그 순위의 단조 변환.
                 # 둘은 같은 정보이고 관련도 점수가 아니다(RANK_SCORE_TOP 주석 참고).
+                # 표시 순서는 이 rank_score 가 정한다 — 실측으로 정한 값이라 건드리지 않는다.
                 "rank": note_rank[rel],
                 "rank_score": round(1.0 / (RRF_K + note_rank[rel] + 1), 6),
+                # arm_rank = 자기 arm 안에서의 0-기반 순위. **순위 컷 전용**이다
+                # (wiki.related_notes_max_rank → finalize.build_related_notes_section).
+                # 정렬에는 쓰지 않는다 — 그러면 논문 폴더 가산과 같아져 실측에서
+                # 반박된 방향이 된다(아래 설계 근거 참고).
+                "arm_rank": arm_rank[rel],
                 "cosine": round(float(item["cosine"]), 4),
                 "matches": [],
                 "snippet": snippet,
@@ -519,6 +529,7 @@ class RealtimeVaultSearcher:
                 "score": round(float(r.get("score", 0) or 0), 3),
                 "rank": rank,
                 "rank_score": round(1.0 / (RRF_K + rank + 1), 6),
+                "arm_rank": rank,       # REST 는 arm 이 하나라 rank 와 같다
                 "cosine": 0.0,
                 "matches": (r.get("matches") or [])[:2],
                 "snippet": "",

@@ -352,7 +352,7 @@ flowchart LR
 | 업로드·배치·watcher | `run_stt()` → `_build_stt_provider_chain()` → `_transcribe_chunk_via_chain()` (`stt.py`) | **로컬까지 전부** |
 | 실시간 라이브 청크 (웹) | `_run_http_fallback._transcribe_chunk_bytes` (`web/backend/api/realtime.py`) | **Groq까지** — 기본모델 → 폴백모델 → Groq (`fallback_provider` 이벤트로 화면에 1회 알림) |
 | 실시간 라이브 청크 (CLI) | `RealtimeSession._run_stt` → `_call_stt` (`realtime_transcription.py`) | **Groq까지** — 같은 모델 3회 → 폴백모델 1회 → Groq |
-| 실시간 종료 후 재전사 (웹) | `_diarize_postprocess` → `run_stt()` | **로컬까지 전부** — 단 `realtime.diarize_postprocess`가 켜진 세션에서만 돈다(**기본 꺼짐**) |
+| 실시간 종료 후 재전사 (웹) | `_diarize_postprocess` → `run_stt()` | 체인 자체는 로컬까지지만 **로컬이 기여할 수는 없다**(아래 참고). `realtime.diarize_postprocess`가 켜진 세션에서만 돈다(**기본 꺼짐**) |
 | 2-pass 보정(revise) | `_revise_worker` | 폴백 없음 — 실패 시 빠른 패스 결과 유지(그 자체가 이미 Groq로 백업됨) |
 
 라이브 청크에 로컬을 쓰지 않는 이유는 CPU 전사가 실시간을 못 따라가 지연이 세션 내내 누적되기
@@ -362,6 +362,13 @@ flowchart LR
 Groq까지만 폴백하고, 종료 후 재전사는 웹의 diarize 후처리(기본 꺼짐)에서만 돈다. CLI 실시간은
 종료 후 재전사를 아예 하지 않는다. 따라서 OpenAI·Groq가 모두 죽은 상태의 실시간 녹음은
 세그먼트 0개로 끝난다 — 이때 로컬 폴백은 발동하지 않는다.
+
+diarize 후처리를 켜도 로컬이 그 세션을 구제하지는 못한다. **구조적으로 두 겹으로 막혀 있다**:
+(1) `_finalize`는 세그먼트 스냅샷이 비어 있으면 후처리 블록 앞에서 조기 return 한다 — 두 벤더가
+동시에 죽은 경우가 바로 그 상태다. (2) 도달해도 결과가 버려진다: 후처리는 **화자분리를 얻는 것이
+목적**이라 화자가 하나도 없는 결과를 `None`으로 처리하는데, `transcribe_local()`은 항상
+`speaker=""`를 돌려준다(faster-whisper에 화자분리가 없다). 즉 이 경로의 로컬 단계는 설계상
+기여할 수 없고, 위 표의 "로컬까지 전부"는 체인 구성만을 뜻한다.
 
 그 상황의 복구 경로는 **자동 재전사가 아니라 저장된 오디오의 재처리**다:
 - CLI는 `realtime.audio_backup`(기본 켜짐)으로 세션 WAV를 남기고, `_generate_output`이
@@ -397,9 +404,11 @@ CLI 라이브는 같은 모델을 3회 두드린 뒤 다음 단계로 가고(순
 
 **로컬 단계의 가중치 정책**: `_get_local_model()`은 `local_files_only=True`로만 로딩한다 —
 전사 도중 수백 MB 다운로드가 시작돼 처리가 몇 분 멈추는 일을 막기 위함이다. 준비가 안 됐으면
-"설정에서 [로컬 백업 모델 준비]를 누르세요" 안내로 **즉시** 실패한다. 다운로드는 웹 [설정] →
-오디오 전처리 → `[로컬 백업 모델 준비]`(`POST /api/local-stt/prepare` → `prepare_local_model()`)
-에서만 일어나고, 가중치는 `MeetingMinutesData/data/models/`에 저장된다(폴더째 옮겨도 따라간다).
+`_local_stage_ready()`가 **체인을 만들 때 이 단계를 아예 제외**하고 경고만 남긴다 — 마지막
+단계로 넣어 두면 그 오류가 `last_err`가 되어 앞선 진짜 원인(키 오류·한도 초과)을 덮어쓴다.
+다운로드는 웹 [설정] → 오디오 전처리 → `[로컬 백업 모델 준비]`
+(`POST /api/local-stt/prepare` → `prepare_local_model()`)에서만 일어나고, 가중치는
+`MeetingMinutesData/data/models/`에 저장된다(폴더째 옮겨도 따라간다).
 포터블 배포본에는 라이브러리(`faster-whisper`)가 포함되지만 가중치는 포함되지 않는다.
 
 비용 추정(`pricing.stt_rate_per_min()`)은 **기본 모델 기준**이다. Groq/로컬 단가도 표에 있지만

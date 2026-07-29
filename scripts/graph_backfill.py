@@ -7,6 +7,7 @@ Wiki Knowledge Graph 1회성 백필 — registry(action/decision) + Obsidian vau
     python scripts/graph_backfill.py               # 실제 반영
     python scripts/graph_backfill.py --dry-run      # 반영 없이 카운트만 미리보기
     python scripts/graph_backfill.py --merge-duplicates  # note/entity 이중 정체성 마이그레이션
+    python scripts/graph_backfill.py --prune-shadow-notes  # 그림자 사본 note 노드 정리
 """
 import sys
 import os
@@ -24,7 +25,23 @@ def main():
     ap.add_argument("--merge-duplicates", action="store_true",
                     help="note/entity 이중 정체성 수정 이전에 만들어진 중복 note 노드를 "
                          "person/organization/topic으로 병합(1회성 마이그레이션)")
+    ap.add_argument("--prune-shadow-notes", action="store_true",
+                    help="그림자 사본 필터가 적용되기 전에 들어온 note 노드(발표자료.pptx.md·"
+                         "data_loader.py.md 등 텍스트추출 부산물)를 삭제(1회성 마이그레이션). "
+                         "엣지가 붙어 있는 노드는 건너뛴다")
     args = ap.parse_args()
+
+    if args.prune_shadow_notes:
+        verb = "미리보기(dry-run)" if args.dry_run else "반영"
+        print(f"[graph-backfill] 그림자 사본 note 노드 정리 {verb} 시작...")
+        result = graph_sync.prune_shadow_note_nodes(dry_run=args.dry_run)
+        print(f"  - 삭제 {'예정' if args.dry_run else '완료'}: {result['pruned']}개")
+        if result["skipped_with_edges"]:
+            print(f"  - 엣지가 있어 건너뜀: {result['skipped_with_edges']}개 "
+                  f"(관계가 있으므로 자동 삭제하지 않는다)")
+        if args.dry_run:
+            print("(dry-run 이므로 실제 DB에는 반영되지 않았습니다.)")
+        return
 
     if args.merge_duplicates:
         verb = "미리보기(dry-run)" if args.dry_run else "반영"

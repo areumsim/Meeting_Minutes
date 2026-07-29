@@ -278,6 +278,36 @@ class TestBackfillFromVault:
         # 세미나1 -> 양자 컴퓨팅, 세미나1 -> 서지훈 (참조 노트 자신은 스스로를 링크하지 않음)
         assert len(edges) == 2
 
+    def test_prune_shadow_note_nodes_removes_only_orphans(self, tmp_path, monkeypatch):
+        """1회성 마이그레이션: 그림자 사본 필터 이전에 들어온 note 노드 정리.
+
+        재백필만으로는 사라지지 않는다(백필은 새 upsert 에만 작용하고 기존 행을 지우지
+        않는다). 단 엣지가 붙은 노드는 그래프에 실질적으로 참여하고 있으므로 건너뛴다."""
+        db = tmp_path / "g.db"
+        monkeypatch.setattr(graph_db, "DB_PATH", db)
+        graph_db.init_graph_db(db)
+
+        keep = graph_db.upsert_node("note", "진짜 회의록", db_path=db)
+        orphan = graph_db.upsert_node("note", "발표자료.pptx", db_path=db)
+        orphan2 = graph_db.upsert_node("note", "data_loader.py", db_path=db)
+        linked = graph_db.upsert_node("note", "README.md", db_path=db)
+        topic = graph_db.upsert_node("topic", "양자", db_path=db)
+        graph_db.upsert_edge(linked, topic, "MENTIONED", db_path=db)
+
+        # dry-run 은 세지만 지우지 않는다
+        pre = graph_sync.prune_shadow_note_nodes(dry_run=True, db_path=db)
+        assert pre["pruned"] == 2 and pre["skipped_with_edges"] == 1
+        assert len(graph_db.list_nodes(type="note", db_path=db)) == 4
+
+        out = graph_sync.prune_shadow_note_nodes(db_path=db)
+        assert out["pruned"] == 2
+        assert out["skipped_with_edges"] == 1      # README.md 는 엣지가 있어 보존
+        labels = {n["label"] for n in graph_db.list_nodes(type="note", db_path=db)}
+        assert labels == {"진짜 회의록", "README.md"}
+        assert keep and orphan and orphan2         # id 발급 자체는 정상이었다
+        # 엣지는 그대로
+        assert len(graph_db.list_edges(relation_type="MENTIONED", db_path=db)) == 1
+
     def test_shadow_copies_and_excluded_dirs_are_skipped(self, tmp_path, monkeypatch):
         """그래프 스캔은 인덱서와 **같은 노트 판정**을 써야 한다.
 

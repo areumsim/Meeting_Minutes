@@ -161,6 +161,54 @@ def merge_note_duplicates_into_entities(
     return {"merged": merged}
 
 
+def prune_shadow_note_nodes(
+    dry_run: bool = False, *, db_path: Optional[Path] = None,
+) -> Dict[str, int]:
+    """일회성 마이그레이션: `_iter_vault_notes()`가 그림자 사본을 걸러내기 전에 만들어진
+    note 노드를 지운다.
+
+    그 수정 이전의 스캔은 `_` 접두만 걸러서, 텍스트추출 부산물(`발표자료.pptx.md`,
+    `data_loader.py.md`, `README.md.md` 등)까지 회의 노트와 같은 `note` 타입으로
+    그래프에 넣었다. 실제 볼트에서 note 노드 577개 중 257개(45%)가 이것이었다 —
+    지식그래프 탐색 화면에서 노이즈로만 보인다.
+
+    재백필만으로는 사라지지 않는다(`merge_note_duplicates_into_entities`와 같은 이유 —
+    백필은 새로 upsert되는 노드에만 작용하고 기존 행을 지우지 않는다).
+
+    판정은 인덱서와 같은 단일 소스(`vault_indexer._SHADOW_EXTS`)를 쓴다. 라벨의 확장자가
+    거기 있으면 그림자 사본이다. 엣지가 붙어 있으면 **지우지 않는다** — 실제 볼트에서는
+    전부 엣지 0건인 고아였지만, 엣지가 있다면 그래프에 실질적으로 참여하고 있다는
+    뜻이므로 사용자 확인 없이 관계를 끊지 않는다(그 수는 `skipped_with_edges`로 돌려준다).
+    """
+    from meeting_minutes_app.wiki_core.vault_indexer import _SHADOW_EXTS
+
+    graph_db.init_graph_db(db_path)
+    pruned = 0
+    skipped = 0
+    with graph_db._conn(db_path) as conn:
+        rows = conn.execute("SELECT id, label FROM nodes WHERE type='note'").fetchall()
+        for row in rows:
+            label = str(row["label"] or "")
+            if Path(label).suffix.lower() not in _SHADOW_EXTS:
+                continue
+            n_edges = conn.execute(
+                "SELECT COUNT(*) FROM edges WHERE from_node_id = ? OR to_node_id = ?",
+                (row["id"], row["id"]),
+            ).fetchone()[0]
+            if n_edges:
+                skipped += 1
+                continue
+            pruned += 1
+            if not dry_run:
+                conn.execute("DELETE FROM nodes WHERE id = ?", (row["id"],))
+
+        if dry_run:
+            conn.rollback()
+        else:
+            conn.commit()
+    return {"pruned": pruned, "skipped_with_edges": skipped}
+
+
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 #  Registry 백필
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

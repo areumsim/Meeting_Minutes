@@ -234,12 +234,16 @@ flowchart TD
     C --> D[delta → 클라이언트 실시간 표시]
     C --> E[completed → DB 저장]
     C --> F[_translate_segment\n비동기 EN→KO\n선택적]
-    C --> G{3세그먼트마다}
-    G --> H[_search_vault_segment\nThreadPool\nObsidian REST 검색]
-    H --> I[_related_notes 누적\n브라우저 표시]
+    C --> G{3세그먼트마다\nrealtime_search_interval}
+    G --> H[RealtimeVaultSearcher\nThreadPool 논블로킹\n섹션→논문폴더→노트 RRF]
+    H --> I[related_notes 이벤트\n내부 앞줄·웹 뒤\n+ 비활성 사유 배지]
+    G --> G2{웹 보완 게이트\n내부 미발견 시만}
+    G2 --> I
 
     E --> J[disconnect → _finalize]
     I --> J
+    I --> I2[related_notes 테이블\n근거 누적 사이드카]
+    I2 --> I3[회의 상세 '참조된 관련 노트'\n+ 교차 회의 집계]
     J --> J0{트리비얼 가드\n세그먼트<2 또는 <15자?}
     J0 -- 예 --> JX[전사만 저장·회의록 생략\ncompleted]
     J0 -- 아니오 --> J1[번역 검수\ntranslate + stt.translation_review\nreview_translations로 translated_text 교정]
@@ -255,11 +259,45 @@ flowchart TD
 | 항목 | 배치 ingestion | 실시간 WebSocket |
 |---|---|---|
 | STT | `gpt-4o-transcribe-diarize` 우선 (`/v1/audio/transcriptions`) | Realtime transcription, 기본 화자분리 없음 |
-| vault 검색 | 세션 완료 후 2패스 | 세그먼트마다 비동기 + 세션 종료 후 통합 |
+| vault 검색 | 세션 완료 후 2패스 | 세그먼트마다 비동기(내부자료 우선: 섹션→논문폴더→노트 RRF) + 세션 종료 후 통합 |
+| 실시간 웹 보완 | 해당 없음 | 웹 UI 녹음 전용(`online_search_enabled`+`realtime_web_search_interval`>0), 내부 미발견 시만. **CLI 실시간엔 없음** |
 | 회의록 생성 | 전체 전사 후 1회 | 세션 종료 후 1회 |
 | 사실 검증 | ✅ (current_title 필터) | ✅ CLI/서버 WebSocket, ❌ standalone/mobile direct |
 | Wiki Context/Proposal | ✅ | ✅ CLI/서버 WebSocket, ❌ standalone/mobile direct |
 | Supermemory 저장 | ✅ `write_meeting_note()` 성공 시(`finalize.run_post_session()` 경유) | ✅ CLI/서버 WebSocket의 `enrich_and_publish()` 성공 시 |
+
+### 실시간 관련 노트 (내부자료 우선 · 누적)
+
+공용 모듈은 `wiki_core/realtime_search.py`의 `RealtimeVaultSearcher` 한 곳이고, UI별 분기는
+호출자(CLI `realtime_transcription`, 웹 `api/realtime.py`)에 둔다. `offer_segment()`는 STT
+핫패스에서 호출되므로 **논블로킹·예외 무전파**가 계약이다.
+
+**검색 순서(내부자료 우선).** ① `search_sections()` 섹션(heading) 인덱스 → ② 논문/이론 폴더
+(`wiki.realtime_paper_dirs`)에 한정한 섹션 검색(로컬 논문의 후보 풀 진입 보장, 동순위 1.2배 가중)
+→ ③ `search()` 노트 인덱스(TF-IDF+임베딩 RRF — 영↔한 교차언어 회수는 이 경로가 담당).
+세 결과를 노트 경로 단위로 병합하고 RRF(k=60)로 융합해 `rank_score` 내림차순 정렬한다.
+후보는 넉넉히 모으고(기본 섹션 12 + 노트 10) **표시만 상위 3개**, 나머지는 종료 후 누적 검토에서 본다.
+웹 검색은 이 모듈이 하지 않는다 — 항상 보완재로 호출자(웹 UI)에서만, 그리고 내부에서
+못 찾은 구간에서만(`wiki.realtime_web_only_if_no_vault_hit`).
+
+**비활성 사유 노출.** 인덱스/Obsidian이 모두 없으면 과거처럼 조용히 no-op 하지 않고 사유
+(`off`/`no_vault`/`index_missing`/`obsidian_unreachable`/`no_backend`)를 `status()`로 알린다.
+웹은 `related_notes` 이벤트의 `status` 필드 → Recorder 상태 배지, CLI는 1회 안내 줄.
+`warmup()`이 세션 시작 직후 백엔드를 미리 확인하므로 첫 발화를 기다리지 않는다.
+
+**표시 정책(비방해).** 녹음 중에는 고정 높이 얇은 바를 상시 유지해 결과가 새로 들어와도 전사
+본문이 밀리지 않는다(자동 리플로우 0, 팝업·포커스 이동·소리 없음). 내부(📄 노트/🎓 논문)를
+웹(🌐)보다 앞줄에 두고, 근거(섹션경로·score·snippet·발화)는 사용자가 '근거 보기'를 눌렀을
+때만 펼친다. 녹음 중 노트로 이동하지 않는다 — Recorder 언마운트는 녹음 중단이므로, 노트 이동은
+종료 후 회의 상세에서 제공한다.
+
+**누적(사이드카).** 종료 시 `collected_evidence()`(노트별 최고 근거 + 참조 횟수)를 웹 SQLite
+`related_notes` 테이블에 upsert 하고, 회의 상세의 "참조된 관련 노트"와 교차 회의 집계
+(`related_notes_cross_sessions()`)로 다시 열람한다. 동시에 `finalize`가 근거를 생성 memo에 주입하고
+회의록 말미에 `## 🔗 관련 노트` 섹션을 LLM 없이 결정적으로 덧붙인다(사실검증 블록 뒤 → 검증 섹션
+재작성에 지워지지 않음). vault 원본은 불변 — 관련정보는 전부 사이드카에 쌓인다.
+
+라이브 스모크 절차는 `docs/SMOKE_실시간_관련노트.md` 참고.
 
 ---
 
@@ -744,6 +782,15 @@ LLM은 다음 고정 답변 구조를 반드시 따르도록 강제된다:
 | `wiki.claim_verify_max` | `8` | 최대 검증 주장 수 (비용 제한용) |
 | `wiki.context_max_chars` | `6000` | 노트당 주입 최대 글자 수 (코드 fallback은 2000, 배포 config.example 기본은 6000) |
 | `wiki.online_search_enabled` | `false` | 웹 리서치 (Anthropic web_search tool) |
+| `wiki.realtime_vault_search` | `true` | 녹음 중 발화별 관련 노트 검색(내부자료 우선). 인덱스/볼트 미설정 시 조용히 비활성 + 웹 UI에 사유 배지 |
+| `wiki.realtime_search_interval` | `3` | N개 세그먼트마다 1회 검색(스로틀) |
+| `wiki.realtime_search_backend` | `"auto"` | `auto`=인덱스 우선·REST 폴백 / `index` / `rest` |
+| `wiki.realtime_section_candidates` / `realtime_note_candidates` | `12` / `10` | 발화별 내부 후보 수(섹션/노트). 표시는 상위 N개, 나머지는 종료 후 누적 검토용 |
+| `wiki.realtime_display_count` | `3` | 녹음 화면 칩으로 한 번에 표시할 개수 |
+| `wiki.realtime_query_chars` | `180` | 검색 쿼리로 쓸 발화 앞부분 길이(교차언어·의미검색 회수에 영향) |
+| `wiki.realtime_paper_dirs` | `["02_이론_학습","01_References","원문추출"]` | 로컬 논문/이론 폴더 — 후보 풀 진입 보장 + 동순위 우선(웹 arXiv보다 먼저 인용) |
+| `wiki.realtime_web_search_interval` | `0` | 실시간 웹 보완 간격(0=끔). **웹 UI 녹음 전용** — CLI 실시간은 내부 검색만 |
+| `wiki.realtime_web_only_if_no_vault_hit` | `true` | 내부에서 후보를 찾은 구간은 웹 호출 생략(웹은 보완재) |
 | `wiki.claim_web_verify` | `false` | 불확실·충돌 주장에 웹 전문가 의견 검색 (API 비용 발생) |
 | `wiki.domain_relevance_keywords` | `[]`(내장 기본값 사용) | vault 검색 관련도 가산점 마커(`note_domain_score()`). 두 번째 도메인 추가 시 그 도메인 마커도 여기 합쳐야 검색 상위 노출됨 |
 | `wiki_knowledge.enabled` | `true` | Wiki 지식 순환 전체 활성화 (registry/context package/proposal/prep-brief 일괄 게이트) |

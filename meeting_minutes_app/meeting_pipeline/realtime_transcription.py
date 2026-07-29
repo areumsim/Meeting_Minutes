@@ -1502,10 +1502,10 @@ class RealtimeSession:
                 topic=self.topic,
                 on_notes=self._display_related_notes,
                 on_status=self._display_search_status)
-            if _searcher.enabled:
+            # `enabled` 는 이 시점에 게이트만 반영한다(백엔드 판정은 warmup 이후) →
+            # 여기서 결과를 단정하지 않고 warmup 의 on_status 콜백이 한 줄로 알린다.
+            if _searcher.status().get("gate"):
                 self.vault_searcher = _searcher
-                print(f"  {C_GREEN}[Wiki]{C_RESET} 실시간 관련 노트 검색 활성 "
-                      f"{C_GRAY}(내부자료 우선 — 섹션·논문 노트 포함){C_RESET}")
                 _searcher.warmup()   # 인덱스 연결을 미리 확인(논블로킹) → 사유 즉시 안내
             else:
                 _st = _searcher.status()
@@ -1587,9 +1587,19 @@ class RealtimeSession:
             self.indicator.release()
 
     def _display_search_status(self, status) -> None:
-        """실시간 검색 백엔드 상태/비활성 사유를 1회 안내 (FR-1)."""
+        """실시간 검색 백엔드 상태를 1회 안내 (FR-1).
+
+        성공/실패 **양쪽 모두** 여기서 알린다. 세션 시작 시점에는 백엔드 연결 여부를
+        아직 알 수 없으므로(`_lazy_init` 은 warmup 스레드에서 처리) 시작 로그가
+        "활성"을 단정하면 곧이어 "비활성 — 사유" 가 뒤따르는 모순이 생겼다."""
         try:
             if status.get("enabled"):
+                backend = {"index": "로컬 인덱스", "rest": "Obsidian REST"}.get(
+                    status.get("backend") or "", status.get("backend") or "")
+                self._print_indicator_safe(
+                    f"\n  {C_GREEN}[Wiki]{C_RESET} 실시간 관련 노트 검색 준비 완료"
+                    f"{f' ({backend})' if backend else ''} "
+                    f"{C_GRAY}— 내부자료 우선(섹션·논문 노트 포함){C_RESET}")
                 return
             reason = status.get("reasonText") or ""
             if not reason:
@@ -1612,7 +1622,8 @@ class RealtimeSession:
                 title = n.get("title", "")
                 if not title:
                     continue
-                icon = "🎓" if n.get("source_type") == "paper" else "📄"
+                from meeting_minutes_app.wiki_core.realtime_search import SOURCE_ICON
+                icon = SOURCE_ICON.get(n.get("source_type") or "note", "📄")
                 heading = n.get("heading") or ""
                 label = f"[[{title}#{heading}]]" if heading else f"[[{title}]]"
                 score = float(n.get("score", 0) or 0)

@@ -334,10 +334,32 @@ class TestBuildRelatedNotesSection:
         assert md.count("- ") == 2
         assert "[[A]]" in md and "[[B]]" in md
 
-    def test_min_score_filters(self):
-        ev = [{"title": "A", "rank_score": 0.001}, {"title": "B", "rank_score": 0.5}]
-        md = fz.build_related_notes_section(ev, min_score=0.1)
-        assert "[[B]]" in md and "[[A]]" not in md
+    def test_max_rank_filters_noise(self):
+        """FR-6 노이즈 컷은 **순위**로 한다(0-기반). 과거엔 rank_score 하한이었는데
+        그 값의 상한이 1/(60+1)≈0.0164라 '0.1' 같은 점수처럼 보이는 임계값을 주면
+        전부 사라지는 함정이었다."""
+        ev = [{"title": "A", "rank": 0}, {"title": "B", "rank": 7}]
+        md = fz.build_related_notes_section(ev, max_rank=2)
+        assert "[[A]]" in md and "[[B]]" not in md
+        # 제한 없음(None)이면 둘 다
+        both = fz.build_related_notes_section(ev)
+        assert "[[A]]" in both and "[[B]]" in both
+        # rank 정보가 없는 근거(REST 폴백 등)는 컷하지 않는다
+        norank = fz.build_related_notes_section([{"title": "C"}], max_rank=0)
+        assert "[[C]]" in norank
+
+    def test_same_title_different_paths_collapse_to_one_row(self):
+        """같은 제목의 다른 노트는 한 줄로 — 회의록은 [[제목]]으로 적어 구분이 안 된다.
+        헤딩만 다른 경우도 포함(과거엔 [[제목#헤딩]] 전체를 키로 써서 두 줄 남았다)."""
+        ev = [{"title": "Acme", "filename": "01_References/Companies/Acme.md",
+               "heading": "개요"},
+              {"title": "Acme", "filename": "Archive/QC/회사/Acme.md",
+               "heading": "로드맵"}]
+        md = fz.build_related_notes_section(ev)
+        assert md.count("- ") == 1
+        # titles 폴백도 같은 제목을 다시 추가하지 않는다
+        md2 = fz.build_related_notes_section(ev, ["Acme"])
+        assert md2.count("- ") == 1
 
     def test_empty_returns_empty_string(self):
         assert fz.build_related_notes_section([], []) == ""

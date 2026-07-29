@@ -45,8 +45,9 @@ PLAN_UNSET = object()
 #: 회의록에 자동 삽입되는 실시간 관련 노트 섹션 헤딩 (FR-6)
 RELATED_NOTES_HEADING = "## 🔗 관련 노트"
 
-#: 출처유형 → 표시 아이콘 (웹 UI/CLI 표시와 동일 규약: 내부 📄/🎓, 웹 🌐)
-_SOURCE_ICON = {"paper": "🎓", "web": "🌐", "note": "📄"}
+#: 출처유형 → 표시 아이콘. 규약 정본은 source_type 을 만드는 realtime_search 에 있다
+#: (웹 Recorder·CLI 표시와 같은 표를 쓰기 위해 여기서 재정의하지 않는다).
+from meeting_minutes_app.wiki_core.realtime_search import SOURCE_ICON as _SOURCE_ICON
 
 
 def _evidence_link(item: Dict[str, Any]) -> str:
@@ -82,23 +83,34 @@ def _related_evidence_memo(evidence: Optional[List[Dict[str, Any]]],
 
 def build_related_notes_section(evidence: Optional[List[Dict[str, Any]]],
                                 titles: Optional[List[str]] = None,
-                                min_score: float = 0.0,
+                                max_rank: Optional[int] = None,
                                 limit: int = 10) -> str:
     """회의록 말미에 붙일 "## 🔗 관련 노트" 섹션 마크다운.
 
     근거(섹션경로·점수)가 있으면 링크와 함께, 없으면 제목 링크만 나열한다.
     LLM 호출 없이 결정적으로 만든다 — 실시간 검색이 찾은 사실 그대로가 남아야
     한다(생성 모델이 관련 노트를 누락·변형하던 문제 회피).
+
+    중복 제거는 **제목** 기준이다. 볼트에는 같은 제목의 노트가 여러 폴더에 있을 수
+    있고(`01_References/Companies/Acme.md` vs `Archive/…/회사/Acme.md`), 회의록은
+    `[[제목]]` 위키링크로 적으므로 두 줄이 구분되지 않는다. 과거엔 `[[제목#헤딩]]`
+    전체를 키로 써서 같은 제목이 헤딩만 다르게 두 줄 남을 수 있었다.
+
+    max_rank: 노이즈 컷(FR-6). 실시간 검색에서 이 순위(0-기반)보다 아래였던 노트는
+    싣지 않는다. None/음수면 제한 없음. rank 정보가 없는 근거는 통과시킨다.
     """
     rows: List[str] = []
     seen: set = set()
     for item in (evidence or []):
         link = _evidence_link(item)
-        if not link or link in seen:
+        title_key = str((item or {}).get("title") or "").strip().lower()
+        if not link or title_key in seen:
             continue
-        if float(item.get("rank_score") or 0) < min_score:
-            continue
-        seen.add(link)
+        if max_rank is not None and max_rank >= 0:
+            rank = item.get("rank")
+            if rank is not None and int(rank) > max_rank:
+                continue
+        seen.add(title_key)
         icon = _SOURCE_ICON.get(str(item.get("source_type") or "note"), "📄")
         bits = [f"- {icon} {link}"]
         score = float(item.get("score") or 0)
@@ -114,10 +126,10 @@ def build_related_notes_section(evidence: Optional[List[Dict[str, Any]]],
         if len(rows) >= limit:
             break
     for t in (titles or []):
-        link = f"[[{t}]]"
-        if t and link not in seen and len(rows) < limit:
-            seen.add(link)
-            rows.append(f"- 📄 {link}")
+        title_key = str(t or "").strip().lower()
+        if title_key and title_key not in seen and len(rows) < limit:
+            seen.add(title_key)
+            rows.append(f"- 📄 [[{t}]]")
     if not rows:
         return ""
     return (f"{RELATED_NOTES_HEADING}\n\n"
@@ -469,9 +481,12 @@ def run_post_session(
         def _related_section():
             if RELATED_NOTES_HEADING in res.minutes:
                 return          # 이미 있으면 중복 삽입 금지 (재생성·복구 경로)
+            # 노이즈 컷(FR-6): 0=제한 없음. 실시간 검색에서 이 순위 밖이었던 노트는 제외.
+            _max_rank = int(_c("wiki.related_notes_max_rank", 0) or 0)
             section = build_related_notes_section(
                 options.extra_related_evidence,
                 options.extra_related_titles,
+                max_rank=(_max_rank - 1) if _max_rank > 0 else None,
             )
             if not section:
                 return

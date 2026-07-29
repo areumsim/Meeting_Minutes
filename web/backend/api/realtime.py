@@ -768,7 +768,10 @@ class BrowserRealtimeSession:
             from meeting_minutes_app.common import config_loader as _rc
             from meeting_minutes_app.meeting_pipeline import meeting_minutes as mm
             llm = mm.LLMClient(preferred=_rc.get("models.llm", "gpt") or "gpt")
-            result = llm.web_research(text[:60])
+            # 쿼리 길이는 내부 검색과 같은 설정을 쓴다 — 60자 하드코딩이던 과거엔
+            # 실측(60→180자에서 R@3 +0.17)이 웹 경로에만 반영되지 않았다.
+            _qchars = max(int(_rc.get("wiki.realtime_query_chars", 180) or 180), 20)
+            result = llm.web_research(text[:_qchars])
             if result and result.get("text"):
                 sources = result.get("sources", [])[:3]
                 with self._notes_lock:

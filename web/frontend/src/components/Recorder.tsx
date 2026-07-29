@@ -35,6 +35,8 @@ interface WikiSearchStatus {
   reasonText: string;
 }
 
+// 출처유형 → 아이콘. 규약 정본은 source_type 을 만드는 파이썬 쪽
+// `wiki_core/realtime_search.py: SOURCE_ICON` — 값을 바꿀 땐 그쪽을 먼저 고친다.
 const SOURCE_ICON: Record<string, string> = { paper: "🎓", web: "🌐", note: "📄" };
 
 // 내부(📄/🎓)를 웹(🌐)보다 앞줄에 두고, 그 안에서는 랭크 점수 순으로 정렬한다.
@@ -435,9 +437,13 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
                 segmentText: n.segmentText || "",
                 rankScore: n.rankScore ?? 0,
               })), ...prev];
+              // 중복 제거는 **제목** 기준 — 서버의 표시용 dedupe_by_title 과 같은 규칙.
+              // filename 으로 걸렀던 과거엔 같은 제목의 다른 경로 노트(예:
+              // 01_References/Companies/Acme.md 와 Archive/…/회사/Acme.md)가 서로 다른
+              // 발화에서 잡히면 화면에 [[Acme]] 칩이 두 개 떴다.
               const seen = new Set<string>();
               const deduped = merged.filter(n => {
-                const key = n.filename || n.title;
+                const key = (n.title || n.filename || "").trim().toLowerCase();
                 if (!key || seen.has(key)) return false;
                 seen.add(key);
                 return true;

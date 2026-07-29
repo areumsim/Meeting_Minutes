@@ -47,7 +47,8 @@ if hasattr(sys.stdout, "buffer"):
 from meeting_minutes_app.wiki_core import realtime_search as rs   # noqa: E402
 from meeting_minutes_app.wiki_core import vault_indexer as vi     # noqa: E402
 
-RRF_K = 60.0
+RRF_K = vi.RRF_K          # 상수 정본은 vault_indexer (실시간 경로도 같은 값을 쓴다)
+PAPER_MATCH = rs._PAPER_PATH_MATCH   # 논문 폴더 매칭 규칙도 구현과 공유
 SEED = 20260729
 DISPLAY_N = 3
 _HANGUL = re.compile(r"[가-힣]")
@@ -171,7 +172,8 @@ def rank(idx, query: str, *, mode: str, note_k: int = 10, paper_k: int = 4,
 
     if mode in ("shipped", "single_idf"):
         base = len(note_rank)
-        for r, x in enumerate(idx.search(query, limit=paper_k, path_prefixes=papers)):
+        for r, x in enumerate(idx.search(query, limit=paper_k, path_prefixes=papers,
+                                         path_match=PAPER_MATCH)):
             rel = x.get("path") or ""
             if rel and rel not in note_rank:
                 touch(rel); note_rank[rel] = base + r
@@ -180,7 +182,7 @@ def rank(idx, query: str, *, mode: str, note_k: int = 10, paper_k: int = 4,
     elif mode == "section_arm":
         groups = [idx.search_sections(query, limit=section_k),
                   idx.search_sections(query, limit=max(3, section_k // 3),
-                                      path_prefixes=papers)]
+                                      path_prefixes=papers, path_match=PAPER_MATCH)]
         for g in groups:
             for r, s in enumerate(g):
                 rel = s.get("note_path") or ""
@@ -216,14 +218,18 @@ def rank(idx, query: str, *, mode: str, note_k: int = 10, paper_k: int = 4,
 
 
 VARIANTS: Dict[str, Dict[str, Any]] = {
-    "shipped(노트RRF+논문보강+위치특정)": dict(mode="shipped"),
+    # shipped 는 paper_tiebreak=False — 구현에서 제거했다. 순위를 1/(k+rank+1) 로
+    # 재환산하면 rank 가 후보마다 유일해 동점이 없고, 그래서 tie-break 이 한 번도
+    # 발동하지 않는 죽은 코드였다. 아래 구버전 변이들은 비교용으로만 남긴다.
+    "shipped(노트RRF+논문보강+위치특정)": dict(mode="shipped", paper_tiebreak=False),
     "section_arm+논문1.2배(구버전)":     dict(mode="section_arm", paper_boost=1.2,
                                               paper_tiebreak=False),
     "section_arm(가산없음)":             dict(mode="section_arm"),
     "section_arm(가중0.5)":              dict(mode="section_arm", section_weight=0.5),
     "notes_only":                        dict(mode="notes_only"),
-    "shipped+논문1.2배":                 dict(mode="shipped", paper_boost=1.2),
-    "single_idf(이중idf 제거)":          dict(mode="single_idf"),
+    "shipped+논문1.2배":                 dict(mode="shipped", paper_boost=1.2,
+                                              paper_tiebreak=False),
+    "single_idf(이중idf 제거)":          dict(mode="single_idf", paper_tiebreak=False),
 }
 
 
@@ -351,7 +357,9 @@ def main() -> int:
     s._init_done = True
     agree = 0
     for q, _, _ in qs:
-        a = [h["filename"] for h in s._search_index(q, q)][:5]
+        # 구현은 후보를 전량 반환하고 제목 중복 제거는 표시 단계에서 한다 —
+        # 벤치의 rank() 는 화면에 뜨는 순서를 재므로 같은 단계를 거쳐 비교한다.
+        a = [h["filename"] for h in rs.dedupe_by_title(s._search_index(q, q))][:5]
         b = [h["rel"] for h in rank(idx, q, **VARIANTS["shipped(노트RRF+논문보강+위치특정)"])][:5]
         agree += int(a == b)
     s.shutdown()

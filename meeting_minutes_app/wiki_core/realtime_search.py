@@ -18,9 +18,13 @@ CLI(realtime_transcription)와 웹(web/backend/api/realtime.py) 양쪽에서 사
 내부자료 우선(꼼꼼) 검색 — 인덱스 백엔드일 때:
   ① 노트 인덱스 search (TF-IDF+임베딩 RRF) … 랭킹의 주축, 교차언어(en↔ko)도 담당
   ② 논문/이론 폴더 한정 노트 검색           … 로컬 논문·원문추출의 후보 풀 진입 보장
+     폴더 매칭은 `path_match="segment"` — 볼트 하위에 묻힌
+     `Archive/…/02_이론_학습` 같은 경로도 잡는다(배지 판정과 같은 규칙).
   ③ 후보 노트 안에서만 섹션 채점             … "어느 대목이 근거인가"(표시·인용용)
-  → 순위는 ①②의 RRF 랭크, 동점이면 논문 노트 우선. 후보는 넉넉히(기본 14) 모으고
-    표시만 상위 N개. 랭킹 구조는 실측으로 고른 것 — docs/검색랭킹_이론과근거.md 참고.
+  → 순위는 ① 랭킹 순서 그대로이고, ②에서만 나온 논문 후보를 그 뒤에 이어붙인다.
+    후보는 넉넉히(기본 14) 모아 **전량 누적**하고, 제목 중복 제거는 화면·회의록에
+    같은 `[[제목]]` 이 두 번 보이지 않게 하려는 것이므로 **표시 단계에서만** 한다.
+    랭킹 구조는 실측으로 고른 것 — docs/검색랭킹_이론과근거.md 참고.
   웹 검색은 이 모듈이 하지 않는다 — 항상 보완재로 호출자(웹 UI)에서 별도 처리.
 
 사용:
@@ -42,6 +46,8 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
+
+from meeting_minutes_app.wiki_core.vault_indexer import RRF_K, path_matcher
 
 try:
     from meeting_minutes_app.common import config_loader as _cfg
@@ -65,8 +71,21 @@ REASON_TEXT: Dict[str, str] = {
     "no_backend": "검색 인덱스도 Obsidian도 사용할 수 없습니다 — 인덱스를 재빌드하세요.",
 }
 
-#: RRF 융합 상수 (vault_indexer._rrf_fuse와 동일 관례)
-_RRF_K = 60.0
+#: 출처유형 → 표시 아이콘. 이 모듈이 `source_type` 을 만드는 곳이므로 규약도 여기 둔다
+#: (회의록 `finalize`·CLI 표시가 이걸 import 한다. 프런트 `Recorder.tsx` 는 TS라
+#:  같은 표를 복제하지만 값을 바꿀 땐 이 상수가 기준이다.)
+SOURCE_ICON: Dict[str, str] = {"note": "📄", "paper": "🎓", "web": "🌐"}
+
+#: 논문 폴더 매칭 규칙 — 접두사가 아니라 **경로 세그먼트** 일치.
+#: `02_이론_학습` 처럼 볼트 하위(`Archive/…/02_이론_학습`)에 있는 폴더도 잡아야
+#: 논문 보강 arm 과 배지 판정이 같은 노트 집합을 보게 된다(과거엔 갈라져 있었다).
+_PAPER_PATH_MATCH = "segment"
+
+#: rank_score 가 가질 수 있는 최대값(1위) = 1/(RRF_K+1) ≈ 0.0164.
+#: rank_score 는 **순위의 단조 변환**이지 관련도 점수가 아니다 — 임계값을 줄 때
+#: 0.1 같은 '점수처럼 보이는' 값을 쓰면 전부 걸러진다. 그래서 관련 파라미터 이름을
+#: min_rank_score 로 명시한다.
+RANK_SCORE_TOP = 1.0 / (RRF_K + 1)
 
 
 def _paper_dirs() -> Tuple[str, ...]:
@@ -79,16 +98,22 @@ def _paper_dirs() -> Tuple[str, ...]:
 
 
 def _is_paper_path(rel_path: str, paper_dirs: Sequence[str]) -> bool:
-    r = (rel_path or "").replace("\\", "/")
-    return any(d and (r.startswith(d + "/") or f"/{d}/" in r) for d in paper_dirs)
+    """노트가 논문/이론 폴더 소속인가 — 논문 arm 의 검색 필터와 **같은 판정**을 쓴다."""
+    match = path_matcher(paper_dirs, _PAPER_PATH_MATCH)
+    return bool(match and match(rel_path))
 
 
-def _dedupe_by_title(hits: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+def dedupe_by_title(hits: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """제목이 같은 노트는 상위 1건만 남긴다 (입력은 이미 정렬된 상태).
 
-    볼트에는 같은 제목의 노트가 다른 폴더에 여러 개 있을 수 있다(원문추출 사본 등).
-    표시는 `[[제목]]` 위키링크라 두 건이 화면·회의록에서 구분되지 않으므로, 관련도가
-    높은 쪽만 남겨 같은 칩이 중복 노출되는 것을 막는다."""
+    볼트에는 같은 제목의 노트가 다른 폴더에 여러 개 있을 수 있다(원문추출 사본,
+    `01_References/Companies/Acme.md` vs `Archive/…/회사/Acme.md` 등). 표시는
+    `[[제목]]` 위키링크라 두 건이 화면·회의록에서 구분되지 않으므로 하나만 남긴다.
+
+    **표시 단계에서만 쓴다.** 누적(`_notes`)에는 전량을 넣는다 — 제목이 같아도 서로
+    다른 노트이고(같은 제목의 다른 회의록이 실제로 존재한다), 누적 검토·사이드카는
+    경로로 구분해 보여주기 때문이다. 과거엔 검색 결과 조립 단계에서 걸러 누적분까지
+    함께 사라졌다."""
     out: List[Dict[str, Any]] = []
     seen: set = set()
     for h in hits:
@@ -243,11 +268,18 @@ class RealtimeVaultSearcher:
         return list(dict.fromkeys(t for t in titles if t))
 
     def collected_evidence(self, limit: int = 50,
-                           min_score: float = 0.0) -> List[Dict[str, Any]]:
-        """노트별 '가장 강한 근거' 1건씩 — SQLite 누적/회의록 병합용(FR-4/6).
+                           min_rank_score: float = 0.0) -> List[Dict[str, Any]]:
+        """노트별 대표 근거 1건씩 — SQLite 누적/회의록 병합용(FR-4/6).
 
-        같은 노트가 여러 발화에서 반복 매칭되면 rank_score 가 가장 높은 히트를
-        대표로 남기고 참조 횟수(hits)를 센다. 정렬은 rank_score 내림차순.
+        같은 노트가 여러 발화에서 반복 매칭되면 **가장 높은 순위에 들었던 히트**를
+        대표로 남기고 참조 횟수(hits)를 센다. 정렬도 같은 기준(rank_score 내림차순).
+
+        rank_score 를 쓰는 이유: TF-IDF `score` 는 쿼리마다 스케일이 달라 발화 간
+        비교가 안 되지만, 순위는 쿼리 내부에서 정규화된 값이라 비교가 가능하다.
+        다만 그래서 이 값은 "관련도의 세기"가 아니라 "어느 발화에서 몇 위였나"다.
+
+        min_rank_score: rank_score(≤ RANK_SCORE_TOP ≈ 0.0164) 하한. 관련도 점수가
+        아니므로 0.1 같은 값을 주면 전부 걸러진다 — 기본 0.0(필터 없음).
         """
         with self._lock:
             notes = list(self._notes)
@@ -270,7 +302,7 @@ class RealtimeVaultSearcher:
                     best[key] = item
         out = sorted(best.values(),
                      key=lambda n: -float(n.get("rank_score", 0) or 0))
-        out = [n for n in out if float(n.get("rank_score", 0) or 0) >= min_score]
+        out = [n for n in out if float(n.get("rank_score", 0) or 0) >= min_rank_score]
         return out[:max(1, limit)]
 
     def shutdown(self, wait: bool = True) -> None:
@@ -349,7 +381,8 @@ class RealtimeVaultSearcher:
                 self._notes.extend(hits)
 
             if self.on_notes:
-                top = hits[:self._display_n]
+                # 누적은 전량, 표시는 제목 중복 제거 후 상위 N개 (dedupe_by_title 주석 참고)
+                top = dedupe_by_title(hits)[:self._display_n]
                 titles = frozenset(n["title"] for n in top)
                 # 같은 노트 세트가 연속 매칭되면 표시 생략 (터미널/UI 스팸 방지)
                 if titles and titles != self._last_shown_titles:
@@ -370,20 +403,29 @@ class RealtimeVaultSearcher:
 
     def _search_index(self, query: str, segment_text: str) -> List[Dict[str, Any]]:
         """후보 = 노트 인덱스(TF-IDF+임베딩 RRF) + 논문/이론 폴더 한정 노트 검색,
-        근거 위치(섹션)는 그 후보 안에서만 특정한다. 반환은 rank_score 내림차순.
+        근거 위치(섹션)는 그 후보 안에서만 특정한다. 반환은 rank_score 내림차순
+        (= arm ① 랭킹 순, 그 뒤에 ②에서만 나온 논문 후보). 제목 중복은 남겨 둔다 —
+        누적은 전량이고 중복 제거는 표시 단계 책임이다(`dedupe_by_title`).
 
         설계 근거(실측 2026-07-29, 472노트·3,744섹션 볼트 / 합성 쿼리 24건):
-          · 논문 폴더 점수 1.2배 가산은 랭킹을 크게 악화시켰다(MRR 0.920→0.708,
+          · 논문 폴더 점수 1.2배 가산은 랭킹을 크게 악화시켰다(MRR 0.920→0.713,
             R@3 0.96→0.71). 낡은 인덱스(802노트)에서도 같은 방향이었다(0.664→0.575).
-            폴더 소속은 관련도의 근거가 아니므로 **동점 tie-break** 로만 쓴다.
-            후보 풀 진입은 논문 폴더 한정 검색 arm 이 보장한다(FR-11).
+            폴더 소속은 관련도의 근거가 아니므로 **점수를 건드리지 않는다**.
+            논문의 후보 풀 진입은 논문 폴더 한정 검색 arm 이 전담한다(FR-11).
+            (과거엔 "동점이면 논문 우선" tie-break 도 함께 뒀는데, 순위를
+             1/(k+rank+1) 로 재환산하면 rank 가 후보마다 유일해 동점이 발생하지
+             않는다 — 실측 확인 후 죽은 코드를 제거했다. 논문을 동점에서라도
+             끌어올리는 것은 위에서 반박된 '가산' 방향이므로 되살리지 않는다.)
           · 볼트 전체 섹션 검색을 랭킹 arm 으로 융합해도 회수 이득이 없고(노이즈 범위)
-            지연이 5배(61ms→327ms)다. 섹션 TF-IDF 는 tf 길이정규화 때문에 짧은 섹션에서
-            과대평가되므로 노트 점수와 같은 축에 두면 안 된다. 섹션은 '어느 대목이
-            근거인가'에만 쓴다.
-          · 전체 섹션 스캔은 섹션 수에 선형(~159ms) — 후보 안에서만 보면 ~0.6ms 로
-            같은 heading 정보를 얻는다. 노트 회수는 notes_only 와 동일하고
-            heading 정확도만 0 → 0.87 로 올라간다.
+            로컬 지연이 2.7배(89ms→240ms)다. 섹션 TF-IDF 는 tf 길이정규화 때문에 짧은
+            섹션에서 과대평가되므로 노트 점수와 같은 축에 두면 안 된다. 섹션은 '어느
+            대목이 근거인가'에만 쓴다.
+          · 전체 섹션 스캔은 섹션 수에 선형 — 후보 안에서만 보면 ~0.5ms 로 같은 heading
+            정보를 얻는다. 노트 회수는 notes_only 와 동일하고 heading 정확도만
+            0 → 0.87 로 올라간다.
+          · 위 ms 는 **로컬 계산만**이다. 기본 설정에선 검색마다 쿼리 임베딩 API 왕복
+            (~270ms)이 붙어 실사용 1회는 0.3~0.5초다 — 전용 워커 스레드에서 돌므로
+            전사 스트림에는 영향이 없다.
         자세한 수치·측정 한계·재검증 대상: docs/검색랭킹_이론과근거.md
         """
         idx = self._indexer
@@ -392,9 +434,13 @@ class RealtimeVaultSearcher:
         notes = self._safe(idx.search, query, limit=self._note_k) or []
         paper_notes = []
         if papers:
-            # 로컬 논문/원문추출이 일반 노트에 밀려 후보에 못 들어오는 것을 막는 보강 arm
+            # 로컬 논문/원문추출이 일반 노트에 밀려 후보에 못 들어오는 것을 막는 보강 arm.
+            # path_match="segment" — 볼트 하위에 묻힌 논문 폴더까지 잡는다(_is_paper_path
+            # 와 같은 규칙). 접두사 매칭만 하던 과거엔 `Archive/…/02_이론_학습` 74노트와
+            # `원문추출` 9노트가 이 arm 에서 영구히 0건이었다.
             paper_notes = self._safe(idx.search, query, limit=self._paper_k,
-                                     path_prefixes=list(papers)) or []
+                                     path_prefixes=list(papers),
+                                     path_match=_PAPER_PATH_MATCH) or []
 
         # 후보 조립 — 삽입 순서(노트 랭킹 → 논문 보강)를 유지해 동점 시 순서가 안정적
         cand: Dict[str, Dict[str, Any]] = {}
@@ -434,7 +480,10 @@ class RealtimeVaultSearcher:
                 "filename": rel,
                 "title": title,
                 "score": round(float(item["score"]), 4),
-                "rank_score": round(1.0 / (_RRF_K + note_rank[rel] + 1), 6),
+                # rank = 이 발화에서의 0-기반 순위, rank_score = 그 순위의 단조 변환.
+                # 둘은 같은 정보이고 관련도 점수가 아니다(RANK_SCORE_TOP 주석 참고).
+                "rank": note_rank[rel],
+                "rank_score": round(1.0 / (RRF_K + note_rank[rel] + 1), 6),
                 "cosine": round(float(item["cosine"]), 4),
                 "matches": [],
                 "snippet": snippet,
@@ -447,12 +496,13 @@ class RealtimeVaultSearcher:
                 "segment_text": segment_text[:200],
                 "elapsed_sec": round(time.time() - self._t0, 1),
             })
-        # 동점이면 내부 논문/이론 노트를 앞에 (FR-11 — 가산점 대신 tie-break)
-        hits.sort(key=lambda n: (-float(n.get("rank_score", 0) or 0),
-                                n.get("source_type") != "paper"))
-        return _dedupe_by_title(hits)
+        hits.sort(key=lambda n: -float(n.get("rank_score", 0) or 0))
+        return hits
 
     def _search_rest(self, query: str, segment_text: str) -> List[Dict[str, Any]]:
+        """Obsidian REST 폴백. 섹션 인덱스가 없어 heading 은 못 채우지만, 순위 규칙은
+        인덱스 경로와 같게 유지한다 — 과거엔 이쪽에만 논문 1.2배 가산이 남아 있어
+        같은 발화가 백엔드에 따라 다른 순서로 보였다(실측에서 반박된 그 가산이다)."""
         results = self._safe(self._obs.search_simple, query,
                              context_length=150, limit=self._note_k) or []
         papers = _paper_dirs()
@@ -463,12 +513,12 @@ class RealtimeVaultSearcher:
                 continue
             rel = filename.replace("\\", "/")
             is_paper = _is_paper_path(rel, papers)
-            rrf = 1.0 / (_RRF_K + rank + 1)
             hits.append({
                 "filename": filename,
                 "title": Path(rel).stem,
                 "score": round(float(r.get("score", 0) or 0), 3),
-                "rank_score": round(rrf * (1.2 if is_paper else 1.0), 6),
+                "rank": rank,
+                "rank_score": round(1.0 / (RRF_K + rank + 1), 6),
                 "cosine": 0.0,
                 "matches": (r.get("matches") or [])[:2],
                 "snippet": "",

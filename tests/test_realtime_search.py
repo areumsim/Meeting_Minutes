@@ -14,13 +14,16 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from meeting_minutes_app.wiki_core import realtime_search as rs
+from meeting_minutes_app.wiki_core import vault_indexer as vi
 
 
 class FakeIndexer:
     """search()/sections_in_notes() 를 흉내내는 가짜 인덱서.
 
-    search 는 path_prefixes 인자에 따라 필터해 실제 VaultIndexer 와 같은 의미
-    (논문 폴더 한정 검색)를 갖게 한다. sections_in_notes 는 노트별 최적 섹션
+    search 는 실제 VaultIndexer 와 **같은 path_matcher 를 그대로 써서** 필터한다 —
+    과거엔 이 fake 가 손으로 구현한 중간일치 필터를 갖고 있어서, 정작 구현이
+    접두사만 보던 버그를 테스트가 덮어주지 못했다(실제 볼트에서는 논문 폴더
+    83노트가 arm ② 에서 영구히 0건이었다). sections_in_notes 는 노트별 최적 섹션
     (근거 위치 특정)을 돌려준다 — 랭킹에는 관여하지 않는다.
     """
 
@@ -28,18 +31,15 @@ class FakeIndexer:
         self.results = results if results is not None else []
         #: {rel_path: {"heading","snippet","score"}}
         self.sections = sections if sections is not None else {}
-        self.queries = []          # (query, path_prefixes)
+        self.queries = []          # (query, path_prefixes, path_match)
         self.located = []          # sections_in_notes 로 넘어온 후보 목록
 
-    def search(self, query, limit=5, path_prefixes=None):
-        self.queries.append((query, tuple(path_prefixes or ())))
+    def search(self, query, limit=5, path_prefixes=None, path_match="prefix"):
+        self.queries.append((query, tuple(path_prefixes or ()), path_match))
         rows = self.results
-        if path_prefixes:
-            pref = tuple(str(p).strip("/") for p in path_prefixes)
-            rows = [r for r in rows
-                    if any(str(r.get("path", "")).replace("\\", "/").startswith(p + "/")
-                           or f"/{p}/" in str(r.get("path", "")).replace("\\", "/")
-                           for p in pref)]
+        match = vi.path_matcher(path_prefixes, path_match)
+        if match is not None:
+            rows = [r for r in rows if match(str(r.get("path", "")))]
         return rows[:limit]
 
     def sections_in_notes(self, query, rel_paths):
@@ -166,6 +166,26 @@ class TestSearch:
         assert n["source"] == "rest"
         assert n["matches"] == ["m1", "m2"]
 
+    def test_rest_fallback_gives_papers_no_boost(self, monkeypatch):
+        """REST 폴백도 인덱스 경로와 같은 순위 규칙 — 논문 1.2배 가산이 없다.
+
+        과거엔 이쪽에만 가산이 남아 있어 같은 발화가 백엔드에 따라 다른 순서로
+        보였다(실측에서 반박된 그 가산이다: MRR 0.920→0.713)."""
+        s = make_searcher(monkeypatch,
+                          extra_cfg={"wiki.realtime_paper_dirs": ["01_References"]})
+        s._obs = FakeObs([
+            {"filename": "00_Meetings/주간회의.md", "score": 0.9},
+            {"filename": "01_References/논문.md", "score": 0.1},
+        ])
+        s._init_done = True
+        s._search("발화")
+        notes = s.collected_notes()
+        assert [n["title"] for n in notes] == ["주간회의", "논문"]
+        assert [n["source_type"] for n in notes] == ["note", "paper"]
+        # 순위 그대로 1/(k+rank+1) — 논문이라고 곱해지지 않는다
+        assert notes[0]["rank_score"] == round(1.0 / (vi.RRF_K + 1), 6)
+        assert notes[1]["rank_score"] == round(1.0 / (vi.RRF_K + 2), 6)
+
     def test_consecutive_same_titles_shown_once(self, monkeypatch):
         shown = []
         s = make_searcher(monkeypatch, on_notes=shown.append)
@@ -208,8 +228,9 @@ class TestInternalFirst:
     """FR-11 — 노트 랭킹 주축 + 논문 폴더 보강 + 후보 안에서 근거 섹션 특정.
 
     랭킹 구조는 실측(docs/검색랭킹_이론과근거.md)으로 고른 것이다. 여기서 고정하는
-    계약: (a) 볼트 전체 섹션 검색을 랭킹에 섞지 않는다, (b) 논문 폴더는 점수 가산이
-    아니라 별도 검색 + 동점 tie-break 로만 우대한다.
+    계약: (a) 볼트 전체 섹션 검색을 랭킹에 섞지 않는다, (b) 논문 폴더는 **순위를
+    전혀 우대하지 않고** 별도 검색 arm 으로 후보 진입만 보장한다, (c) 그 arm 의 폴더
+    매칭은 경로 중간 일치(`path_match="segment"`)다.
     """
 
     def test_section_located_within_candidate(self, monkeypatch):
@@ -241,8 +262,8 @@ class TestInternalFirst:
         assert n["section_path"] == "주간회의"
         assert n["snippet"] == "주간회의 노트 스니펫"
 
-    def test_paper_note_wins_tie_but_gets_no_bonus(self, monkeypatch):
-        """점수가 같으면 논문이 앞. 단 순위가 앞선 일반 노트를 추월하지는 않는다."""
+    def test_paper_note_gets_no_rank_advantage(self, monkeypatch):
+        """논문 폴더는 점수도 순위도 우대하지 않는다 — 후보 진입만 보장한다."""
         s = make_searcher(monkeypatch,
                           extra_cfg={"wiki.realtime_paper_dirs": ["02_이론_학습"]})
         일반 = {"path": "00_Meetings/주간회의.md", "wikilink_title": "주간회의",
@@ -253,7 +274,7 @@ class TestInternalFirst:
         inject_indexer(s, [일반, 논문], {})
         s._search("QAOA 이야기")
         assert [n["title"] for n in s.collected_notes()] == ["주간회의", "QAOA"]
-        # 논문 한정 검색으로만 들어온 후보는 동점(같은 rank) 시 앞에 온다
+        # 논문 한정 검색으로만 들어온 후보는 노트 arm 결과 **뒤에** 합류한다
         s2 = make_searcher(monkeypatch,
                            extra_cfg={"wiki.realtime_paper_dirs": ["02_이론_학습"],
                                       "wiki.realtime_note_candidates": 1})
@@ -262,16 +283,58 @@ class TestInternalFirst:
         titles = [n["title"] for n in s2.collected_notes()]
         assert titles == ["주간회의", "QAOA"]   # 논문은 보강 arm 으로 뒤에 합류
 
-    def test_paper_dir_search_uses_prefix_filter(self, monkeypatch):
+    def test_rank_scores_are_unique_so_no_tiebreak_can_fire(self, monkeypatch):
+        """rank_score 는 유일한 순위의 단조 변환 — 동점이 없다.
+
+        과거엔 '동점이면 논문 우선' tie-break 정렬축이 있었지만 이 성질 때문에 한
+        번도 발동하지 않는 죽은 코드였다. 되살리려면 rank_score 설계부터 바꿔야
+        하고, 그 방향(논문 우대)은 실측에서 반박됐다 — 그래서 여기서 고정한다.
+        """
         s = make_searcher(monkeypatch,
                           extra_cfg={"wiki.realtime_paper_dirs": ["02_이론_학습"],
-                                     "wiki.realtime_paper_candidates": 4})
-        idx = inject_indexer(s, [INDEX_HIT], {})
+                                     "wiki.realtime_note_candidates": 3})
+        rows = [{"path": "00_Meetings/n0.md", "wikilink_title": "n0",
+                 "snippet": "s", "score": 5.0},
+                {"path": "02_이론_학습/p1.md", "wikilink_title": "p1",
+                 "snippet": "s", "score": 4.0},
+                {"path": "00_Meetings/n2.md", "wikilink_title": "n2",
+                 "snippet": "s", "score": 3.0}]
+        inject_indexer(s, rows, {})
         s._search("발화")
-        # 노트 검색 1회 + 논문 폴더 한정 1회
+        scores = [n["rank_score"] for n in s.collected_notes()]
+        assert len(scores) == len(set(scores)), "동점이 생기면 tie-break 재검토 필요"
+        assert scores == sorted(scores, reverse=True)
+        # rank 는 0-기반 순위이고 rank_score 는 그 변환 — 둘이 일관해야 한다
+        for n in s.collected_notes():
+            assert n["rank_score"] == round(1.0 / (vi.RRF_K + n["rank"] + 1), 6)
+        assert max(scores) <= rs.RANK_SCORE_TOP
+
+    def test_paper_dir_search_matches_mid_path_folders(self, monkeypatch):
+        """논문 arm 은 볼트 하위에 묻힌 폴더도 찾는다(path_match="segment").
+
+        실제 볼트에서 `02_이론_학습`(74노트)·`원문추출`(9노트)은 루트가 아니라
+        `Archive/도메인_아카이브/` 아래에 있다. 접두사 매칭만 하던
+        과거엔 이 arm 이 그 노트들을 영구히 0건으로 돌려줬다.
+        """
+        s = make_searcher(monkeypatch,
+                          extra_cfg={"wiki.realtime_paper_dirs": ["02_이론_학습"],
+                                     "wiki.realtime_paper_candidates": 4,
+                                     "wiki.realtime_note_candidates": 1})
+        묻힌논문 = {"path": "Archive/QC_통합아카이브/02_이론_학습/QAOA.md",
+                    "wikilink_title": "QAOA", "snippet": "s", "score": 0.5}
+        일반 = {"path": "00_Meetings/주간회의.md", "wikilink_title": "주간회의",
+                "snippet": "s", "score": 9.0}
+        idx = inject_indexer(s, [일반, 묻힌논문], {})
+        s._search("발화")
+        # 노트 검색 1회 + 논문 폴더 한정 1회, 후자는 segment 매칭을 요구한다
         assert len(idx.queries) == 2
-        assert idx.queries[0][1] == ()
+        assert idx.queries[0][1] == () and idx.queries[0][2] == "prefix"
         assert idx.queries[1][1] == ("02_이론_학습",)
+        assert idx.queries[1][2] == "segment"
+        # 노트 상한(1) 밖이었지만 보강 arm 으로 후보에 들어오고, 배지도 논문이다
+        titles = [n["title"] for n in s.collected_notes()]
+        assert titles == ["주간회의", "QAOA"]
+        assert [n["source_type"] for n in s.collected_notes()] == ["note", "paper"]
 
     def test_paper_stage_guarantees_pool_entry(self, monkeypatch):
         """일반 검색 상한에 밀린 논문 노트도 보강 arm 으로 후보에 들어온다."""
@@ -306,9 +369,16 @@ class TestInternalFirst:
         s._search(long_text)
         assert len(idx.queries[0][0]) == 180
 
-    def test_same_title_different_paths_deduped(self, monkeypatch):
-        """원문추출 사본 등 같은 제목의 노트가 여러 폴더에 있어도 칩은 1건만."""
-        s = make_searcher(monkeypatch)
+    def test_same_title_deduped_for_display_but_kept_in_pool(self, monkeypatch):
+        """같은 제목의 노트가 여러 폴더에 있으면 **칩은 1건**, **누적은 전량**.
+
+        표시는 `[[제목]]` 위키링크라 두 건이 구분되지 않으므로 하나만 보여준다.
+        하지만 서로 다른 노트이므로(같은 제목의 다른 회의록이 실제로 존재한다)
+        누적 검토·사이드카에서는 경로로 구분해 남긴다 — 과거엔 검색 단계에서
+        걸러 누적분까지 함께 사라졌다.
+        """
+        shown = []
+        s = make_searcher(monkeypatch, on_notes=shown.append)
         rows = [
             {"path": "원문추출/논문A.md", "wikilink_title": "논문A",
              "snippet": "s1", "score": 5.0},
@@ -319,9 +389,15 @@ class TestInternalFirst:
         ]
         inject_indexer(s, rows, {})
         s._search("발화")
+        # 표시: 제목 중복 제거 → 상위 1건만
+        assert [n["title"] for n in shown[0]] == ["논문A", "다른노트"]
+        assert shown[0][0]["filename"] == "원문추출/논문A.md"
+        # 누적: 3건 전부 (경로로 구분)
         notes = s.collected_notes()
-        assert [n["title"] for n in notes] == ["논문A", "다른노트"]
-        assert notes[0]["filename"] == "원문추출/논문A.md"   # 상위 1건만 남는다
+        assert [n["filename"] for n in notes] == [
+            "원문추출/논문A.md", "01_References/논문A.md", "00_Meetings/다른노트.md"]
+        # 근거 누적도 경로 단위 — 같은 제목 두 노트가 각각 남는다
+        assert len(s.collected_evidence()) == 3
 
     def test_sections_in_notes_failure_keeps_results(self, monkeypatch):
         """섹션 인덱스가 없는(구버전) 인덱서여도 결과는 살아남는다(heading 만 빈다)."""
@@ -461,7 +537,7 @@ class TestShutdown:
         class SlowIndexer:
             """sections_in_notes 가 없는 구버전 인덱서 — 후보는 그대로 살아야 한다."""
 
-            def search(self, query, limit=5, path_prefixes=None):
+            def search(self, query, limit=5, path_prefixes=None, path_match="prefix"):
                 time.sleep(0.2)
                 slow_done.set()
                 return [INDEX_HIT]

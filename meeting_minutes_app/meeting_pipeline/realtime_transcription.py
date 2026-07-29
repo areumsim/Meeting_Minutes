@@ -553,7 +553,7 @@ def load_session_log(log_path: str):
     """JSONL 로그 파싱 → (doc_type, translate, language, segments)"""
     doc_type  = "meeting"
     translate = False
-    language  = "en"
+    language  = "ko"   # 헤더에 언어가 없는 옛 로그의 폴백 — 사내 기본은 한국어
     segments: List[Dict] = []
 
     with open(log_path, "r", encoding="utf-8") as f:
@@ -569,7 +569,7 @@ def load_session_log(log_path: str):
             if t == "header":
                 doc_type  = entry.get("doc_type", "meeting")
                 translate = entry.get("translate", False)
-                language  = entry.get("language", "en")
+                language  = entry.get("language", "ko")
             elif t == "segment":
                 segments.append({k: v for k, v in entry.items() if k != "type"})
 

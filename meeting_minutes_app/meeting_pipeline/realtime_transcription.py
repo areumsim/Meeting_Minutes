@@ -974,6 +974,7 @@ class RealtimeTranscriber:
         self._session_start = time.time()
         self._use_diarize   = "diarize" in stt_model
         self._use_whisper   = stt_model.startswith("whisper")
+        self._groq_cached   = None   # (client, model) 지연 생성 캐시 — _groq_fallback()
         # 번역을 STT와 병렬 실행하기 위한 스레드 풀
         self._translator_pool = ThreadPoolExecutor(max_workers=2)
 
@@ -996,26 +997,8 @@ class RealtimeTranscriber:
         last_err: Optional[Exception] = None
         for attempt in range(3):
             try:
-                audio_file = io.BytesIO(wav_bytes)
-                audio_file.name = "chunk.wav"
-                resp = self.client.audio.transcriptions.create(
-                    file=audio_file, **params
-                )
-                # diarize 모델: 화자 정보 포함 세그먼트 리스트 반환
-                if self._use_diarize:
-                    data = resp if isinstance(resp, dict) else (
-                        resp.model_dump() if hasattr(resp, "model_dump") else json.loads(resp)
-                    )
-                    return _parse_diarized(data, 0)  # offset은 process()에서 보정
-
-                if isinstance(resp, dict):
-                    return resp.get("text", "").strip()
-                if hasattr(resp, "text"):
-                    return resp.text.strip()
-                try:
-                    return json.loads(resp).get("text", "").strip()
-                except Exception:
-                    return ""
+                return self._call_stt(self.client, params, wav_bytes,
+                                      parse_diarized=self._use_diarize)
             except Exception as e:
                 last_err = e
                 if attempt < 2:
@@ -1024,7 +1007,54 @@ class RealtimeTranscriber:
                           file=sys.stderr)
                     time.sleep(wait)
 
+        # OpenAI 3회 모두 실패 = 벤더 장애일 수 있으므로 다른 벤더(Groq)로 1회 재시도.
+        # 로컬(faster-whisper)은 라이브 청크에 쓰지 않는다 — CPU 전사가 실시간을 못
+        # 따라간다. 종료 후 확정 전사(stt.run_stt)가 로컬까지 포함한 체인을 쓴다.
+        gclient, gmodel = self._groq_fallback()
+        if gclient is not None:
+            print(f"\n  {C_YELLOW}[STT 폴백]{C_RESET} OpenAI 실패 → Groq/{gmodel}",
+                  file=sys.stderr)
+            try:
+                gparams = dict(params)
+                gparams["model"] = gmodel
+                gparams["response_format"] = "json"   # Groq(Whisper)는 diarize 미지원
+                gparams.pop("chunking_strategy", None)
+                gparams.pop("timestamp_granularities", None)
+                # 화자분리 없이 평문만 돌려주면 process() 가 일반 경로로 처리한다.
+                return self._call_stt(gclient, gparams, wav_bytes, parse_diarized=False)
+            except Exception as ge:
+                print(f"\n  {C_RED}[STT 폴백 실패]{C_RESET} Groq: {ge}", file=sys.stderr)
+
         raise last_err  # type: ignore
+
+    def _groq_fallback(self):
+        """Groq 폴백 (클라이언트, 모델) — 세션당 1회 생성해 캐시. 키 없으면 (None, "")."""
+        if getattr(self, "_groq_cached", None) is None:
+            from meeting_minutes_app.meeting_pipeline import stt as _stt
+            self._groq_cached = _stt.groq_fallback()
+        return self._groq_cached
+
+    def _call_stt(self, client, params: Dict[str, Any], wav_bytes: bytes,
+                  parse_diarized: bool):
+        """전사 API 1회 호출 + 응답 파싱(OpenAI/Groq 공통 — 둘 다 OpenAI 호환 SDK)."""
+        audio_file = io.BytesIO(wav_bytes)
+        audio_file.name = "chunk.wav"
+        resp = client.audio.transcriptions.create(file=audio_file, **params)
+        # diarize 모델: 화자 정보 포함 세그먼트 리스트 반환
+        if parse_diarized:
+            data = resp if isinstance(resp, dict) else (
+                resp.model_dump() if hasattr(resp, "model_dump") else json.loads(resp)
+            )
+            return _parse_diarized(data, 0)  # offset은 process()에서 보정
+
+        if isinstance(resp, dict):
+            return resp.get("text", "").strip()
+        if hasattr(resp, "text"):
+            return resp.text.strip()
+        try:
+            return json.loads(resp).get("text", "").strip()
+        except Exception:
+            return ""
 
     def _clean_text(self, text: str) -> str:
         """STT 환각·반복 방어 (웹 경로와 동일 정책).

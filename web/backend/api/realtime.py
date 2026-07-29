@@ -883,6 +883,10 @@ class BrowserRealtimeSession:
         marked_suspect = 0              # 환각 의심으로 표시한 조각 수
         stt_fail_streak = 0             # 연속 STT 실패 카운트 (조용한 실패 방지)
         stt_notified = False            # 사용자 통지는 1회만
+        # 다른 벤더(Groq) 폴백 — OpenAI 기본·폴백 모델이 모두 실패한 청크에만 쓴다.
+        # 키가 없으면 (None, "") 이라 이 단계는 자동으로 건너뛰어진다.
+        groq_client, groq_model = stt.groq_fallback()
+        groq_notified = False           # 벤더 전환 알림도 1회만
         last_emitted_text = ""          # 직전 발행 텍스트(연속 중복·prompt 에코 억제)
         prompt_tail = ""                # 직전 전사 꼬리 (prompt_context="tail" 일 때만 사용)
 
@@ -979,6 +983,7 @@ class BrowserRealtimeSession:
             직전 전사 꼬리를 prompt 로 전달해 경계 오인식·언어 환각을 줄인다.
             (동시 실행 중엔 문맥이 한 청크 전 것일 수 있다 — 힌트 용도라 무해.)
             """
+            nonlocal groq_notified
             tmp_path = _write_wav(chunk_bytes)
             used_prompt = _chunk_prompt()
             try:
@@ -993,7 +998,9 @@ class BrowserRealtimeSession:
                     # 폴백 모델 1회 재시도 — 과거엔 청크 예외 시 텍스트가 조용히
                     # 소실됐다(run_stt 의 폴백 로직을 우회하는 경로라서).
                     fb = stt.FALLBACK_STT_MODEL
-                    if fb and fb != stt_model:
+                    try:
+                        if not fb or fb == stt_model:
+                            raise _e1
                         print(f"[http-stt] {stt_model} 실패 → {fb} 재시도: {_e1}")
                         segs = await asyncio.to_thread(
                             stt.transcribe_chunk,
@@ -1001,8 +1008,27 @@ class BrowserRealtimeSession:
                             stt_language,
                             None, c_start, prompt=used_prompt or None,
                         )
-                    else:
-                        raise
+                    except Exception as _e2:
+                        # OpenAI 두 모델이 모두 실패 = 벤더 장애 가능성 → 다른 벤더(Groq).
+                        # 로컬(faster-whisper)은 라이브 청크에 쓰지 않는다(CPU 전사가
+                        # 실시간을 못 따라감). 종료 후 finalize 의 run_stt 가 담당한다.
+                        if groq_client is None:
+                            raise
+                        print(f"[http-stt] OpenAI 실패 → Groq/{groq_model} 폴백: {_e2}")
+                        segs = await asyncio.to_thread(
+                            stt.transcribe_chunk,
+                            groq_client, tmp_path, groq_model,
+                            stt_language,
+                            None, c_start,
+                            # Groq(Whisper)의 prompt 는 224토큰 제한이라 정적 힌트(최대
+                            # 800자)를 그대로 넣으면 요청이 거절될 수 있다 → 생략.
+                        )
+                        if not groq_notified:
+                            groq_notified = True
+                            await self.ws.send_json({
+                                "type": "fallback_provider", "provider": "Groq",
+                                "model": groq_model,
+                            })
                 text = " ".join(
                     (s.get("text") or "").strip() for s in segs
                     if (s.get("text") or "").strip()

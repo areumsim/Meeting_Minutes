@@ -342,6 +342,12 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
           if (!captureStartedRef.current) { captureStartedRef.current = true; startAudioCapture(); }
           break;
 
+        case "fallback_provider":
+          // OpenAI 두 모델이 모두 실패해 다른 벤더(Groq)로 전사가 넘어갔다.
+          // 조용히 바꾸지 않고 한 번 알린다 — 화자분리·모델 품질이 달라지기 때문.
+          setWsStatus(`전사 중 (${msg.provider} 백업: ${msg.model}) — OpenAI 응답 실패로 자동 전환`);
+          break;
+
         case "delta": {
           const id = msg.itemId || "item";
           setLiveTranscript(prev => {

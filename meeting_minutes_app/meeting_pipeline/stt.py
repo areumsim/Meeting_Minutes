@@ -194,7 +194,11 @@ def transcribe_chunk(
         if language and str(language).strip().lower() != "auto":
             params["language"] = language
 
-        # 직전 전사 꼬리를 문맥으로 전달 — 청크 경계 단어 오인식·언어 환각을 줄인다.
+        # 호출자가 준 문맥(prompt)을 전달 — 청크 경계 단어 오인식을 줄인다.
+        # 주의: **직전 전사 꼬리를 넘기는 것은 위험하다**. 모델이 그 문장을 되풀이하고
+        # 그 출력이 다시 꼬리가 되면 같은 문장이 세션 내내 반복된다(2026-07-28 실사고).
+        # 실시간 경로의 기본값은 세션 내내 불변인 정적 힌트(주제·참석자)다
+        # — realtime.prompt_context (static|tail|off), web/backend/api/realtime.py 참고.
         # (whisper-1·gpt-4o-(mini-)transcribe 지원, diarize 계열은 미지원이라 제외)
         if prompt and not use_diarize:
             params["prompt"] = prompt[:800]

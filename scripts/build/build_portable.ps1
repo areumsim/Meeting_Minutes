@@ -170,12 +170,22 @@ Copy-Item (Join-Path $ScriptDir '사용법_포터블.txt')   (Join-Path $OutDir 
 # 빌드 각인 — "이 zip 이 어느 커밋 빌드인가"를 배포본 안에서 확인할 수 있게 한다.
 # (실제로 두 번 겪은 사고: ① 커밋 HEAD로 빌드해 미커밋 기능이 빠짐 ② 빌드 도중
 #  들어온 커밋이 zip 에 안 들어감. dirty=True 면 미커밋 변경이 섞인 빌드다.)
+# dirty 판정은 **패키징되는 경로**만 본다 — 리포에 굴러다니는 개인 메모(untracked)
+# 까지 dirty 로 잡으면 정상 릴리즈 빌드에도 "미커밋 포함" 경고가 붙어 신호가 죽는다.
+$packagedPaths = @('meeting_minutes_app/', 'web/backend/', 'web/__init__.py',
+                   'web/frontend/src/', 'config.example.json', 'prompts/',
+                   'scripts/build/')
 $commit = ''; $dirty = ''
 try {
     $prevEap2 = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
     $commit = (& git -C $Root rev-parse --short HEAD 2>$null) -join ''
-    $dirty  = (& git -C $Root status --porcelain 2>$null) -join "`n"
+    $porcelain = @(& git -C $Root status --porcelain 2>$null)
     $ErrorActionPreference = $prevEap2
+    $relevant = $porcelain | Where-Object {
+        $line = $_
+        ($packagedPaths | Where-Object { $line -match [regex]::Escape($_) }).Count -gt 0
+    }
+    $dirty = ($relevant -join "`n")
 } catch { }
 $buildInfo = @(
     "Meeting Minutes portable build",

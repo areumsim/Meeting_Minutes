@@ -224,6 +224,21 @@ flowchart LR
 
 웹/모바일 단독 모드는 `web/frontend/src/lib/api.ts`가 OpenAI Realtime API에 직접 연결한다(직접 WebSocket, 목표 구조는 WebRTC + ephemeral credential). `web/backend/api/realtime.py · BrowserRealtimeSession`은 서버 경로이며, exe가 프런트를 서빙할 때(PC 브라우저)와 **모바일 PC 연결 모드**에서 사용된다 — 기본 전사 방식은 config `realtime.mode`(기본 `http`, 2단계 보정 포함)를 따르고, `auto`/`ws`면 OpenAI Realtime WS로 포워딩 후 실패 시 http로 폴백한다.
 
+### 환각·반복 방어 (2026-07-28)
+
+한국어 회의 전사에 러시아어 조각이 섞이고 같은 문장이 수십 번 반복된 사고의 대책. 네 겹으로 막는다.
+
+| 겹 | 위치 | 내용 |
+|---|---|---|
+| 입력 | `_run_http_fallback._flush_chunk` / `_revise_worker` | 발화 에너지(RMS)가 없는 청크·보정 윈도는 **STT를 호출하지 않는다**(`realtime.drop_silent_chunks`). 타임라인(`audio_pos_sec`)은 전진시켜 PCM 슬라이싱 정합을 유지 |
+| 문맥 | `_chunk_prompt()` | 직전 전사 꼬리를 prompt 로 되먹이지 않는다. 기본은 세션 내내 불변인 정적 힌트(주제·참석자) — `realtime.prompt_context` = `static`(기본)/`tail`/`off`. `tail` 은 꼬리 120자 + 환각 미표시 텍스트만 |
+| 언어 | `realtime_ws_session.resolve_session_language()` | `auto` 를 세션 언어 하나로 확정해 전 청크·보정·WS 세션에 동일 값 전달(청크별 언어 재판정 차단). 기본 `ko` |
+| 출력 | `common/text_filters.sanitize_transcript()` | 되풀이 축약(`collapse_repetitions`)·중복 제거(`dedupe_segments`)·이질 문자 `[불명]` 표시(`is_script_mismatch`). **모든 진입점이 수렴하는 `finalize.run_post_session()` 진입부**와 `stt.run_stt()`에서 적용 → 배치·CLI·웹·워처가 같은 정화본으로 회의록을 만든다 |
+
+정책은 보수적이다 — 지우는 것은 되풀이뿐이고, 환각 의심은 표시만 남긴다(회의록/교정 프롬프트가 `[불명]`을 무시하도록 지시). 전체 스위치는 `realtime.hallucination_filter`.
+
+> ⚠ `text_filters._CJK_RANGES` 는 반드시 `\uXXXX` 이스케이프로 적는다. 리터럴 한자를 쓰면 편집 중 U+F900 이 U+8C48 로 바뀌어 **한글(U+AC00~)까지 CJK 환각으로 판정**된다(회귀 테스트 `tests/test_text_filters.py::TestScriptRanges`).
+
 ```mermaid
 flowchart TD
     A[브라우저/모바일 오디오] --> A1{연결 방식}
@@ -660,6 +675,8 @@ python run_meeting.py obsidian --project PhysicalAI --where
 | `wiki_core/supermemory_client.py` | Supermemory SDK 래퍼 — 크로스세션 팩트 메모리 | `SupermemoryClient.save()`, `.search()`, `get_client()` | Supermemory API 또는 로컬 서버 |
 | `meeting_pipeline/enrichment.py` | 엔티티 추출 + 참고 노트 생성/보강 + 본문 자동 위키링크 | `enrich()`, `autolink_entities()` | LLM (웹리서치 선택적) |
 | `common/notifier.py` | 이메일/Slack/Teams 알림 | `_build_html_body()`, `_send_email()`, `_send_email_summary()` | SMTP, Webhooks |
+| `common/text_filters.py` | STT 환각·반복 정화 (순수 함수, 전 경로 공용 — "환각·반복 방어" 절 참고). 문자 범위는 반드시 `\uXXXX` 이스케이프 | `sanitize_transcript()`, `collapse_repetitions()`, `dedupe_segments()`, `is_script_mismatch()`, `is_cjk_hallucination()`, `mark_suspect()` | 표준 라이브러리 |
+| `common/realtime_ws_session.py` | 실시간 세션 설정 빌더 + 모델/언어 정규화 (CLI·웹 공용) | `build_ws_session_config()`, `normalize_ws_model()`, `resolve_session_language()` | 표준 라이브러리 |
 | `meeting_pipeline/vault_audio.py` | 임베드 오디오 처리 | `process_vault()`, `merge_into_note_file()` | stt.py/minutes_generation.py 재사용 |
 | `cli.py` / `cli_init.py` | `meeting-minutes` 콘솔 커맨드 디스패치 / 최초 설정 마법사 | `dispatch()`, `run_init()` | 하위 모듈 subprocess 호출 |
 | `web/backend/api/graph.py` | Wiki Knowledge Graph 조회 REST (읽기 전용) | `list_nodes()`, `get_node_neighbors()`, `get_session_subgraph()` | graph_db |

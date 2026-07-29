@@ -396,7 +396,7 @@ flowchart LR
 | **회의 주제 입력** | 실행 시 주제를 입력하면 번역·회의록·요약 프롬프트에 맥락으로 반영 |
 | **화자 구분 스크립트** | 실시간 녹취 종료 후 화자별로 정리된 `*_script.md` 자동 생성 (번역 시 `*_script_ko.md` 추가) |
 | **실시간 화자 보강** | Realtime 모드는 기본 화자분리 없음. 종료 후 발화 패턴 기반 화자 추론 또는 pyannote/WhisperX 후처리로 보강 |
-| **CJK 환각 필터** | STT 결과에서 중국어·일본어 환각 텍스트 자동 감지·제거 |
+| **환각·반복 필터** | 무음 구간은 전사하지 않고, 되풀이 문장은 1회로 축약, 회의 언어에 없는 이질 문자(중국어·일본어·키릴 등)는 `[불명]` 표시 (`common/text_filters.py`) |
 | **STT 교정 (개선)** | 세션 종료 후 회의록 생성 **이전에** 맥락·주제 기반으로 오탈자·고유명사 교정 (`*_refined_script.txt`) |
 | **상세 회의록 프롬프트** | 스크립트 1분 분량당 200~400자 이상 기준 적용, 맥락 제거 금지 |
 | **긴 스크립트 자동 분할** | `MAX_LLM_CHARS` 초과 시 타임스탬프 기준 청크 분할 + 오버랩 처리 후 통합 |
@@ -508,13 +508,16 @@ cp   config.example.json config.json   # Mac/Linux
     "translate_model": "gpt-4o-mini"
   },
   "realtime": {
-    "language":           "en",           // 실시간 기본 언어 (en / ko / auto)
+    "language":           "ko",           // 실시간 기본 언어 (ko / en). auto 는 조각마다 언어를 재판정해 비권장
     "mode":               "http",         // http(안정·저비용, 기본) | auto(WS 우선·저지연) | ws
     "two_pass":           true,           // 2단계 전사 보정 — 조각을 구간마다 재전사해 문장으로 교체
     "revise_window_sec":  25,             // 보정 구간 길이(초)
     "revise_model":       "gpt-4o-transcribe",  // 보정 전사 모델(최종 품질 결정)
     "fast_max_chunk_sec": 5.0,            // 무음 없어도 이 길이에서 잘라 표시
     "silence_rms":        300,            // HTTP 무음 판정 임계값 — 마이크 작으면 낮추고 시끄러우면 올림
+    "drop_silent_chunks": true,           // 발화 없는 구간은 STT 로 보내지 않음(환각 차단)
+    "prompt_context":     "static",       // 청크 STT 문맥: static(주제·참석자만) | tail(직전 문장까지) | off
+    "hallucination_filter": true,          // 반복 축약 + 이질 문자 [불명] 표시
     "stt_concurrency":    2,              // HTTP 빠른 패스 STT 동시 호출 수(1~4, 지연 누적 방지)
     "chunk_duration":     3.0,            // 청크 길이(초) — CLI 전용
     "audio_backup":       true,           // PCM 오디오 백업 (크래시 복구용)
@@ -1068,7 +1071,9 @@ python run_meeting.py realtime-raw --email
 6. 세그먼트마다 JSONL + os.fsync로 즉시 디스크 기록
 7. q+Enter 또는 Ctrl+C → 녹음 종료
 8. PCM 파일을 WAV로 변환 후 삭제
-9. **CJK 환각 필터** — 중국어·일본어 텍스트가 포함된 세그먼트 자동 제거
+9. **환각·반복 정화** — `text_filters.sanitize_transcript()`: 되풀이 축약·중복 제거 +
+   이질 문자(중국어·일본어·키릴 등) `[불명]` 표시. 모든 경로가 거치는
+   `finalize.run_post_session()` 진입부에서 1회 적용
 10. **화자 이름 추론** — diarize 모델 사용 시 `infer_speaker_names()` 로 "Speaker A/B" → 실명/역할명 변환
 11. **`refine_script()`** 로 전체 맥락·주제 기반 교정 스크립트 생성 (교정본이 회의록 입력으로 사용됨)
 12. `generate_minutes()` / `generate_summary()` 로 회의록 + 요약 생성 (요약은 `.md` + `.txt` 이중 저장)
@@ -1083,7 +1088,7 @@ python run_meeting.py realtime-raw --email
 5. 서버 VAD가 발화를 감지하면 전사 이벤트 수신:
    - `speech_started` → 발화 시작 시간 기록
    - `transcription.delta` → 실시간 부분 텍스트를 즉시 화면에 스트리밍 출력
-   - `transcription.completed` → 최종 텍스트 확정, 세그먼트 생성 (CJK 환각 자동 필터)
+   - `transcription.completed` → 최종 텍스트 확정, 세그먼트 생성 (환각·반복 자동 필터)
 6. `--translate` 시: 확정된 영어 텍스트를 즉시 한국어로 번역하여 아래 줄에 출력
 7. 세그먼트마다 JSONL + os.fsync로 즉시 디스크 기록
 8. q+Enter 또는 Ctrl+C → 녹음 종료 → WebSocket 연결 종료
@@ -1125,7 +1130,7 @@ output/
 
 | 옵션 | 설명 | 기본값 |
 | --- | --- | --- |
-| `--language` | en / ko / auto | 설정 `realtime.language`(기본 en) |
+| `--language` | ko / en / auto | 설정 `realtime.language`(기본 ko) |
 | `--type` | meeting / seminar / lecture | meeting |
 | `--topic` | 회의 주제 (번역·회의록·요약 프롬프트에 맥락으로 반영) | - |
 | `--model` | STT 모델 (아래 표 참고) | config `models.stt` 값 |
@@ -1406,6 +1411,6 @@ realtime_20260303_145540 → "2026년 03월 03일 14:55"
 | WS 모드 연결 실패 | 자동으로 HTTP 모드로 전환됨. 네트워크/API 키 확인 |
 | WS 모드 SSL 오류 | `--ssl-no-verify` 또는 config.json `ssl.verify: false` |
 | WS/Realtime 모드에서 diarize 모델 | Realtime API는 diarize 미지원. 실시간은 화자분리 없이 전사하고 종료 후 추론/로컬 diarization으로 보강 |
-| STT에서 중국어/일본어 출력 | CJK 환각 필터가 자동 제거. `--language ko` 또는 `--language en` 명시 권장 |
+| STT에 엉뚱한 외국어(러시아어 등)·같은 문장 반복 | 무음/잡음 구간 환각이 원인. `realtime.drop_silent_chunks`(기본 on)·`prompt_context=static`(기본)·`hallucination_filter`(기본 on)를 켠 채 두고, `realtime.language`를 회의 언어로 **고정**(auto 금지). 마이크가 멀면 근본 개선이 어려움 |
 | 녹음 중 이전 대화 보기 힘듦 | `s+Enter` 로 스크롤 잠금 → 위로 스크롤 → 다시 `s+Enter` 로 해제 |
 | 터미널 UI 헤더가 안 보임 | ANSI 가상 터미널 지원 터미널 필요. Windows: cmd/PowerShell 모두 지원 |

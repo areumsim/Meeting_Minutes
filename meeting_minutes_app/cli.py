@@ -96,6 +96,10 @@ Advanced:
   meeting-minutes plan-watcher|auto-process [args]
   meeting-minutes audio-watcher|vault-indexer|wiki-ask [args]   # 폴더 감시는 audio-watcher 사용
   meeting-minutes legacy-watcher [args]           # 구형(deprecated) — 신규는 audio-watcher
+  meeting-minutes prepare-local-stt [--status] [--model base]
+      # 오프라인 최종 백업(faster-whisper) 가중치 미리 받기 (local-stt 로도 호출 가능).
+      # 전사 중에는 절대 내려받지 않으므로 미리 준비해야 폴백 체인에 들어간다.
+      # 웹 [설정]의 같은 버튼은 패키지 모드 전용 — 소스 실행에서는 이 명령을 쓴다.
 
 (레거시: `python run_meeting.py ...` 형태로도 동일하게 동작합니다.)
 """
@@ -172,6 +176,9 @@ def dispatch(argv: list[str]) -> int:
     if cmd in ("mcp-token", "mcp_token"):
         from meeting_minutes_app.cli_init import run_mcp_token
         return run_mcp_token(rest)
+    if cmd in ("prepare-local-stt", "prepare_local_stt", "local-stt", "local_stt"):
+        from meeting_minutes_app.cli_init import run_prepare_local_stt
+        return run_prepare_local_stt(rest)
 
     print(f"Unknown command: {cmd}\n")
     print(_usage())

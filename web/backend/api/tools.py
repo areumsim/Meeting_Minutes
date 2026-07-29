@@ -180,8 +180,13 @@ def reindex():
 
 # ── 3.5) 로컬 STT 백업 모델 준비 ──────────────────
 def _local_stt_model() -> str:
-    from meeting_minutes_app.common import config_loader as _cfg
-    return str(_cfg.get("models.stt_local", "base") or "base")
+    """폴백 체인이 실제로 쓰는 모델명을 그대로 본다.
+
+    config 를 여기서 또 읽으면(과거 동작) 체인과 갈라질 수 있어, 상태 배지가
+    준비되지도 않은 모델을 '준비됨'으로 표시할 수 있다. stt 모듈 전역은
+    config reload 훅이 갱신하므로 설정 저장 즉시 반영된다."""
+    from meeting_minutes_app.meeting_pipeline import stt
+    return str(stt.LOCAL_STT_MODEL or "base")
 
 
 @router.get("/local-stt/status")

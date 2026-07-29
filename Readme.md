@@ -506,6 +506,8 @@ cp   config.example.json config.json   # Mac/Linux
     "stt_fallback":    "gpt-4o-transcribe",          // STT 1차 폴백(같은 OpenAI 내 재시도)
     "stt_groq":        "whisper-large-v3-turbo",     // STT 2차 폴백(Groq — groq_api_key 필요)
     "stt_local":       "base",                       // STT 최종 백업(로컬 faster-whisper) 크기
+                                                     //   ※ stt.local_fallback=true 만으로는 안 되고 가중치 준비가 필요합니다:
+                                                     //     python run_meeting.py prepare-local-stt  (--status 로 상태 확인)
     "llm":             "gpt",                // 기본 gpt(OpenAI 키만 필요) | claude(Anthropic 키 별도)
     "gpt_model":       "gpt-4o-mini",
     "minutes_model":   "gpt-4o",             // 회의록 생성 모델 (기본: gpt-4o)

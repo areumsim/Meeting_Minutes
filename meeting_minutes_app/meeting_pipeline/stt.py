@@ -835,7 +835,10 @@ def run_stt(
         raise RuntimeError(
             "사용 가능한 STT 제공자가 없습니다.\n"
             "  → OpenAI API 키(OPENAI_API_KEY)를 설정하거나,\n"
-            "  → Groq 키(GROQ_API_KEY) 또는 로컬 폴백(stt.local_fallback)을 켜세요."
+            "  → Groq 키(GROQ_API_KEY)를 넣거나,\n"
+            "  → 로컬 폴백을 쓰려면 stt.local_fallback=true **와** 가중치 준비가 모두\n"
+            "     필요합니다(켜기만 하면 체인에서 조용히 제외된다):\n"
+            "     python run_meeting.py prepare-local-stt"
         )
     if len(chain) > 1:
         info("  STT 폴백 체인: " + " → ".join(f"{p}/{m}" for p, m, _ in chain))

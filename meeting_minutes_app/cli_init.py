@@ -157,6 +157,66 @@ def run_init(argv: list[str]) -> int:
     return 0
 
 
+def run_prepare_local_stt(argv: list[str]) -> int:
+    """로컬 STT 최종 백업(faster-whisper) 가중치를 미리 내려받는다.
+
+    전사 경로는 절대 다운로드하지 않으므로(`stt._get_local_model` 은
+    `local_files_only=True`), 장애 전에 한 번 준비해 두는 것이 이 기능의 전제다.
+    준비되지 않은 로컬 단계는 폴백 체인에서 조용히 제외된다.
+
+    웹 [설정]의 [로컬 백업 모델 준비] 버튼과 같은 일을 하지만, 그 버튼은 패키지
+    모드에서만 보인다 — 소스 실행(개발·검증) 환경에서는 이 명령이 유일한 준비 수단이다.
+
+    사용:
+      meeting-minutes prepare-local-stt            # 설정된 모델 준비
+      meeting-minutes prepare-local-stt --status   # 준비 상태만 확인
+      meeting-minutes prepare-local-stt --model tiny
+    """
+    from meeting_minutes_app.meeting_pipeline import stt
+
+    # 모델명은 stt 모듈의 전역을 쓴다 — config reload 훅이 갱신하는 단일 소스이고,
+    # 폴백 체인이 실제로 쓰는 값과 같아야 상태 표시가 거짓말을 하지 않는다.
+    model = stt.LOCAL_STT_MODEL
+    if "--model" in argv:
+        idx = argv.index("--model")
+        if idx + 1 < len(argv):
+            model = argv[idx + 1]
+
+    st = stt.local_model_status(model)
+    if not st["lib_available"]:
+        print(f"[prepare-local-stt] {stt.LOCAL_LIB_MISSING_MSG}")
+        return 1
+
+    if "--status" in argv:
+        mark = "준비됨" if st["installed"] else "미준비"
+        print(f"[prepare-local-stt] 모델 '{model}': {mark}")
+        print(f"                    저장 위치: {st['path']}")
+        if st["installed"]:
+            print(f"                    크기: {st['size_mb']}MB")
+        else:
+            print("                    → 준비하려면 --status 없이 다시 실행하세요.")
+        return 0
+
+    if st["installed"]:
+        print(f"[prepare-local-stt] 모델 '{model}' 은 이미 준비됨 "
+              f"({st['size_mb']}MB) — 받을 것이 없습니다.")
+        return 0
+
+    print(f"[prepare-local-stt] 모델 '{model}' 다운로드 시작 "
+          f"(수십~수백 MB, 1~3분 걸릴 수 있습니다)")
+    try:
+        done = stt.prepare_local_model(model)
+    except Exception as e:
+        print(f"[prepare-local-stt] 준비 실패: {e}")
+        return 1
+    print(f"[prepare-local-stt] 준비 완료 — {model} "
+          f"({done['size_mb']}MB, {done['elapsed_sec']}초)")
+    print(f"                    저장 위치: {done['path']}")
+    print("                    config.json 의 stt.local_fallback 이 true 여야 "
+          "폴백 체인에 들어갑니다.")
+    return 0
+
+
 def run_mcp_token(argv: list[str]) -> int:
     """새 사용자용 Wiki Graph MCP Bearer 토큰을 발급해 config.json의
     mcp.allowed_tokens에 추가한다. 토큰은 이 실행 화면에만 한 번 출력된다(재조회 불가 —

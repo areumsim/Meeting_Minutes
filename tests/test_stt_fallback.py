@@ -501,6 +501,61 @@ class TestLocalBackup:
             stt.prepare_local_model("base")
 
 
+class TestPrepareLocalSttCli:
+    """`meeting-minutes prepare-local-stt` — 소스 실행 환경에서 로컬 백업을 준비하는
+    유일한 수단이다(웹 [설정]의 같은 버튼은 packaged 모드에서만 렌더된다)."""
+
+    def _cli(self):
+        from meeting_minutes_app.cli_init import run_prepare_local_stt
+        return run_prepare_local_stt
+
+    def test_library_missing_reports_and_fails(self, monkeypatch, capsys):
+        monkeypatch.setattr(stt, "local_lib_available", lambda: False)
+        assert self._cli()([]) == 1
+        assert "faster-whisper" in capsys.readouterr().out
+
+    def test_status_only_does_not_download(self, monkeypatch, capsys):
+        monkeypatch.setattr(stt, "local_lib_available", lambda: True)
+        monkeypatch.setattr(stt, "local_model_status",
+                            lambda m: {"installed": True, "model": m, "size_mb": 145.0,
+                                       "path": "p", "lib_available": True})
+        called = []
+        monkeypatch.setattr(stt, "prepare_local_model",
+                            lambda m: called.append(m))
+        assert self._cli()(["--status"]) == 0
+        assert called == []                      # 조회만 — 다운로드 금지
+        assert "준비됨" in capsys.readouterr().out
+
+    def test_prepare_downloads_when_missing(self, monkeypatch, capsys):
+        monkeypatch.setattr(stt, "local_lib_available", lambda: True)
+        monkeypatch.setattr(stt, "local_model_status",
+                            lambda m: {"installed": False, "model": m, "size_mb": 0.0,
+                                       "path": "p", "lib_available": True})
+        called = []
+
+        def _prepare(m):
+            called.append(m)
+            return {"installed": True, "model": m, "size_mb": 145.0,
+                    "path": "p", "lib_available": True, "elapsed_sec": 42.0}
+
+        monkeypatch.setattr(stt, "prepare_local_model", _prepare)
+        assert self._cli()([]) == 0
+        assert called == [stt.LOCAL_STT_MODEL]    # 체인이 쓰는 모델과 같은 값
+        assert "준비 완료" in capsys.readouterr().out
+
+    def test_model_override_and_already_prepared_is_noop(self, monkeypatch, capsys):
+        monkeypatch.setattr(stt, "local_lib_available", lambda: True)
+        monkeypatch.setattr(stt, "local_model_status",
+                            lambda m: {"installed": True, "model": m, "size_mb": 74.6,
+                                       "path": "p", "lib_available": True})
+        called = []
+        monkeypatch.setattr(stt, "prepare_local_model", lambda m: called.append(m))
+        assert self._cli()(["--model", "tiny"]) == 0
+        assert called == []                       # 이미 있으면 받지 않는다
+        out = capsys.readouterr().out
+        assert "tiny" in out and "이미 준비됨" in out
+
+
 # ━━━━━━━━ 5) 비용 단가 ━━━━━━━━
 
 class TestFallbackPricing:

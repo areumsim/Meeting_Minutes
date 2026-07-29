@@ -406,9 +406,16 @@ CLI 라이브는 같은 모델을 3회 두드린 뒤 다음 단계로 가고(순
 전사 도중 수백 MB 다운로드가 시작돼 처리가 몇 분 멈추는 일을 막기 위함이다. 준비가 안 됐으면
 `_local_stage_ready()`가 **체인을 만들 때 이 단계를 아예 제외**하고 경고만 남긴다 — 마지막
 단계로 넣어 두면 그 오류가 `last_err`가 되어 앞선 진짜 원인(키 오류·한도 초과)을 덮어쓴다.
-다운로드는 웹 [설정] → 오디오 전처리 → `[로컬 백업 모델 준비]`
-(`POST /api/local-stt/prepare` → `prepare_local_model()`)에서만 일어나고, 가중치는
-`MeetingMinutesData/data/models/`에 저장된다(폴더째 옮겨도 따라간다).
+다운로드는 두 곳에서만 일어난다 — 웹 [설정] → 오디오 전처리 → `[로컬 백업 모델 준비]`
+(`POST /api/local-stt/prepare`), 또는 CLI `python run_meeting.py prepare-local-stt`
+(`--status`로 상태만, `--model`로 크기 지정). 둘 다 `prepare_local_model()`로 수렴한다.
+가중치는 `MeetingMinutesData/data/models/`에 저장된다(폴더째 옮겨도 따라간다).
+
+**웹 버튼은 `packaged` 모드에서만 렌더된다**(`Settings.tsx`) — 소스 실행(개발·검증)
+환경에서는 CLI 명령이 유일한 준비 수단이다. `stt.local_fallback` 체크박스는 모드와
+무관하게 보이므로, 이 명령이 없으면 켜도 영구히 체인에서 제외되는 상태에 갇힌다.
+모델명은 세 곳이 각자 config를 읽지 않고 `stt.LOCAL_STT_MODEL`(reload 훅이 갱신하는
+단일 소스)로 수렴한다 — 갈라지면 상태 배지가 체인과 다른 모델을 보고한다.
 포터블 배포본에는 라이브러리(`faster-whisper`)가 포함되지만 가중치는 포함되지 않는다.
 
 비용 추정(`pricing.stt_rate_per_min()`)은 **기본 모델 기준**이다. Groq/로컬 단가도 표에 있지만
@@ -891,7 +898,7 @@ LLM은 다음 고정 답변 구조를 반드시 따르도록 강제된다:
 | `models.stt_fallback` | `"gpt-4o-transcribe"` | STT 1차 폴백 — 같은 OpenAI 내 재시도 모델 |
 | `models.stt_groq` | `"whisper-large-v3-turbo"` | STT 2차 폴백(다른 벤더) — `api.groq_api_key` 필요 |
 | `models.stt_local` | `"base"` | STT 최종 백업(로컬 faster-whisper) 모델 크기 |
-| `stt.local_fallback` | `false` | 로컬 최종 백업 사용(업로드·배치 경로). 가중치는 웹 [설정]에서 미리 준비해야 하며(전사 중 다운로드 안 함), 미준비면 체인에서 아예 제외된다 |
+| `stt.local_fallback` | `false` | 로컬 최종 백업 사용(업로드·배치 경로). 가중치를 미리 준비해야 하며(전사 중 다운로드 안 함) 미준비면 체인에서 아예 제외된다. 준비: 웹 [설정](패키지 모드) 또는 `python run_meeting.py prepare-local-stt` |
 | `obsidian.enabled` | `false` | Obsidian REST 연동 활성화 |
 | `obsidian.meetings_path` | `""` | 회의록 저장 경로 (`{year}`/`{month}`/`{project}` 토큰 지원 — `{project}`로 다중 도메인 분리) |
 | `obsidian.project` / `project_domains` | `""` / `{}` | 현재 도메인 + 도메인→폴더 매핑. `--project` CLI로 세션 단위 오버라이드 가능 |

@@ -200,7 +200,7 @@ if _cfg_ok:
 from meeting_minutes_app.common.pricing import (
     STT_PRICE_PER_MIN as _STT_PRICE_TABLE,
     LLM_TOKEN_PRICE as _LLM_TOKEN_PRICE,
-    DEFAULT_STT_PRICE_PER_MIN as _DEFAULT_STT_PRICE,
+    stt_rate_per_min as _stt_rate_per_min,
     MINUTES_COST_PER_SESSION as _MINUTES_COST_PER_SESSION,
     TRANSLATE_COST_PER_MIN as _TRANSLATE_COST_PER_MIN,
 )
@@ -261,7 +261,9 @@ atexit.register(_atexit_handler)
 #  비용 추정
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 def estimate_cost(stt_model: str, translate: bool, translate_model: str) -> Dict[str, float]:
-    stt_cost = _PRICING.get(stt_model, _DEFAULT_STT_PRICE) * 60
+    # STT 단가 조회는 pricing.stt_rate_per_min 하나로 수렴한다 — _PRICING 은 STT($/분)와
+    # LLM($/1M토큰)을 합친 dict 라 STT 조회에 쓰면 미등록 기본값이 갈릴 수 있다.
+    stt_cost = _stt_rate_per_min(stt_model) * 60
     translate_cost = 0.0
     if translate and translate_model in _PRICING:
         tpm = _PRICING[translate_model]
@@ -982,26 +984,22 @@ class RealtimeTranscriber:
         self._translator_pool = ThreadPoolExecutor(max_workers=2)
 
     def _run_stt(self, wav_bytes: bytes):
-        """STT API 호출. diarize 모델이면 List[Dict] (화자+텍스트), 아니면 str 반환."""
-        params: Dict[str, Any] = {"model": self.stt_model}
+        """STT API 호출. diarize 모델이면 List[Dict] (화자+텍스트), 아니면 str 반환.
 
-        if self._use_diarize:
-            params["response_format"]   = "diarized_json"
-            params["chunking_strategy"] = "auto"
-        elif self._use_whisper:
-            params["response_format"]         = "verbose_json"
-            params["timestamp_granularities"] = ["segment"]
-        else:
-            params["response_format"] = "json"
-
-        if self.language and self.language != "auto":
-            params["language"] = self.language
+        요청 파라미터는 배치·웹과 같은 단일 소스(stt.stt_request_params)를 쓴다 —
+        과거엔 이 메서드가 response_format 을 따로 정해, 같은 Groq 폴백을 웹은
+        verbose_json 으로 CLI 는 json 으로 부르는 이원화가 있었다.
+        재시도 정책만 라이브 고유다(같은 모델 3회 → 다른 벤더): 라이브는 순간적인
+        오류에서 빠르게 회복하는 것이 모델을 바꾸는 것보다 낫다."""
+        from meeting_minutes_app.meeting_pipeline import stt as _stt
+        params, kind = _stt.stt_request_params(
+            "OpenAI", self.stt_model, self.language)
 
         last_err: Optional[Exception] = None
         for attempt in range(3):
             try:
                 return self._call_stt(self.client, params, wav_bytes,
-                                      parse_diarized=self._use_diarize)
+                                      parse_diarized=(kind == "diarized"))
             except Exception as e:
                 last_err = e
                 if attempt < 2:
@@ -1020,13 +1018,12 @@ class RealtimeTranscriber:
             print(f"\n  {C_YELLOW}[STT 폴백]{C_RESET} OpenAI 실패 → Groq/{gmodel}",
                   file=sys.stderr)
             try:
-                gparams = dict(params)
-                gparams["model"] = gmodel
-                gparams["response_format"] = "json"   # Groq(Whisper)는 diarize 미지원
-                gparams.pop("chunking_strategy", None)
-                gparams.pop("timestamp_granularities", None)
-                # 화자분리 없이 평문만 돌려주면 process() 가 일반 경로로 처리한다.
-                return self._call_stt(gclient, gparams, wav_bytes, parse_diarized=False)
+                # Groq 전용 파라미터도 같은 단일 소스가 만든다 — diarize·OpenAI 전용
+                # 옵션·prompt 는 거기서 자동으로 빠진다. 화자분리가 없으니 평문만
+                # 돌아오고, process() 가 일반 경로로 처리한다.
+                gparams, gkind = _stt.stt_request_params("Groq", gmodel, self.language)
+                return self._call_stt(gclient, gparams, wav_bytes,
+                                      parse_diarized=(gkind == "diarized"))
             except Exception as ge:
                 print(f"\n  {C_RED}[STT 폴백 실패]{C_RESET} Groq: {ge}", file=sys.stderr)
 
@@ -1426,7 +1423,6 @@ class RecordingIndicator:
 class RealtimeSession:
 
     # ── 비용 단가 (common/pricing.py 단일 소스) ──
-    _STT_PRICE             = _STT_PRICE_TABLE
     _TRANS_PRICE_PER_MIN   = _TRANSLATE_COST_PER_MIN
     _MINUTES_COST_FIXED    = _MINUTES_COST_PER_SESSION
 
@@ -1973,7 +1969,7 @@ class RealtimeSession:
         """세션 메타데이터 + 비용 추정을 JSON으로 저장."""
         end_dt  = self._session_end_dt or datetime.now()
         dur_min = duration_sec / 60
-        stt_cost   = self._STT_PRICE.get(self.stt_model, 0.003) * dur_min
+        stt_cost   = _stt_rate_per_min(self.stt_model) * dur_min
         trans_cost = (self._TRANS_PRICE_PER_MIN * dur_min
                       if (self.translate and self.language == "en") else 0.0)
         total_cost = stt_cost + trans_cost + self._MINUTES_COST_FIXED

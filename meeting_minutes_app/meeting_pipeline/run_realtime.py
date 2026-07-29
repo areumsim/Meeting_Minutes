@@ -186,7 +186,7 @@ MODES = {
 # ══════════════════════════════════════════════════════════════════
 # 비용 단가 — common/pricing.py 단일 소스 사용
 from meeting_minutes_app.common.pricing import (
-    STT_PRICE_PER_MIN as _STT_PRICE_PER_MIN,
+    stt_rate_per_min as _stt_rate_per_min,
     MINUTES_COST_PER_SESSION as _MINUTES_COST_PER_SESSION,
     TRANSLATE_COST_PER_MIN as _TRANSLATE_COST_PER_MIN,
 )
@@ -197,7 +197,9 @@ def _compute_cost(mode_key: str, elapsed_sec: float) -> dict:
     stt_model = args[args.index("--model") + 1] if "--model" in args else "gpt-4o-mini-transcribe"
     translate = "--translate" in args
     elapsed_min = elapsed_sec / 60
-    stt      = _STT_PRICE_PER_MIN.get(stt_model, 0.003) * elapsed_min
+    # 표를 직접 .get 하면 미등록 모델의 기본 단가가 여기(0.003)와 pricing
+    # (DEFAULT_STT_PRICE_PER_MIN=0.006)에서 갈린다 → 함수 하나로 수렴.
+    stt      = _stt_rate_per_min(stt_model) * elapsed_min
     trans    = _TRANSLATE_COST_PER_MIN * elapsed_min if translate else 0.0
     minutes  = _MINUTES_COST_PER_SESSION
     return {

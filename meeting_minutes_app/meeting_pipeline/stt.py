@@ -173,6 +173,69 @@ def split_audio(audio_path: str, work_dir: str) -> List[Tuple[str, float]]:
 # ──────────────────────────────────────────────
 #  STT — OpenAI Transcription API
 # ──────────────────────────────────────────────
+# prompt 길이 상한 — 모델 계열별로 다르다.
+# whisper 계열(OpenAI whisper-1, Groq whisper-*)의 prompt 는 224토큰이 상한이다.
+# 한국어는 대략 1.5토큰/자라서 224토큰 ≈ 150자 → 여유를 둬 120자로 자른다.
+# (실시간 tail 문맥도 어차피 120자로 유지된다 — web/backend/api/realtime.py)
+WHISPER_PROMPT_MAX_CHARS = 120
+GPT_PROMPT_MAX_CHARS = 800
+
+
+def stt_request_params(
+    provider: str, model: str,
+    language: Optional[str] = None,
+    speaker_names: Optional[List[str]] = None,
+    prompt: Optional[str] = None,
+) -> Tuple[Dict[str, Any], str]:
+    """(요청 파라미터, 응답 종류) — 벤더·모델별 전사 API 계약의 단일 소스.
+
+    응답 종류는 "diarized" | "verbose" | "simple" 이며 파싱 함수 선택에 그대로 쓰인다.
+    파라미터와 파서를 한 함수에서 함께 결정해 둘이 어긋나지 않게 한다(과거 호출부마다
+    response_format 을 따로 정해 diarize 모델이 매 청크 조용히 실패한 사고가 있었다).
+
+    **모델명 문자열이 아니라 provider 로 벤더 전용 파라미터를 가른다**:
+    `chunking_strategy`·`diarized_json`·`known_speaker_names` 는 OpenAI 전용이라
+    Groq 로 새어나가면 400 이 된다. 배치·실시간(웹/CLI) 세 경로가 이 함수를 공유한다.
+    """
+    is_openai = (provider or "OpenAI") == "OpenAI"
+    use_diarize = is_openai and "diarize" in model
+    use_whisper = "whisper" in model
+
+    params: Dict[str, Any] = {"model": model}
+    if use_diarize:
+        params["response_format"]   = "diarized_json"
+        params["chunking_strategy"] = "auto"
+        if speaker_names:
+            params["known_speaker_names"] = speaker_names[:4]
+        kind = "diarized"
+    elif use_whisper:
+        params["response_format"]         = "verbose_json"
+        params["timestamp_granularities"] = ["segment"]
+        kind = "verbose"
+    else:
+        params["response_format"] = "json"
+        if is_openai:
+            params["chunking_strategy"] = "auto"
+        kind = "simple"
+
+    # language 가 "auto"/빈값이면 파라미터 생략 → 모델이 자동 감지(한국어·영어 모두 처리)
+    if language and str(language).strip().lower() != "auto":
+        params["language"] = language
+
+    # 호출자가 준 문맥(prompt)을 전달 — 청크 경계 단어 오인식을 줄인다.
+    # 주의: **직전 전사 꼬리를 넘기는 것은 위험하다**. 모델이 그 문장을 되풀이하고
+    # 그 출력이 다시 꼬리가 되면 같은 문장이 세션 내내 반복된다(2026-07-28 실사고).
+    # 실시간 경로의 기본값은 세션 내내 불변인 정적 힌트(주제·참석자)다
+    # — realtime.prompt_context (static|tail|off), web/backend/api/realtime.py 참고.
+    # diarize 계열은 prompt 미지원이고, Groq 는 폴백 단계라 문맥 없이 정확도만 취한다
+    # (정적 힌트가 224토큰 상한을 넘겨 폴백 자체가 깨지는 것을 피한다).
+    if prompt and is_openai and not use_diarize:
+        cap = WHISPER_PROMPT_MAX_CHARS if use_whisper else GPT_PROMPT_MAX_CHARS
+        params["prompt"] = prompt[:cap]
+
+    return params, kind
+
+
 def transcribe_chunk(
     client, audio_path: str, model: str,
     language: Optional[str] = None,
@@ -181,41 +244,16 @@ def transcribe_chunk(
     debug_dir: Optional[str] = None,
     chunk_index: int = 0,
     prompt: Optional[str] = None,
+    provider: str = "OpenAI",
 ) -> List[Dict]:
-    use_diarize = "diarize" in model
-    use_whisper = model.startswith("whisper")
-    logger.debug(f"[STT] model={model}, file={audio_path}, "
-                 f"{file_mb(audio_path):.2f}MB, offset={offset:.1f}s")
+    params, kind = stt_request_params(
+        provider, model, language, speaker_names, prompt)
+    logger.debug(f"[STT] {provider}/{model}, file={audio_path}, "
+                 f"{file_mb(audio_path):.2f}MB, offset={offset:.1f}s, kind={kind}")
 
     f = open(audio_path, "rb")
     try:
-        params: Dict[str, Any] = {"model": model, "file": f}
-
-        if use_diarize:
-            params["response_format"]   = "diarized_json"
-            params["chunking_strategy"] = "auto"
-            if speaker_names:
-                params["known_speaker_names"] = speaker_names[:4]
-        elif use_whisper:
-            params["response_format"]         = "verbose_json"
-            params["timestamp_granularities"] = ["segment"]
-        else:
-            params["response_format"]   = "json"
-            params["chunking_strategy"] = "auto"
-
-        # language 가 "auto"/빈값이면 파라미터 생략 → 모델이 자동 감지(한국어·영어 모두 처리)
-        if language and str(language).strip().lower() != "auto":
-            params["language"] = language
-
-        # 호출자가 준 문맥(prompt)을 전달 — 청크 경계 단어 오인식을 줄인다.
-        # 주의: **직전 전사 꼬리를 넘기는 것은 위험하다**. 모델이 그 문장을 되풀이하고
-        # 그 출력이 다시 꼬리가 되면 같은 문장이 세션 내내 반복된다(2026-07-28 실사고).
-        # 실시간 경로의 기본값은 세션 내내 불변인 정적 힌트(주제·참석자)다
-        # — realtime.prompt_context (static|tail|off), web/backend/api/realtime.py 참고.
-        # (whisper-1·gpt-4o-(mini-)transcribe 지원, diarize 계열은 미지원이라 제외)
-        if prompt and not use_diarize:
-            params["prompt"] = prompt[:800]
-
+        params["file"] = f
         t0   = time.time()
         resp = client.audio.transcriptions.create(**params)
         logger.debug(f"[STT TIME] {time.time()-t0:.1f}s")
@@ -233,9 +271,9 @@ def transcribe_chunk(
 
     logger.debug(f"[STT KEYS] {list(data.keys())}")
 
-    if use_diarize:
+    if kind == "diarized":
         return _parse_diarized(data, offset)
-    elif use_whisper:
+    elif kind == "verbose":
         return _parse_verbose(data, offset)
     else:
         return _parse_json_simple(data, offset)
@@ -301,11 +339,14 @@ def _parse_diarized(data: dict, offset: float) -> List[Dict]:
 
 
 def _parse_verbose(data: dict, offset: float) -> List[Dict]:
+    # 필드는 .get 으로 읽는다 — 이 파서는 OpenAI whisper-1 과 Groq whisper-* 응답을
+    # 함께 받으므로 한쪽에 없는 필드로 KeyError 가 나면 폴백 결과 전체가 날아간다.
     segments = []
     for seg in data.get("segments", []):
         segments.append({
-            "start": seg["start"] + offset, "end": seg["end"] + offset,
-            "text":  seg["text"].strip(), "speaker": "",
+            "start": (seg.get("start") or 0.0) + offset,
+            "end":   (seg.get("end")   or 0.0) + offset,
+            "text":  (seg.get("text")  or "").strip(), "speaker": "",
         })
     if not segments and data.get("text"):
         segments.append({"start": offset, "end": offset,
@@ -360,16 +401,18 @@ def _transcribe_chunk_checked(
     client, audio_path: str, model: str,
     language: Optional[str], speaker_names: Optional[List[str]],
     offset: float, debug_dir: Optional[str], chunk_index: int,
-    work_dir: str, depth: int = 0,
+    work_dir: str, depth: int = 0, provider: str = "OpenAI",
 ) -> List[Dict]:
     """transcribe_chunk 결과가 잘린 것으로 보이면 청크를 반으로 나눠 재시도."""
     segs = transcribe_chunk(
         client, audio_path, model, language, speaker_names,
-        offset, debug_dir, chunk_index,
+        offset, debug_dir, chunk_index, provider=provider,
     )
 
-    dur      = audio_duration(audio_path)
-    has_ts   = "diarize" in model or model.startswith("whisper")
+    dur = audio_duration(audio_path)
+    # 타임스탬프 유무는 요청 계약과 같은 판단을 써야 한다(응답 종류로 판정).
+    _, _kind = stt_request_params(provider, model)
+    has_ts   = _kind in ("diarized", "verbose")
     if depth < MAX_STT_RETRY_SPLIT_DEPTH and _looks_truncated(segs, dur, has_ts):
         warn(f"  청크 {chunk_index} 전사 결과가 {dur:.0f}s 길이 대비 비정상적으로 짧음 → 2분할 재시도")
         half = dur / 2
@@ -383,7 +426,7 @@ def _transcribe_chunk_checked(
                 retried.extend(_transcribe_chunk_checked(
                     client, sub_path, model, language, speaker_names,
                     offset + sub_offset, debug_dir, chunk_index,
-                    work_dir, depth + 1,
+                    work_dir, depth + 1, provider,
                 ))
             finally:
                 if os.path.exists(sub_path):
@@ -711,11 +754,12 @@ def _transcribe_chunk_via_chain(
             if provider == "local":
                 segs = transcribe_local(cp, pmodel, language, chunk_offset)
             else:
-                # diarize 모델만 화자명 힌트를 받는다(그 외에는 미지원).
-                spk = speaker_names if "diarize" in pmodel else None
+                # 화자명 힌트를 어느 모델이 받는지는 stt_request_params 가 판단한다
+                # (여기서 또 걸러내면 규칙이 두 곳으로 갈라진다).
                 segs = _transcribe_chunk_checked(
-                    client, cp, pmodel, language, spk,
+                    client, cp, pmodel, language, speaker_names,
                     chunk_offset, debug_dir, chunk_index, work_dir,
+                    provider=provider,
                 )
         except Exception as e:
             last_err = e
@@ -764,12 +808,15 @@ def _transcribe_chunk_via_chain(
 
 
 def run_stt(
-    audio_path: str, model: str = DEFAULT_STT_MODEL,
+    audio_path: str, model: Optional[str] = None,
     language: Optional[str] = None,
     speaker_names: Optional[List[str]] = None,
     work_dir: Optional[str] = None,
     debug_dir: Optional[str] = None,
 ) -> List[Dict]:
+    # 기본값을 인자 기본식으로 두면 import 시점 값이 고정돼 설정 reload 가 반영되지
+    # 않는다(웹 [설정]에서 STT 모델을 바꿔도 예전 모델로 돈다) → 호출 시점에 읽는다.
+    model = model or DEFAULT_STT_MODEL
     step(f"STT 수행 중  (model: {model})")
     work_dir = work_dir or tempfile.gettempdir()
 

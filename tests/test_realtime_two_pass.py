@@ -64,12 +64,35 @@ class TestTranscribeChunkPrompt:
         stt.transcribe_chunk(client, str(wav), "gpt-4o-transcribe-diarize", prompt="ctx")
         assert "prompt" not in client.audio.transcriptions.create.call_args.kwargs
 
-    def test_prompt_truncated_to_800(self, tmp_path):
+    def test_prompt_truncated_for_gpt_models(self, tmp_path):
         wav = tmp_path / "c.wav"
         wav.write_bytes(b"\x00" * 64)
         client = self._client()
+        stt.transcribe_chunk(client, str(wav), "gpt-4o-transcribe", prompt="x" * 2000)
+        assert (len(client.audio.transcriptions.create.call_args.kwargs["prompt"])
+                == stt.GPT_PROMPT_MAX_CHARS)
+
+    def test_prompt_truncated_harder_for_whisper(self, tmp_path):
+        """whisper 계열 prompt 는 224토큰 상한이라 gpt-4o 계열과 같은 800자를 넣으면
+        폴백 시도 자체가 깨질 수 있다 — 훨씬 짧게 자른다."""
+        wav = tmp_path / "c.wav"
+        wav.write_bytes(b"\x00" * 64)
+        client = self._client()
+        client.audio.transcriptions.create.return_value = _FakeResponse({"segments": []})
         stt.transcribe_chunk(client, str(wav), "whisper-1", prompt="x" * 2000)
-        assert len(client.audio.transcriptions.create.call_args.kwargs["prompt"]) == 800
+        assert (len(client.audio.transcriptions.create.call_args.kwargs["prompt"])
+                == stt.WHISPER_PROMPT_MAX_CHARS)
+        assert stt.WHISPER_PROMPT_MAX_CHARS < stt.GPT_PROMPT_MAX_CHARS
+
+    def test_prompt_omitted_for_non_openai_provider(self, tmp_path):
+        """Groq(whisper)는 폴백 단계다 — 224토큰 상한 위험을 안고 문맥을 넣지 않는다."""
+        wav = tmp_path / "c.wav"
+        wav.write_bytes(b"\x00" * 64)
+        client = self._client()
+        client.audio.transcriptions.create.return_value = _FakeResponse({"segments": []})
+        stt.transcribe_chunk(client, str(wav), "whisper-large-v3-turbo",
+                             prompt="ctx", provider="Groq")
+        assert "prompt" not in client.audio.transcriptions.create.call_args.kwargs
 
 
 # ━━━━━━━━ 단위: prompt 에코 제거 ━━━━━━━━

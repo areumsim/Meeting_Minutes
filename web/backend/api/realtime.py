@@ -1028,9 +1028,11 @@ class BrowserRealtimeSession:
                             stt.transcribe_chunk,
                             groq_client, tmp_path, groq_model,
                             stt_language,
-                            None, c_start,
-                            # Groq(Whisper)의 prompt 는 224토큰 제한이라 정적 힌트(최대
-                            # 800자)를 그대로 넣으면 요청이 거절될 수 있다 → 생략.
+                            None, c_start, prompt=used_prompt or None,
+                            # provider 를 넘기면 벤더 전용 파라미터(chunking_strategy
+                            # 등)와 prompt 정책(Groq/whisper 는 224토큰 상한이라 생략)이
+                            # stt.stt_request_params 한 곳에서 걸러진다.
+                            provider="Groq",
                         )
                         if not groq_notified:
                             groq_notified = True

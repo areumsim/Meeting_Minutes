@@ -273,23 +273,38 @@ class TestChainFallbackBehavior:
             chain, "chunk.mp3", "ko", None, 0.0, None, 0, "work")
         assert segs[0]["text"] == ""
 
-    def test_speaker_hint_only_for_diarize_model(self, monkeypatch):
-        """화자명 힌트는 diarize 모델만 받는다(그 외 모델은 파라미터 자체를 거부)."""
-        seen = []
+    def test_chain_passes_provider_through(self, monkeypatch):
+        """배치 체인도 provider 를 넘겨야 벤더 전용 파라미터가 걸러진다."""
+        seen = {}
 
-        def _checked(client, path, model, language, spk, *a, **kw):
-            seen.append((model, spk))
-            return [{"start": 0, "end": 1, "text": "x", "speaker": ""}]
+        def _tc(client, path, model, language=None, speaker_names=None, offset=0.0,
+                debug_dir=None, chunk_index=0, prompt=None, provider="OpenAI"):
+            seen["provider"] = provider
+            return [{"start": 0, "end": 1, "text": "ok", "speaker": ""}]
 
-        monkeypatch.setattr(stt, "_transcribe_chunk_checked", _checked)
+        monkeypatch.setattr(stt, "transcribe_chunk", _tc)
+        monkeypatch.setattr(stt, "audio_duration", lambda _p: 0.0)
         stt._transcribe_chunk_via_chain(
-            [("OpenAI", "whisper-large-v3", MagicMock())],
-            "c.mp3", "ko", ["김", "이"], 0.0, None, 0, "work")
-        stt._transcribe_chunk_via_chain(
-            [("OpenAI", "gpt-4o-transcribe-diarize", MagicMock())],
-            "c.mp3", "ko", ["김", "이"], 0.0, None, 0, "work")
-        assert seen == [("whisper-large-v3", None),
-                        ("gpt-4o-transcribe-diarize", ["김", "이"])]
+            [("Groq", "whisper-large-v3-turbo", MagicMock())],
+            "c.mp3", "ko", None, 0.0, None, 0, "work")
+        assert seen["provider"] == "Groq"
+
+    def test_speaker_hint_only_for_diarize_model(self):
+        """화자명 힌트는 diarize 모델만 받는다(그 외 모델은 파라미터 자체를 거부).
+
+        게이트는 요청 계약을 만드는 한 곳(stt_request_params)에만 있어야 한다 —
+        예전엔 체인 순회에도 같은 판정이 복사돼 있었다."""
+        names = ["김", "이"]
+        p_plain, _ = stt.stt_request_params("OpenAI", "whisper-1", "ko", names)
+        assert "known_speaker_names" not in p_plain
+        p_diar, kind = stt.stt_request_params(
+            "OpenAI", "gpt-4o-transcribe-diarize", "ko", names)
+        assert p_diar["known_speaker_names"] == names and kind == "diarized"
+        # Groq 에는 diarize 자체가 없으므로 모델명에 diarize 가 있어도 새어나가면 안 된다
+        p_groq, gkind = stt.stt_request_params(
+            "Groq", "gpt-4o-transcribe-diarize", "ko", names)
+        assert "known_speaker_names" not in p_groq
+        assert "chunking_strategy" not in p_groq and gkind != "diarized"
 
 
 # ━━━━━━━━ 2.5) sticky — 죽은 제공자를 청크마다 다시 때리지 않는다 ━━━━━━━━
@@ -569,6 +584,8 @@ class TestCliRealtimeGroqFallback:
         assert out == "그록 전사"
         assert openai_client.audio.transcriptions.create.call_count == 3
         assert captured["model"] == "whisper-large-v3-turbo"
-        assert captured["response_format"] == "json"      # diarize 미지원
-        assert "chunking_strategy" not in captured
+        # 웹·배치와 같은 계약을 쓴다(stt.stt_request_params 단일 소스) — 과거엔 이
+        # 경로만 response_format='json' 을 강제해 벤더 하나에 계약이 두 벌이었다.
+        assert captured["response_format"] == "verbose_json"
+        assert "chunking_strategy" not in captured        # OpenAI 전용 파라미터
         assert "prompt" not in captured                   # Whisper prompt 224토큰 제한

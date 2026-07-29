@@ -92,7 +92,7 @@ flowchart TD
 | 단계 | 함수 | 모듈 |
 |---|---|---|
 | 오디오 변환 | `prepare_audio()` · `split_audio()` | `stt.py` |
-| STT | `run_stt()` / `_transcribe_chunk_via_chain()` / `_transcribe_chunk_checked()` | `stt.py` |
+| STT | `run_stt()` / `_transcribe_chunk_via_chain()` / `_transcribe_chunk_checked()` / `stt_request_params()` | `stt.py` |
 | 날짜 파싱 | `parse_session_dt_from_path()` · `parse_iso_date_from_text()` | `date_utils.py` |
 | 문서 유형 판별(파일명) | `_detect_type_from_filename()` | `ingestion_pipeline.py` |
 | 문서 유형 판별(내용 보완) | `classify_doc_type_llm()` | `meeting_workflow.py` |
@@ -374,10 +374,19 @@ Groq까지만 폴백하고, 종료 후 재전사는 웹의 diarize 후처리(기
 블로킹한다, (3) 같은 일을 하는 `batch`/`audio-watcher` 경로가 이미 있고 그쪽은 비용 확인과
 진행 표시를 갖췄다.
 
-**Groq 호출 시 주의점**(`groq_fallback()`이 공용 규칙): 모델명이 `whisper-*`라 `transcribe_chunk`가
-자동으로 `verbose_json` 경로를 타고, 화자분리는 없다(`speaker=""`). Whisper 계열 `prompt`는
-224토큰 제한이라 실시간 정적 힌트(최대 800자)를 그대로 넘기면 요청이 거절될 수 있어 **Groq
-단계에서는 prompt를 생략**한다.
+**벤더별 요청 계약은 `stt.stt_request_params(provider, model, …)` 한 곳에서 만든다.**
+`(파라미터, 응답 종류)`를 함께 돌려주므로 파서 선택이 요청과 어긋날 수 없다(과거 호출부마다
+`response_format`을 따로 정해 diarize 모델이 매 청크 조용히 실패한 사고가 있었다). 규칙:
+
+- `chunking_strategy`·`diarized_json`·`known_speaker_names`는 **OpenAI 전용** — 모델명이 아니라
+  `provider`로 가른다(모델명으로 추측하면 새 모델·벤더가 들어올 때 조용히 400을 맞는다).
+- Groq는 화자분리가 없다(`speaker=""`)고, whisper 계열이라 `verbose_json` 경로를 탄다.
+- `prompt`는 diarize 미지원이고 Groq 단계에서는 생략한다(224토큰 제한). OpenAI whisper-1은
+  같은 제한 때문에 `WHISPER_PROMPT_MAX_CHARS`(120자)로, gpt-4o 계열은 800자로 자른다.
+
+배치 체인·웹 라이브·CLI 라이브 세 경로가 이 함수를 공유한다. **재시도 정책만 경로별로 다르다**:
+라이브는 같은 모델 3회 재시도 후 벤더를 바꾸고(순간 오류에서 빠르게 회복하는 편이 낫다),
+배치는 바로 다음 제공자로 넘어간다.
 
 **로컬 단계의 가중치 정책**: `_get_local_model()`은 `local_files_only=True`로만 로딩한다 —
 전사 도중 수백 MB 다운로드가 시작돼 처리가 몇 분 멈추는 일을 막기 위함이다. 준비가 안 됐으면
@@ -386,8 +395,10 @@ Groq까지만 폴백하고, 종료 후 재전사는 웹의 diarize 후처리(기
 에서만 일어나고, 가중치는 `MeetingMinutesData/data/models/`에 저장된다(폴더째 옮겨도 따라간다).
 포터블 배포본에는 라이브러리(`faster-whisper`)가 포함되지만 가중치는 포함되지 않는다.
 
-비용 추정(`pricing.STT_PRICE_PER_MIN`)은 **기본 모델 기준**이다. Groq/로컬 단가도 표에 있지만
-(폴백 세션의 사후 계산용) 사전 추정은 폴백 여부를 모르므로 실제 청구액과 다를 수 있다.
+비용 추정(`pricing.stt_rate_per_min()`)은 **기본 모델 기준**이다. Groq/로컬 단가도 표에 있지만
+아직 추정에만 쓰인다 — 세션이 어떤 제공자로 전사됐는지 기록해 사후 재계산하는 경로는 없어,
+폴백이 걸린 세션의 추정치는 과대평가된다(실제 청구액이 더 싸다). 단가 조회는 표를 직접
+`.get` 하지 말고 `stt_rate_per_min()`을 쓴다 — 미등록 모델의 기본 단가가 호출부마다 갈렸다.
 
 ---
 

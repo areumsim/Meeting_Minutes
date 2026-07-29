@@ -545,6 +545,9 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
   const startRecording = async () => {
     try {
       setStatus("connecting");
+      // 녹음이 시작되면 세션 설정 카드는 접는다 — 녹음 중엔 볼 일이 없고, 화면
+      // 위쪽을 차지해 전사 영역이 좁아진다(사용자가 다시 펼 수 있음).
+      setIsSettingsCollapsed(true);
       setLiveTranscript([]);
       setRelatedNotes([]);
       setWikiStatus(null);

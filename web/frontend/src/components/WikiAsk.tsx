@@ -58,7 +58,10 @@ export default function WikiAsk() {
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === "Enter" && !e.shiftKey) {
+    // isComposing 가드: 한글 입력 중 후보를 확정하는 Enter 도 keydown 으로 들어온다.
+    // 없으면 조합 중인 글자를 확정하려는 Enter 가 질문을 전송해 버리고, 전송 후
+    // 입력창을 비우므로 쓰던 문장이 사라진다.
+    if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) {
       e.preventDefault();
       handleAsk();
     }

@@ -1454,19 +1454,30 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
                       </div>
 
                       <div className="flex items-center gap-6 md:gap-8">
+                        {/* 라벨 없는 글리프뿐이었다 — 특히 [정지]는 회의를 끝내고 문서
+                            생성(비용)을 시작하는 버튼이라 무엇인지 분명해야 한다.
+                            아이콘 아래 텍스트 + title/aria-label 을 모두 붙인다. */}
                         <button
                           onClick={pauseRecording}
-                          className={`w-14 h-14 md:w-16 md:h-16 rounded-2xl flex items-center justify-center transition-all shadow-xl ${
+                          title={isPaused ? "녹음 다시 시작" : "녹음 일시정지"}
+                          aria-label={isPaused ? "녹음 다시 시작" : "녹음 일시정지"}
+                          className={`w-14 h-14 md:w-16 md:h-16 rounded-2xl flex flex-col items-center justify-center gap-0.5 transition-all shadow-xl ${
                             isPaused ? "bg-emerald-500 hover:bg-emerald-600" : "bg-amber-500 hover:bg-amber-600"
                           } text-white hover:scale-105 active:scale-95`}
                         >
-                          {isPaused ? <Play size={24} fill="currentColor" /> : <Pause size={24} fill="currentColor" />}
+                          {isPaused ? <Play size={20} fill="currentColor" /> : <Pause size={20} fill="currentColor" />}
+                          <span className="text-[9px] font-bold tracking-tight">
+                            {isPaused ? "재시작" : "일시정지"}
+                          </span>
                         </button>
                         <button
                           onClick={stopRecording}
-                          className="w-20 h-20 md:w-24 md:h-24 bg-brand-950 text-white rounded-[1.5rem] md:rounded-[2rem] flex items-center justify-center hover:bg-brand-900 transition-all shadow-2xl hover:scale-105 active:scale-95 group relative overflow-hidden"
+                          title="녹음을 끝내고 회의록을 생성합니다"
+                          aria-label="녹음 정지 및 회의록 생성"
+                          className="w-20 h-20 md:w-24 md:h-24 bg-brand-950 text-white rounded-[1.5rem] md:rounded-[2rem] flex flex-col items-center justify-center gap-1 hover:bg-brand-900 transition-all shadow-2xl hover:scale-105 active:scale-95 group relative overflow-hidden"
                         >
-                          <Square size={28} fill="currentColor" className="group-hover:scale-90 transition-transform relative z-10" />
+                          <Square size={24} fill="currentColor" className="group-hover:scale-90 transition-transform relative z-10" />
+                          <span className="text-[10px] font-bold tracking-tight relative z-10">정지</span>
                         </button>
                       </div>
 

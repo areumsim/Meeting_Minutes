@@ -28,7 +28,9 @@ export default function TextInput({ onComplete }: { onComplete: (id: string) => 
       onComplete(data.sessionId);
     } catch (err) {
       console.error(err);
-      alert(`처리 실패: ${err instanceof Error ? err.message : "API 키와 콘솔을 확인하세요."}`);
+      // 사무용 사용자에게 "콘솔을 확인하세요"는 실행 가능한 안내가 아니다.
+      alert(`처리 실패: ${err instanceof Error ? err.message
+        : "[설정]에서 API 키가 입력돼 있는지 확인한 뒤 다시 시도해 주세요."}`);
       setProcessing(false);
     }
   };

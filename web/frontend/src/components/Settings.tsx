@@ -14,6 +14,7 @@ import {
   localSttStatus, prepareLocalStt,
 } from "../lib/api";
 import { Capacitor } from "@capacitor/core";
+import { typeLabel } from "../lib/format";
 import type { Profile } from "../lib/types";
 import type { WatcherStatus, DiagnoseResult, LocalSttStatus } from "../lib/api";
 
@@ -375,6 +376,13 @@ export default function SettingsView() {
       setRawMsg({ ok: false, text: `JSON 형식 오류: ${e?.message || e}` });
       return;
     }
+    // 이 저장은 config.json 전체를 넘긴 JSON 으로 대체한다 — 편집기에서 실수로 지운
+    // 섹션(API 키 포함)이 그대로 사라진다. 앱의 다른 파괴적 동작은 모두 confirm 을
+    // 거치는데 여기만 없었다.
+    if (!confirm(
+      "설정 파일 전체를 이 JSON 내용으로 대체합니다.\n" +
+      "편집 중 빠뜨린 항목(API 키 등)은 함께 삭제됩니다.\n\n계속할까요?"
+    )) return;
     try {
       await updateConfig(obj);
       setRawMsg({ ok: true, text: "전체 설정이 저장되었습니다." });
@@ -645,14 +653,23 @@ export default function SettingsView() {
               <div>
                 <span className="font-bold text-sm text-zinc-900">{p.name}</span>
                 <span className="text-xs text-zinc-500 ml-3">{p.description}</span>
-                <span className="text-[10px] text-brand-500 font-bold ml-2 uppercase bg-brand-50 px-2 py-0.5 rounded-md">[{p.source}]</span>
+                <span className="text-[10px] text-brand-500 font-bold ml-2 bg-brand-50 px-2 py-0.5 rounded-md">
+                  {p.source === "builtin" ? "기본 제공" : "직접 추가"}
+                </span>
               </div>
               <div className="flex items-center gap-3 text-xs text-zinc-500 font-medium">
-                <span className="bg-white px-2 py-1 rounded shadow-sm">{p.type}</span>
-                <span className="bg-white px-2 py-1 rounded shadow-sm">{p.language}</span>
+                <span className="bg-white px-2 py-1 rounded shadow-sm">{typeLabel(p.type)}</span>
+                <span className="bg-white px-2 py-1 rounded shadow-sm">
+                  {p.language === "ko" ? "한국어" : p.language === "en" ? "영어" : p.language}
+                </span>
                 {p.translate && <span className="bg-amber-50 text-amber-700 px-2 py-1 rounded shadow-sm">번역</span>}
                 {p.source !== "builtin" && (
-                  <button onClick={() => handleDeleteProfile(p.name)} className="p-1.5 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors ml-1">
+                  <button
+                    onClick={() => handleDeleteProfile(p.name)}
+                    title="이 프로필 삭제"
+                    aria-label={`${p.name} 프로필 삭제`}
+                    className="p-1.5 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors ml-1"
+                  >
                     <Trash2 size={16} />
                   </button>
                 )}

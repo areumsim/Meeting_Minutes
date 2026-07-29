@@ -30,6 +30,13 @@ export default function PrepBrief({ onSaved }: { onSaved?: (id: string) => void 
     setLoading(false);
   };
 
+  /** Enter 로 생성 실행 — 단 한글 입력 조합 중(isComposing)에는 무시한다.
+   *  이 가드가 없으면 한글 후보를 확정하려는 Enter 마다 LLM 호출(비용)이 나갔다. */
+  const onEnterRun = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key !== "Enter" || e.nativeEvent.isComposing) return;
+    run();
+  };
+
   const copy = () => {
     navigator.clipboard?.writeText(brief);
     setCopied(true);
@@ -60,7 +67,9 @@ export default function PrepBrief({ onSaved }: { onSaved?: (id: string) => void 
             type="text"
             value={title}
             onChange={(e) => setTitle(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter") run(); }}
+            // isComposing 가드 — 한글 후보 확정 Enter 가 브리프 생성(LLM 호출 = 비용)을
+            // 유발하던 문제. onEnter 헬퍼로 두 입력창이 같은 규칙을 쓴다.
+            onKeyDown={onEnterRun}
             placeholder="예: 3분기 로드맵 검토"
             className="w-full px-3 py-2.5 bg-zinc-50 border border-zinc-200 rounded-lg focus:ring-2 focus:ring-brand-500 outline-none text-sm font-medium"
           />
@@ -92,7 +101,7 @@ export default function PrepBrief({ onSaved }: { onSaved?: (id: string) => void 
             type="text"
             value={topic}
             onChange={(e) => setTopic(e.target.value)}
-            onKeyDown={(e) => { if (e.key === "Enter") run(); }}
+            onKeyDown={onEnterRun}
             placeholder="예: 로드맵, 우선순위, 예산"
             className="w-full px-3 py-2.5 bg-zinc-50 border border-zinc-200 rounded-lg focus:ring-2 focus:ring-brand-500 outline-none text-sm font-medium"
           />

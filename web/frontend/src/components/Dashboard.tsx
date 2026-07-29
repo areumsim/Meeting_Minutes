@@ -5,7 +5,7 @@ import {
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { getSessions, deleteSession, clearSessions } from "../lib/api";
-import { formatDate, formatDuration, typeColor } from "../lib/format";
+import { formatDate, formatDuration, typeColor, typeLabel, statusLabel } from "../lib/format";
 import type { Session } from "../lib/types";
 
 interface Props {
@@ -19,20 +19,35 @@ export default function Dashboard({ onSelectSession, onNewUpload, onNewRecord }:
   const [search, setSearch] = useState("");
   const [typeFilter, setTypeFilter] = useState("");
   const [loading, setLoading] = useState(true);
+  // 조회 실패를 '세션이 없음'과 구분한다 — 과거엔 console.error 만 하고 빈 상태를
+  // 그려서, 백엔드가 죽은 것과 회의가 하나도 없는 것이 화면상 똑같았다.
+  const [loadError, setLoadError] = useState<string>("");
+  // 응답이 순서 뒤바뀌어 도착해도 마지막 요청의 결과만 반영한다.
+  const reqSeqRef = useRef(0);
 
   const load = async (background = false) => {
     // background 갱신은 로딩 스피너로 목록을 깜빡이지 않는다
     if (!background) setLoading(true);
+    const seq = ++reqSeqRef.current;
     try {
       const data = await getSessions(search, typeFilter);
+      if (seq !== reqSeqRef.current) return;   // 낡은 응답 폐기
       setSessions(data);
+      setLoadError("");
     } catch (e) {
+      if (seq !== reqSeqRef.current) return;
       console.error(e);
+      setLoadError(e instanceof Error ? e.message : String(e));
     }
-    if (!background) setLoading(false);
+    if (!background && seq === reqSeqRef.current) setLoading(false);
   };
 
-  useEffect(() => { load(); }, [search, typeFilter]);
+  // 검색어는 디바운스한다 — 한글은 자모마다 change 가 떠서 "회의록" 입력에도
+  // 요청이 7회 이상 나갔다. 유형 필터는 클릭이라 즉시 반영한다.
+  useEffect(() => {
+    const t = setTimeout(() => { load(); }, search ? 300 : 0);
+    return () => clearTimeout(t);
+  }, [search, typeFilter]);
 
   // 처리 중인 세션 폴링 — setState updater 안에서 load()를 호출하면 StrictMode에서
   // 이중 실행되는 부수효과가 생기므로 ref로 현재 목록을 읽는다.
@@ -57,9 +72,6 @@ export default function Dashboard({ onSelectSession, onNewUpload, onNewRecord }:
     await clearSessions();
     load();
   };
-
-  const statusText = (s: string) =>
-    ({ completed: "완료", processing: "처리 중", error: "오류" } as Record<string, string>)[s] || s;
 
   const statusIcon = (s: string) => {
     switch (s) {
@@ -101,7 +113,12 @@ export default function Dashboard({ onSelectSession, onNewUpload, onNewRecord }:
               className="w-full pl-11 pr-4 py-2.5 bg-white border border-brand-200 rounded-xl focus:ring-2 focus:ring-brand-900 outline-none transition-all font-medium text-sm"
             />
           </div>
-          <button onClick={() => load()} className="px-4 py-3 bg-white border border-brand-200 rounded-xl hover:bg-brand-50 transition-all shrink-0">
+          <button
+            onClick={() => load()}
+            title="목록 새로고침"
+            aria-label="세션 목록 새로고침"
+            className="px-4 py-3 bg-white border border-brand-200 rounded-xl hover:bg-brand-50 transition-all shrink-0"
+          >
             <RefreshCw size={16} className="text-brand-500" />
           </button>
         </div>
@@ -129,6 +146,21 @@ export default function Dashboard({ onSelectSession, onNewUpload, onNewRecord }:
         <div className="flex items-center justify-center py-20 text-brand-400">
           <Loader2 className="animate-spin" size={24} />
         </div>
+      ) : loadError ? (
+        <div className="text-center py-20">
+          <AlertCircle size={48} className="mx-auto text-red-400 mb-4" />
+          <p className="text-lg font-bold text-brand-900">세션 목록을 불러올 수 없습니다</p>
+          <p className="text-sm text-brand-400 mt-1">
+            서버가 실행 중인지 확인해 주세요. (회의가 없는 것이 아니라 조회에 실패했습니다)
+          </p>
+          <p className="text-xs text-brand-300 mt-2 break-words max-w-md mx-auto">{loadError}</p>
+          <button
+            onClick={() => load()}
+            className="mt-4 px-4 py-2 bg-brand-900 text-white rounded-xl text-sm font-bold hover:bg-brand-800 transition-colors"
+          >
+            다시 시도
+          </button>
+        </div>
       ) : sessions.length === 0 ? (
         <div className="text-center py-20">
           <FileAudio size={48} className="mx-auto text-brand-300 mb-4" />
@@ -151,8 +183,8 @@ export default function Dashboard({ onSelectSession, onNewUpload, onNewRecord }:
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-3 mb-1">
                       <h3 className="font-bold text-brand-900 truncate">{s.title || "제목 없음"}</h3>
-                      <span className={`text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full ${typeColor(s.type)}`}>
-                        {s.type}
+                      <span className={`text-[10px] font-bold tracking-wider px-2 py-0.5 rounded-full ${typeColor(s.type)}`}>
+                        {typeLabel(s.type)}
                       </span>
                       {s.source === "cli" && (
                         <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-zinc-100 text-zinc-500">CLI</span>
@@ -161,7 +193,7 @@ export default function Dashboard({ onSelectSession, onNewUpload, onNewRecord }:
                     <div className="flex items-center gap-4 text-xs text-brand-400">
                       <span className="flex items-center gap-1">
                         {statusIcon(s.status)}
-                        {statusText(s.status)}
+                        {statusLabel(s.status)}
                       </span>
                       <span>{formatDate(s.date || s.created_at)}</span>
                       {s.duration_sec > 0 && <span>{formatDuration(s.duration_sec)}</span>}
@@ -174,9 +206,13 @@ export default function Dashboard({ onSelectSession, onNewUpload, onNewRecord }:
                     )}
                   </div>
                   <div className="flex items-center gap-2">
+                    {/* hover 로만 드러내면(과거 md:opacity-0) 발견되지 않고, 보이지 않는
+                        상태로 키보드 포커스도 받는다. 항상 보이게 두고 탭 타깃을 44px 로. */}
                     <button
                       onClick={(e) => handleDelete(s.id, e)}
-                      className="p-2 text-brand-300 hover:text-red-500 md:opacity-0 md:group-hover:opacity-100 transition-all"
+                      title="이 세션 삭제"
+                      aria-label={`${s.title || "제목 없음"} 세션 삭제`}
+                      className="p-3 -m-1 text-brand-300 hover:text-red-500 transition-colors"
                     >
                       <Trash2 size={16} />
                     </button>

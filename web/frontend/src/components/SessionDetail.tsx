@@ -10,7 +10,7 @@ import { getSession, getSessionStatus, generateSummaryForSession, getTargetEmail
   getSessionGraph, getNodeNeighbors, getUploadProgress, getSessionCost, cancelUpload,
   mirrorServerSession, retrySession, getSessionRelatedNotes, type SessionCost,
   type RelatedNoteRow, type RelatedNoteCross } from "../lib/api";
-import { formatDuration, formatTime } from "../lib/format";
+import { formatDuration, formatTime, typeLabel, statusLabel } from "../lib/format";
 import type { Session, Segment, Document as Doc, SessionGraph, GraphNeighbors } from "../lib/types";
 
 interface Props {
@@ -45,6 +45,8 @@ export default function SessionDetail({ id, onBack, onOpenGraph }: Props) {
   const [expandedNodeId, setExpandedNodeId] = useState<string | null>(null);
   const [neighborsCache, setNeighborsCache] = useState<Record<string, GraphNeighbors>>({});
   const [neighborsLoading, setNeighborsLoading] = useState<string | null>(null);
+  // 노드별 조회 실패 표시 — '이웃이 없음'과 구분해야 한다(후자는 사실이 아닌 문장이 된다).
+  const [neighborsError, setNeighborsError] = useState<Record<string, boolean>>({});
   const [progress, setProgress] = useState<{ percent: number; stage: string; elapsed: number } | null>(null);
   const [cost, setCost] = useState<SessionCost | null>(null);
   const [cancelling, setCancelling] = useState(false);
@@ -149,11 +151,14 @@ export default function SessionDetail({ id, onBack, onOpenGraph }: Props) {
     setExpandedNodeId(nodeId);
     if (!neighborsCache[nodeId]) {
       setNeighborsLoading(nodeId);
+      setNeighborsError(prev => ({ ...prev, [nodeId]: false }));   // 재시도 시 초기화
       try {
         const result = await getNodeNeighbors(nodeId, { depth: 1 });
         setNeighborsCache(prev => ({ ...prev, [nodeId]: result }));
       } catch (e) {
+        // 조회 실패를 '이웃이 없음'으로 표시하면 사실이 아닌 문장을 보여주게 된다.
         console.error(e);
+        setNeighborsError(prev => ({ ...prev, [nodeId]: true }));
       } finally {
         setNeighborsLoading(null);
       }
@@ -316,9 +321,9 @@ export default function SessionDetail({ id, onBack, onOpenGraph }: Props) {
               {session.status === "completed" ? <CheckCircle size={14} className="text-emerald-500" /> :
                session.status === "processing" ? <Loader2 size={14} className="text-amber-500 animate-spin" /> :
                <AlertCircle size={14} className="text-red-500" />}
-              {({ completed: "완료", processing: "처리 중", error: "오류" } as Record<string, string>)[session.status] || session.status}
+              {statusLabel(session.status)}
             </span>
-            <span>{({ meeting: "회의", seminar: "세미나", lecture: "강의", prep: "회의 준비" } as Record<string, string>)[session.type] || session.type}</span>
+            <span>{typeLabel(session.type)}</span>
             {session.duration_sec > 0 && <span>{formatDuration(session.duration_sec)}</span>}
             {session.translate ? <span className="text-amber-600">번역됨</span> : null}
             {cost && typeof cost.total === "number" && (
@@ -469,8 +474,12 @@ export default function SessionDetail({ id, onBack, onOpenGraph }: Props) {
                               <div className="mt-2 mb-1 px-4 py-3 bg-zinc-50 rounded-xl border border-zinc-200 text-sm max-w-sm">
                                 {neighborsLoading === node.id ? (
                                   <div className="flex items-center gap-2 text-brand-400">
-                                    <Loader2 size={14} className="animate-spin" /> Loading...
+                                    <Loader2 size={14} className="animate-spin" /> 불러오는 중...
                                   </div>
+                                ) : neighborsError[node.id] ? (
+                                  <span className="text-red-500">
+                                    연결 정보를 불러오지 못했습니다. 닫고 다시 열면 재시도합니다.
+                                  </span>
                                 ) : neighborsCache[node.id]?.neighbors.length ? (
                                   <ul className="space-y-1">
                                     {neighborsCache[node.id].neighbors.map(n => (

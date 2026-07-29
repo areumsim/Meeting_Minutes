@@ -63,7 +63,9 @@ export default function FileUpload({ onComplete }: { onComplete: (id: string) =>
       onComplete(data.sessionId);
     } catch (err) {
       console.error(err);
-      alert(`업로드 실패: ${err instanceof Error ? err.message : "콘솔에서 상세 내용을 확인하세요."}`);
+      // 사무용 사용자에게 "콘솔을 확인하세요"는 실행 가능한 안내가 아니다.
+      alert(`업로드 실패: ${err instanceof Error ? err.message
+        : "서버에 연결할 수 없습니다. 프로그램이 실행 중인지 확인한 뒤 다시 시도해 주세요."}`);
       setUploading(false);
     }
   };

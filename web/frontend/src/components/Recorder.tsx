@@ -180,6 +180,9 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
   const visibleTranscript = hiddenLineCount
     ? liveTranscript.slice(-MAX_VISIBLE_LINES)
     : liveTranscript;
+  // 서버가 환각 의심 구간에 붙이는 표시(text_filters.SUSPECT_MARKER)가 화면에
+  // 보이면 그게 무엇인지 알려준다 — 표시가 있을 때만 범례를 띄운다.
+  const hasSuspectMark = visibleTranscript.some((s) => s.text?.includes("[불명]"));
 
   // 세그먼트 렌더링 key용 안정 id 발급기 — 텍스트 스트리밍 중 행 리마운트(깜빡임) 방지
   const segSeqRef = useRef(0);
@@ -1342,6 +1345,13 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
                         ))}
                         <div ref={transcriptEndRef} className="h-4" />
                       </div>
+                    )}
+
+                    {hasSuspectMark && (
+                      <p className="text-[10px] text-brand-400 border-t border-brand-100 pt-2 mt-1">
+                        <b>[불명]</b> 표시는 음성인식이 잘못 만들어낸 구간입니다(주로 무음·잡음
+                        구간). 회의록에는 반영되지 않습니다.
+                      </p>
                     )}
 
                     {/* 위를 읽는 동안 자동 스크롤이 멈추므로, 돌아갈 방법을 항상 준다 */}

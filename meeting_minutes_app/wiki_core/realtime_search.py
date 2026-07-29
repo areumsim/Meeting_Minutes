@@ -82,6 +82,23 @@ def _is_paper_path(rel_path: str, paper_dirs: Sequence[str]) -> bool:
     return any(d and (r.startswith(d + "/") or f"/{d}/" in r) for d in paper_dirs)
 
 
+def _dedupe_by_title(hits: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """제목이 같은 노트는 상위 1건만 남긴다 (입력은 이미 정렬된 상태).
+
+    볼트에는 같은 제목의 노트가 다른 폴더에 여러 개 있을 수 있다(원문추출 사본 등).
+    표시는 `[[제목]]` 위키링크라 두 건이 화면·회의록에서 구분되지 않으므로, 관련도가
+    높은 쪽만 남겨 같은 칩이 중복 노출되는 것을 막는다."""
+    out: List[Dict[str, Any]] = []
+    seen: set = set()
+    for h in hits:
+        key = str(h.get("title") or "").strip().lower()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        out.append(h)
+    return out
+
+
 class RealtimeVaultSearcher:
     """세그먼트 텍스트로 vault를 스로틀 검색하는 논블로킹 헬퍼.
 
@@ -445,7 +462,7 @@ class RealtimeVaultSearcher:
                 "elapsed_sec": round(time.time() - self._t0, 1),
             })
         hits.sort(key=lambda n: -float(n.get("rank_score", 0) or 0))
-        return hits
+        return _dedupe_by_title(hits)
 
     def _search_rest(self, query: str, segment_text: str) -> List[Dict[str, Any]]:
         results = self._safe(self._obs.search_simple, query,

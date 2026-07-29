@@ -77,6 +77,8 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
   // 관련 노트 근거(점수·섹션경로·snippet·발화) 펼침 — 사용자가 눌렀을 때만 펼친다
   // (자동 갱신으로는 절대 레이아웃이 움직이지 않게 하기 위함, FR-10)
   const [wikiExpanded, setWikiExpanded] = useState(false);
+  // 서버 경유 녹음인지 (관련 노트 바 표시 조건 — 단독 OpenAI 경로는 vault 검색 없음)
+  const [backendMode, setBackendMode] = useState(false);
   const [costRates, setCostRates] = useState<CostRates | null>(null);
   // 이번 녹음에 쓸 STT 모델(설정 기본값이 자동 채워지며, 이 값만 바꿔도 설정은 안 바뀜)
   const [sttModel, setSttModel] = useState<string>("");
@@ -547,6 +549,7 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
       setRelatedNotes([]);
       setWikiStatus(null);
       setWikiExpanded(false);
+      setBackendMode(false);
       setDuration(0);
       setHttpFallback(false);
       try {
@@ -557,6 +560,9 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
       // 로컬 백엔드가 있으면 서버 경유 (실시간 wiki 검색 + 서버 회의록 생성),
       // 없으면 기존 직접 OpenAI 연결로 폴백 (모바일 단독 배포)
       backendModeRef.current = await backendAvailable();
+      // 관련 노트 바는 서버 경유 녹음에서만 의미가 있다(직접 OpenAI 연결 경로는
+      // vault 검색을 하지 않는다) — 단독 모드에서 빈 바가 계속 떠 있지 않게 한다.
+      setBackendMode(backendModeRef.current);
       if (backendModeRef.current) {
         // 사전 점검: 키 없이 시작하면 서버 error 이벤트로만 실패가 보여
         // 비개발자는 원인을 알기 어렵다. 시작 전에 확인해 설정으로 안내한다.
@@ -1033,7 +1039,8 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
             · 팝업·토스트·소리·포커스 이동 없음. 근거 펼치기는 사용자가 눌렀을 때만.
             · 내부(📄 노트 / 🎓 논문)를 웹(🌐)보다 앞줄에 둔다(sortRelated).
             · 백엔드 미연결/비활성 사유도 같은 바에 조용히 배지로 표시(FR-1). */}
-        {(isRecording || relatedNotes.length > 0 || (wikiStatus && !wikiStatus.enabled)) && (
+        {((isRecording && backendMode) || relatedNotes.length > 0
+          || (wikiStatus && !wikiStatus.enabled)) && (
           <div className="bg-emerald-50/70 border-b border-emerald-100 shrink-0">
             <div className="px-4 md:px-8 h-9 flex items-center gap-2 overflow-x-auto overflow-y-hidden">
               <span className="flex items-center gap-1.5 text-[10px] font-black uppercase tracking-widest text-emerald-600 shrink-0">

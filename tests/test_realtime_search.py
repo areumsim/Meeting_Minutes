@@ -264,6 +264,23 @@ class TestInternalFirst:
         s._search(long_text)
         assert len(idx.queries[0]) == 180
 
+    def test_same_title_different_paths_deduped(self, monkeypatch):
+        """원문추출 사본 등 같은 제목의 노트가 여러 폴더에 있어도 칩은 1건만."""
+        s = make_searcher(monkeypatch)
+        sections = [
+            {"note_path": "원문추출/논문A.md", "note_title": "논문A", "heading": "h",
+             "level": 2, "snippet": "s1", "score": 5.0},
+            {"note_path": "01_References/논문A.md", "note_title": "논문A",
+             "heading": "h", "level": 2, "snippet": "s2", "score": 4.0},
+            {"note_path": "00_Meetings/다른노트.md", "note_title": "다른노트",
+             "heading": "h", "level": 2, "snippet": "s3", "score": 1.0},
+        ]
+        inject_indexer(s, [], sections)
+        s._search("발화")
+        notes = s.collected_notes()
+        assert [n["title"] for n in notes] == ["논문A", "다른노트"]
+        assert notes[0]["filename"] == "원문추출/논문A.md"   # 상위 1건만 남는다
+
     def test_search_sections_failure_falls_back_to_notes(self, monkeypatch):
         """섹션 인덱스가 없는(구버전) 인덱스여도 노트 검색 결과는 살아남는다."""
         s = make_searcher(monkeypatch)

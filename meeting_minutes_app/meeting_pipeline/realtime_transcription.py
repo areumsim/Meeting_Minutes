@@ -977,6 +977,7 @@ class RealtimeTranscriber:
         self._use_diarize   = "diarize" in stt_model
         self._use_whisper   = stt_model.startswith("whisper")
         self._groq_cached   = None   # (client, model) 지연 생성 캐시 — _groq_fallback()
+        self._stt_client_cached = None   # STT 전용 클라이언트 캐시 — _stt_client()
         # STT 호출이 실패해 폐기한 청크 수 — 종료 시 "전사된 내용이 없다"의 원인을
         # 마이크 문제와 구분해 안내하기 위해 센다(_generate_output 참조).
         self._stt_error_chunks = 0
@@ -989,8 +990,9 @@ class RealtimeTranscriber:
         요청 파라미터는 배치·웹과 같은 단일 소스(stt.stt_request_params)를 쓴다 —
         과거엔 이 메서드가 response_format 을 따로 정해, 같은 Groq 폴백을 웹은
         verbose_json 으로 CLI 는 json 으로 부르는 이원화가 있었다.
-        재시도 정책만 라이브 고유다(같은 모델 3회 → 다른 벤더): 라이브는 순간적인
-        오류에서 빠르게 회복하는 것이 모델을 바꾸는 것보다 낫다."""
+        재시도 정책만 라이브 고유다(같은 모델 3회 → OpenAI 폴백모델 → Groq): 라이브는
+        순간적인 오류에서 빠르게 회복하는 것이 모델을 바꾸는 것보다 낫기 때문에 같은
+        모델을 먼저 3회 두드린다. 로컬은 라이브에 쓰지 않는다(아래 주석 참고)."""
         from meeting_minutes_app.meeting_pipeline import stt as _stt
         params, kind = _stt.stt_request_params(
             "OpenAI", self.stt_model, self.language)
@@ -998,7 +1000,7 @@ class RealtimeTranscriber:
         last_err: Optional[Exception] = None
         for attempt in range(3):
             try:
-                return self._call_stt(self.client, params, wav_bytes,
+                return self._call_stt(self._stt_client(), params, wav_bytes,
                                       parse_diarized=(kind == "diarized"))
             except Exception as e:
                 last_err = e
@@ -1008,7 +1010,22 @@ class RealtimeTranscriber:
                           file=sys.stderr)
                     time.sleep(wait)
 
-        # OpenAI 3회 모두 실패 = 벤더 장애일 수 있으므로 다른 벤더(Groq)로 1회 재시도.
+        # 같은 모델 3회가 모두 실패했으면 모델 자체가 문제일 수 있다(계정에서 사용 불가·
+        # 폐기 등). 웹 라이브(realtime.py)와 같이 OpenAI 폴백 모델을 1회 시도한다 —
+        # 이 단계가 없어서 Groq 키가 없는 사용자(대부분)는 청크가 그대로 폐기됐다.
+        fb = _stt.FALLBACK_STT_MODEL
+        if fb and fb != self.stt_model:
+            print(f"\n  {C_YELLOW}[STT 폴백]{C_RESET} {self.stt_model} 실패 → OpenAI/{fb}",
+                  file=sys.stderr)
+            try:
+                fparams, fkind = _stt.stt_request_params("OpenAI", fb, self.language)
+                return self._call_stt(self._stt_client(), fparams, wav_bytes,
+                                      parse_diarized=(fkind == "diarized"))
+            except Exception as fe:
+                print(f"\n  {C_RED}[STT 폴백 실패]{C_RESET} OpenAI/{fb}: {fe}",
+                      file=sys.stderr)
+
+        # OpenAI 가 모두 실패 = 벤더 장애일 수 있으므로 다른 벤더(Groq)로 1회 재시도.
         # 로컬(faster-whisper)은 라이브 청크에 쓰지 않는다 — CPU 전사가 실시간을 못
         # 따라간다. **CLI 실시간 경로는 종료 후 재전사를 하지 않는다**: Groq 까지 실패한
         # 청크는 그대로 폐기되고, 그 세션은 저장된 백업 WAV 를 `batch` 로 다시 돌려야
@@ -1028,6 +1045,30 @@ class RealtimeTranscriber:
                 print(f"\n  {C_RED}[STT 폴백 실패]{C_RESET} Groq: {ge}", file=sys.stderr)
 
         raise last_err  # type: ignore
+
+    def _stt_client(self):
+        """STT 전용 클라이언트 — 세션당 1회 만들어 캐시.
+
+        폴백(폴백모델·Groq)이 있으므로 한 벤더에 오래 매달릴 이유가 없다. SDK 기본값
+        (요청 600초 × 재시도 2회)을 그대로 쓰면, _run_stt 의 3회 루프와 곱해져 응답 없이
+        매달리는 장애에서 청크 하나가 Groq 에 닿기까지 몇 시간 규모로 막힌다.
+        같은 함수의 Groq 클라이언트는 stt.groq_fallback() 이 이미 한도를 넣어 주므로
+        여기만 비어 있던 비대칭이었다.
+
+        self.client 자체를 좁히지 않는 이유: 그 객체는 번역과 WS realtime.connect 도
+        공유한다 → with_options 로 **사본만** 좁힌다(하위 httpx 클라이언트는 공유)."""
+        if getattr(self, "_stt_client_cached", None) is None:
+            from meeting_minutes_app.meeting_pipeline import stt as _stt
+            try:
+                self._stt_client_cached = self.client.with_options(
+                    timeout=_stt.STT_REQUEST_TIMEOUT_SEC,
+                    max_retries=_stt.STT_MAX_RETRIES,
+                )
+            except Exception as e:   # 구버전 SDK 등 — 한도 없이라도 동작은 유지
+                print(f"\n  {C_YELLOW}[STT]{C_RESET} 요청 한도 적용 실패"
+                      f"(SDK 기본값 사용): {e}", file=sys.stderr)
+                self._stt_client_cached = self.client
+        return self._stt_client_cached
 
     def _groq_fallback(self):
         """Groq 폴백 (클라이언트, 모델) — 세션당 1회 생성해 캐시. 키 없으면 (None, "")."""

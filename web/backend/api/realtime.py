@@ -839,6 +839,20 @@ class BrowserRealtimeSession:
         from meeting_minutes_app.common.realtime_ws_session import normalize_ws_model
         from meeting_minutes_app.meeting_pipeline import stt
 
+        # STT 전용 클라이언트 — 폴백(폴백모델·Groq)이 있으므로 한 벤더에 오래 매달릴
+        # 이유가 없다. SDK 기본값(요청 600초 × 재시도 2회)을 그대로 쓰면 응답 없이
+        # 매달리는 장애에서 청크 하나가 수십 분 막혀 라이브가 멈춘 것처럼 보인다.
+        # openai_client 자체를 좁히지 않는 이유: 이 객체는 WS realtime.connect 와
+        # 번역도 공유한다 → with_options 로 **사본만** 좁힌다(하위 httpx 는 공유).
+        try:
+            stt_client = openai_client.with_options(
+                timeout=stt.STT_REQUEST_TIMEOUT_SEC,
+                max_retries=stt.STT_MAX_RETRIES,
+            )
+        except Exception as _woe:   # 구버전 SDK 등 — 한도 없이라도 동작은 유지
+            print(f"[http-stt] STT 클라이언트 한도 적용 실패(기본값 사용): {_woe}")
+            stt_client = openai_client
+
         # 녹음별 임시 모델 오버라이드(config에 stt_model이 실려오면 우선) — 설정 기본값은 유지
         _stt_ov = str(self.config.get("stt_model") or "").strip()
         raw_model = _stt_ov or (cfg.get("models.stt", "gpt-4o-mini-transcribe") or "gpt-4o-mini-transcribe")
@@ -996,7 +1010,7 @@ class BrowserRealtimeSession:
                 try:
                     segs = await asyncio.to_thread(
                         stt.transcribe_chunk,
-                        openai_client, tmp_path, stt_model,
+                        stt_client, tmp_path, stt_model,
                         stt_language,
                         None, c_start, prompt=used_prompt or None,
                     )
@@ -1010,7 +1024,7 @@ class BrowserRealtimeSession:
                         print(f"[http-stt] {stt_model} 실패 → {fb} 재시도: {_e1}")
                         segs = await asyncio.to_thread(
                             stt.transcribe_chunk,
-                            openai_client, tmp_path, fb,
+                            stt_client, tmp_path, fb,
                             stt_language,
                             None, c_start, prompt=used_prompt or None,
                         )
@@ -1244,7 +1258,7 @@ class BrowserRealtimeSession:
                     try:
                         segs = await asyncio.to_thread(
                             stt.transcribe_chunk,
-                            openai_client, tmp_path, revise_model,
+                            stt_client, tmp_path, revise_model,
                             stt_language,
                             None, t0, prompt=revise_prompt or None,
                         )

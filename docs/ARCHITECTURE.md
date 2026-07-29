@@ -350,8 +350,8 @@ flowchart LR
 | 경로 | 함수 | 어디까지 폴백하나 |
 |---|---|---|
 | 업로드·배치·watcher | `run_stt()` → `_build_stt_provider_chain()` → `_transcribe_chunk_via_chain()` (`stt.py`) | **로컬까지 전부** |
-| 실시간 라이브 청크 (웹) | `_run_http_fallback._transcribe_chunk_bytes` (`web/backend/api/realtime.py`) | **Groq까지** (`fallback_provider` 이벤트로 화면에 1회 알림) |
-| 실시간 라이브 청크 (CLI) | `RealtimeTranscriber._run_stt` → `_call_stt` (`realtime_transcription.py`) | **Groq까지** (OpenAI 3회 재시도 후) |
+| 실시간 라이브 청크 (웹) | `_run_http_fallback._transcribe_chunk_bytes` (`web/backend/api/realtime.py`) | **Groq까지** — 기본모델 → 폴백모델 → Groq (`fallback_provider` 이벤트로 화면에 1회 알림) |
+| 실시간 라이브 청크 (CLI) | `RealtimeSession._run_stt` → `_call_stt` (`realtime_transcription.py`) | **Groq까지** — 같은 모델 3회 → 폴백모델 1회 → Groq |
 | 실시간 종료 후 재전사 (웹) | `_diarize_postprocess` → `run_stt()` | **로컬까지 전부** — 단 `realtime.diarize_postprocess`가 켜진 세션에서만 돈다(**기본 꺼짐**) |
 | 2-pass 보정(revise) | `_revise_worker` | 폴백 없음 — 실패 시 빠른 패스 결과 유지(그 자체가 이미 Groq로 백업됨) |
 
@@ -385,8 +385,15 @@ Groq까지만 폴백하고, 종료 후 재전사는 웹의 diarize 후처리(기
   같은 제한 때문에 `WHISPER_PROMPT_MAX_CHARS`(120자)로, gpt-4o 계열은 800자로 자른다.
 
 배치 체인·웹 라이브·CLI 라이브 세 경로가 이 함수를 공유한다. **재시도 정책만 경로별로 다르다**:
-라이브는 같은 모델 3회 재시도 후 벤더를 바꾸고(순간 오류에서 빠르게 회복하는 편이 낫다),
-배치는 바로 다음 제공자로 넘어간다.
+CLI 라이브는 같은 모델을 3회 두드린 뒤 다음 단계로 가고(순간 오류에서 빠르게 회복하는 편이
+낫다), 웹 라이브와 배치는 바로 다음 단계로 넘어간다. 단계 순서(기본모델 → 폴백모델 → Groq)는
+세 경로가 같다.
+
+**HTTP 요청 한도는 세 경로 모두 `STT_REQUEST_TIMEOUT_SEC`(300초) / `STT_MAX_RETRIES`(1)를 쓴다.**
+폴백이 있으므로 한 벤더에 오래 매달릴 이유가 없다 — SDK 기본값(요청 600초 × 재시도 2회)이면
+응답 없이 매달리는 장애에서 청크 하나가 수십 분 막힌다(CLI 라이브는 자체 3회 루프와 곱해져
+더 심하다). 실시간 경로의 OpenAI 클라이언트는 번역·WS `realtime.connect`와 공유되므로,
+공유 객체를 좁히지 않고 `with_options()`로 **STT 전용 사본**만 좁힌다(하위 httpx는 공유).
 
 **로컬 단계의 가중치 정책**: `_get_local_model()`은 `local_files_only=True`로만 로딩한다 —
 전사 도중 수백 MB 다운로드가 시작돼 처리가 몇 분 멈추는 일을 막기 위함이다. 준비가 안 됐으면

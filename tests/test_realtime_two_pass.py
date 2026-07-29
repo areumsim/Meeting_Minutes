@@ -248,6 +248,12 @@ def _run_session(frames, cfg, fast_text="quick frag.", revise_text=None,
     session._finalize = _fake_finalize
 
     client = MagicMock()
+    # _run_http_fallback 은 STT 를 `client.with_options(timeout=…, max_retries=…)` 사본으로
+    # 호출한다(공유 클라이언트는 번역·WS 가 쓰므로 좁히지 않는다). 사본이 원본과 같은
+    # 동작을 하도록 자기 자신을 돌려준다 — 실제 SDK 도 하위 httpx 를 공유하는 얕은
+    # 사본이다. 이걸 안 해 주면 STT 호출이 side_effect 없는 새 목으로 새어 나가 이
+    # 파일의 STT 검증이 전부 무의미해진다.
+    client.with_options.return_value = client
     calls = {"n": 0}
 
     def _create(**params):

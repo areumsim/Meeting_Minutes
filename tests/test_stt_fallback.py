@@ -555,13 +555,76 @@ class TestSttFailureIsCounted:
         assert tr._stt_error_chunks == 2
 
 
+def _mock_openai_client() -> MagicMock:
+    """실시간 경로용 OpenAI 클라이언트 목.
+
+    `_stt_client()` 이 `with_options()` 로 한도만 좁힌 **사본**을 쓰므로, 사본이 원본과
+    같은 동작을 하도록 자기 자신을 돌려준다(실제 SDK 도 하위 httpx 를 공유하는 얕은
+    사본이다). 이걸 안 해 주면 사본이 side_effect 없는 새 목이 되어, 테스트가 폴백을
+    전혀 검증하지 못하면서도 통과한다."""
+    c = MagicMock()
+    c.with_options.return_value = c
+    return c
+
+
 class TestCliRealtimeGroqFallback:
+    def test_stt_client_gets_explicit_request_limits(self, monkeypatch):
+        """라이브 STT 는 SDK 기본값(600초×2회)이 아니라 짧은 한도를 써야 한다.
+
+        기본값이면 _run_stt 의 3회 루프와 곱해져, 응답 없이 매달리는 벤더에서 청크
+        하나가 Groq 에 닿기까지 몇 시간 규모로 막힌다."""
+        rt = _import_rt(monkeypatch)
+        openai_client = _mock_openai_client()
+        tr = rt.RealtimeTranscriber(openai_client, stt_model="gpt-4o-transcribe",
+                                    language="ko")
+        assert tr._stt_client() is openai_client
+        openai_client.with_options.assert_called_once_with(
+            timeout=stt.STT_REQUEST_TIMEOUT_SEC, max_retries=stt.STT_MAX_RETRIES)
+        # 세션당 1회만 만든다(청크마다 새로 만들면 낭비)
+        tr._stt_client()
+        assert openai_client.with_options.call_count == 1
+
+    def test_openai_fallback_model_is_tried_before_groq(self, monkeypatch):
+        """기본 모델 3회 실패 후 OpenAI 폴백 모델을 먼저 시도한다.
+
+        이 단계가 없던 동안엔 Groq 키가 없는 사용자(대부분)는 기본 모델이 계정에서
+        못 쓰는 상태이면 청크가 그대로 폐기됐다. 웹 라이브에는 있고 CLI 에만 없던
+        비대칭이기도 했다."""
+        rt = _import_rt(monkeypatch)
+        monkeypatch.setattr(rt.time, "sleep", lambda *_: None)
+
+        seen: list = []
+
+        def _create(**params):
+            seen.append(params["model"])
+            if params["model"] == "gpt-4o-transcribe-diarize":
+                raise RuntimeError("403 model not available")
+            resp = MagicMock()
+            resp.text = "폴백 모델 전사"
+            return resp
+
+        openai_client = _mock_openai_client()
+        openai_client.audio.transcriptions.create.side_effect = _create
+        # Groq 까지 갔는지 확인 — 가면 안 된다
+        groq_client = MagicMock()
+        monkeypatch.setattr(stt, "groq_fallback",
+                            lambda: (groq_client, "whisper-large-v3-turbo"))
+        monkeypatch.setattr(stt, "FALLBACK_STT_MODEL", "gpt-4o-transcribe")
+
+        tr = rt.RealtimeTranscriber(openai_client, stt_model="gpt-4o-transcribe-diarize",
+                                    language="ko")
+        out = tr._run_stt(b"\x00" * 32)
+
+        assert out == "폴백 모델 전사"
+        assert seen == ["gpt-4o-transcribe-diarize"] * 3 + ["gpt-4o-transcribe"]
+        groq_client.audio.transcriptions.create.assert_not_called()
+
     def test_falls_back_to_groq_after_openai_retries(self, monkeypatch):
         rt = _import_rt(monkeypatch)
 
         monkeypatch.setattr(rt.time, "sleep", lambda *_: None)  # 재시도 대기 제거
 
-        openai_client = MagicMock()
+        openai_client = _mock_openai_client()
         openai_client.audio.transcriptions.create.side_effect = RuntimeError("503")
 
         captured = {}
@@ -576,13 +639,15 @@ class TestCliRealtimeGroqFallback:
         groq_client.audio.transcriptions.create.side_effect = _groq_create
         monkeypatch.setattr(stt, "groq_fallback",
                             lambda: (groq_client, "whisper-large-v3-turbo"))
+        monkeypatch.setattr(stt, "FALLBACK_STT_MODEL", "gpt-4o-transcribe")
 
         tr = rt.RealtimeTranscriber(openai_client, stt_model="gpt-4o-transcribe-diarize",
                                     language="ko")
         out = tr._run_stt(b"\x00" * 32)
 
         assert out == "그록 전사"
-        assert openai_client.audio.transcriptions.create.call_count == 3
+        # 기본 모델 3회 + 폴백 모델 1회 = 4회 (그 뒤에야 다른 벤더)
+        assert openai_client.audio.transcriptions.create.call_count == 4
         assert captured["model"] == "whisper-large-v3-turbo"
         # 웹·배치와 같은 계약을 쓴다(stt.stt_request_params 단일 소스) — 과거엔 이
         # 경로만 response_format='json' 을 강제해 벤더 하나에 계약이 두 벌이었다.

@@ -196,6 +196,9 @@ class BrowserRealtimeSession:
         # 구간을 폐기하며 전진).
         self._two_pass = False
         self._pcm_base_sec = 0.0
+        # STT 호출이 실패해 폐기한 청크 수 — 종료 시 "저장할 내용이 없다"의 원인을
+        # 무발화와 구분해 안내하기 위해 센다(_finalize 참조).
+        self._stt_failed_chunks = 0
 
     async def run(self):
         """메인 실행 루프."""
@@ -1014,7 +1017,10 @@ class BrowserRealtimeSession:
                     except Exception as _e2:
                         # OpenAI 두 모델이 모두 실패 = 벤더 장애 가능성 → 다른 벤더(Groq).
                         # 로컬(faster-whisper)은 라이브 청크에 쓰지 않는다(CPU 전사가
-                        # 실시간을 못 따라감). 종료 후 finalize 의 run_stt 가 담당한다.
+                        # 실시간을 못 따라감). 주의: 종료 후 재전사(로컬까지 포함한
+                        # stt.run_stt)는 realtime.diarize_postprocess 가 켜진 세션에서만
+                        # 돈다(_diarize_postprocess). 기본값은 꺼짐이므로 Groq 까지 실패한
+                        # 청크는 그대로 폐기된다 — 그 경우 _finalize 가 원인을 안내한다.
                         if groq_client is None:
                             raise
                         print(f"[http-stt] OpenAI 실패 → Groq/{groq_model} 폴백: {_e2}")
@@ -1125,6 +1131,7 @@ class BrowserRealtimeSession:
             try:
                 if err is not None:
                     stt_fail_streak += 1
+                    self._stt_failed_chunks += 1
                     print(f"[http-stt] error: {err}")
                     if stt_fail_streak >= 2 and not stt_notified:
                         stt_notified = True
@@ -1512,10 +1519,22 @@ class BrowserRealtimeSession:
             # 전혀 없어 대시보드에 빈 행으로만 남는다 → 'completed'로 두지 말고 삭제.
             # 단, 반드시 종료 이벤트를 먼저 보낸다 — 안 그러면 프런트가 completed만
             # 기다리며 영구 대기('문서 생성 중')한다(이동 안 됨 버그의 한 원인).
+            # 원인이 둘이다: 발화가 없었거나, 음성 인식 호출이 계속 실패했거나.
+            # 후자를 "음성이 감지되지 않았다"로 안내하면 사용자가 마이크만 붙들게 된다.
+            if self._stt_failed_chunks:
+                _empty_msg = (
+                    f"음성 인식 호출이 {self._stt_failed_chunks}회 실패해 저장할 내용이 "
+                    f"없습니다 (마이크 문제 아님) — API 키·네트워크를 확인하세요."
+                )
+                _empty_reason = "stt_failed"
+            else:
+                _empty_msg = "음성이 감지되지 않아 저장할 내용이 없습니다."
+                _empty_reason = "no_speech"
             try:
                 await self.ws.send_json({
                     "type": "empty",
-                    "message": "음성이 감지되지 않아 저장할 내용이 없습니다.",
+                    "message": _empty_msg,
+                    "reason": _empty_reason,
                 })
             except Exception:
                 pass  # 소켓이 이미 죽었어도 아래 정리는 진행

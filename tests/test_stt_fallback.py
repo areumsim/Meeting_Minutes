@@ -505,16 +505,44 @@ class TestFallbackPricing:
 # 웹(web/backend/api/realtime.py) 쪽 같은 폴백은 WS 세션 내부 클로저라 단위 테스트로
 # 접근할 수 없다 — docs 의 수동 검증(녹음 중 키 무효화)으로 확인한다.
 
+def _import_rt(monkeypatch):
+    """realtime_transcription 임포트 — sounddevice(마이크 캡처)는 웹 전용 개발 환경엔
+    없다. 여기서 보는 로직은 마이크와 무관하므로 없으면 스텁을 끼워 넣어 테스트가
+    건너뛰이지 않게 한다."""
+    if "sounddevice" not in sys.modules:
+        try:
+            import sounddevice  # noqa: F401
+        except Exception:
+            monkeypatch.setitem(sys.modules, "sounddevice", MagicMock())
+    from meeting_minutes_app.meeting_pipeline import realtime_transcription as rt
+    return rt
+
+
+class TestSttFailureIsCounted:
+    """전사 0건의 원인을 마이크 문제와 구분하기 위한 카운터.
+
+    과거엔 STT 벤더 실패로 전 청크가 폐기돼도 종료 화면이 "마이크 및 음량을
+    확인하세요"만 띄워 사용자를 엉뚱한 곳으로 보냈다."""
+
+    def test_process_counts_discarded_chunks(self, monkeypatch):
+        import numpy as np
+        rt = _import_rt(monkeypatch)
+
+        tr = rt.RealtimeTranscriber(MagicMock(), stt_model="gpt-4o-transcribe",
+                                    language="ko")
+        assert tr._stt_error_chunks == 0
+        monkeypatch.setattr(rt.AudioRecorder, "to_wav_bytes",
+                            staticmethod(lambda _a: b"\x00" * 16))
+        monkeypatch.setattr(tr, "_run_stt",
+                            lambda _w: (_ for _ in ()).throw(RuntimeError("503")))
+        assert tr.process(np.zeros(16, dtype=np.float32)) is None
+        assert tr.process(np.zeros(16, dtype=np.float32)) is None
+        assert tr._stt_error_chunks == 2
+
+
 class TestCliRealtimeGroqFallback:
     def test_falls_back_to_groq_after_openai_retries(self, monkeypatch):
-        # sounddevice(마이크 캡처)는 웹 전용 개발 환경엔 없다. _run_stt 는 마이크와
-        # 무관하므로 없으면 스텁을 끼워 넣어 테스트가 건너뛰이지 않게 한다.
-        if "sounddevice" not in sys.modules:
-            try:
-                import sounddevice  # noqa: F401
-            except Exception:
-                monkeypatch.setitem(sys.modules, "sounddevice", MagicMock())
-        from meeting_minutes_app.meeting_pipeline import realtime_transcription as rt
+        rt = _import_rt(monkeypatch)
 
         monkeypatch.setattr(rt.time, "sleep", lambda *_: None)  # 재시도 대기 제거
 

@@ -1,8 +1,13 @@
 #!/usr/bin/env python
 # -*- coding: utf-8 -*-
 """
-오디오 준비 → STT(OpenAI Transcription API) → 영→한 번역.
+오디오 준비 → STT(제공자 폴백 체인) → 영→한 번역.
 meeting_minutes.py에서 분리 (2026-07 리팩토링 3단계).
+
+STT는 한 벤더에 묶이지 않는다: OpenAI 기본 → OpenAI 폴백모델 → Groq(다른 벤더) →
+로컬 faster-whisper 순서로 청크별 폴백한다(`_build_stt_provider_chain`).
+적용 범위와 알려진 한계는 docs/ARCHITECTURE.md "STT 제공자 폴백 체인" 참고 —
+실시간 라이브 청크는 Groq까지만이고 로컬은 업로드·배치 경로에서만 쓰인다.
 """
 
 from __future__ import annotations

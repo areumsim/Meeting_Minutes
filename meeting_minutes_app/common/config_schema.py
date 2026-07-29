@@ -83,7 +83,7 @@ SCHEMA: List[Dict[str, Any]] = [
             {"section": "stt", "key": "preprocess_audio", "label": "음량 정규화", "type": "bool", "default": True, "desc": "마이크 입력이 작거나 들쭉날쭉한 녹음의 음량을 고르게 맞춰 인식률을 높입니다(loudnorm). 재생 길이·타임스탬프는 그대로라 안전합니다. 기본 켜짐 권장."},
             {"section": "stt", "key": "trim_silence", "label": "무음 구간 제거 (실험)", "type": "bool", "default": False, "desc": "긴 무음을 잘라 처리 비용·오인식(환각)을 줄입니다. 다만 무음을 지워 전사 타임스탬프가 실제 녹음 시각과 어긋날 수 있어 기본 꺼짐입니다."},
             {"section": "stt", "key": "translation_review", "label": "번역 검수 패스", "type": "bool", "default": True, "desc": "번역(영어→한국어) 후 원문과 번역을 나란히 놓고 주제 맥락으로 오역·누락을 다시 점검·교정합니다. 번역과 별도의 AI 호출이라 비용이 조금 늘지만 번역 품질이 좋아집니다. 업로드·배치 처리에 적용."},
-            {"section": "stt", "key": "local_fallback", "label": "로컬 STT 최종 백업 (오프라인)", "type": "bool", "default": False, "desc": "켜면 OpenAI·Groq가 모두 실패했을 때 이 PC에서 faster-whisper로 전사합니다(네트워크·API 완전 무관). 포터블 배포본에는 라이브러리가 이미 포함 — 아래 [로컬 백업 모델 준비] 버튼으로 모델 가중치만 미리 내려받으세요. 회의 처리 중에는 다운로드하지 않으므로, 준비 전에는 폴백이 즉시 실패합니다. 업로드·배치 처리와 실시간 녹취 종료 후 확정 전사에 적용."},
+            {"section": "stt", "key": "local_fallback", "label": "로컬 STT 최종 백업 (오프라인)", "type": "bool", "default": False, "desc": "켜면 OpenAI·Groq가 모두 실패했을 때 이 PC에서 faster-whisper로 전사합니다(네트워크·API 완전 무관). 포터블 배포본에는 라이브러리가 이미 포함 — 아래 [로컬 백업 모델 준비] 버튼으로 모델 가중치만 미리 내려받으세요. 회의 처리 중에는 다운로드하지 않으므로 준비 전에는 이 단계가 그냥 건너뛰어집니다. 적용 범위는 파일 업로드와 폴더 자동 감시 처리입니다(실시간 녹음 화면에는 적용되지 않습니다 — 실시간은 Groq까지만 자동 전환)."},
         ],
     },
     {

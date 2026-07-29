@@ -496,7 +496,9 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
           setStatus("completed");
           setWsStatus(msg.message || "음성이 감지되지 않았습니다.");
           try { ws.close(); } catch {}
-          setTimeout(() => onExit?.(), 1500);
+          // 원인이 음성 인식 실패면 조치가 필요한 안내라 읽을 시간을 더 준다
+          // (무발화는 볼 것이 없으니 기존처럼 바로 복귀).
+          setTimeout(() => onExit?.(), msg.reason === "stt_failed" ? 6000 : 1500);
           break;
         }
 

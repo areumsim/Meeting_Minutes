@@ -975,6 +975,9 @@ class RealtimeTranscriber:
         self._use_diarize   = "diarize" in stt_model
         self._use_whisper   = stt_model.startswith("whisper")
         self._groq_cached   = None   # (client, model) 지연 생성 캐시 — _groq_fallback()
+        # STT 호출이 실패해 폐기한 청크 수 — 종료 시 "전사된 내용이 없다"의 원인을
+        # 마이크 문제와 구분해 안내하기 위해 센다(_generate_output 참조).
+        self._stt_error_chunks = 0
         # 번역을 STT와 병렬 실행하기 위한 스레드 풀
         self._translator_pool = ThreadPoolExecutor(max_workers=2)
 
@@ -1009,7 +1012,9 @@ class RealtimeTranscriber:
 
         # OpenAI 3회 모두 실패 = 벤더 장애일 수 있으므로 다른 벤더(Groq)로 1회 재시도.
         # 로컬(faster-whisper)은 라이브 청크에 쓰지 않는다 — CPU 전사가 실시간을 못
-        # 따라간다. 종료 후 확정 전사(stt.run_stt)가 로컬까지 포함한 체인을 쓴다.
+        # 따라간다. **CLI 실시간 경로는 종료 후 재전사를 하지 않는다**: Groq 까지 실패한
+        # 청크는 그대로 폐기되고, 그 세션은 저장된 백업 WAV 를 `batch` 로 다시 돌려야
+        # 로컬까지 포함한 체인(stt.run_stt)을 쓴다(_generate_output 이 그 경로를 안내한다).
         gclient, gmodel = self._groq_fallback()
         if gclient is not None:
             print(f"\n  {C_YELLOW}[STT 폴백]{C_RESET} OpenAI 실패 → Groq/{gmodel}",
@@ -1079,6 +1084,7 @@ class RealtimeTranscriber:
         try:
             result = self._run_stt(wav)
         except Exception as e:
+            self._stt_error_chunks += 1
             print(f"\n  {C_RED}[STT 오류 - 청크 폐기]{C_RESET} {e}", file=sys.stderr)
             return None
 
@@ -1482,6 +1488,7 @@ class RealtimeSession:
 
         # 오디오 백업 — WS 모드는 24kHz, HTTP 모드는 16kHz
         self._backup: Optional[AudioBackup] = None
+        self._audio_backup_path: Optional[str] = None   # 종료 시 변환된 WAV 경로
         _backup_rate = WS_SAMPLE_RATE if self.mode == "ws" else SAMPLE_RATE
         if _c("realtime.audio_backup", True):
             self._backup = AudioBackup(self.output_dir, self.logger.session_ts,
@@ -1956,6 +1963,8 @@ class RealtimeSession:
             if audio_path:
                 kb = os.path.getsize(audio_path) / 1024
                 print(f"  오디오 저장: {Path(audio_path).name}  ({kb:.0f} KB)")
+                # 전사가 하나도 안 남았을 때 재처리 경로를 안내하려면 경로가 필요하다.
+                self._audio_backup_path = audio_path
 
         self.logger.close(completed=True)
         self._generate_output()
@@ -2018,7 +2027,22 @@ class RealtimeSession:
                     pass
 
         if not segments:
-            print("\n  전사된 내용이 없습니다. 마이크 및 음량을 확인하세요.")
+            # 원인이 둘인데 과거엔 늘 마이크 문제로 안내해 오진을 유발했다.
+            # STT 호출이 실패해 폐기된 청크가 있으면 마이크가 아니라 음성 인식 쪽이다.
+            failed = getattr(self.transcriber, "_stt_error_chunks", 0)
+            if failed:
+                print(f"\n  전사된 내용이 없습니다 — 마이크 문제가 아니라 음성 인식 호출이"
+                      f" {failed}회 실패했습니다.")
+                if self._audio_backup_path:
+                    print(f"  녹음은 저장돼 있습니다: {self._audio_backup_path}")
+                    print(f"  아래 명령으로 다시 처리하면 Groq·로컬 백업까지 쓰는 전체"
+                          f" 폴백 체인이 적용됩니다:")
+                    print(f"    python run_meeting.py batch \"{self._audio_backup_path}\"")
+                else:
+                    print("  오디오 백업이 꺼져 있어 다시 처리할 원본이 없습니다"
+                          " (realtime.audio_backup).")
+            else:
+                print("\n  전사된 내용이 없습니다. 마이크 및 음량을 확인하세요.")
             print(f"  세션 로그 보존: {self.logger.log_path}")
             return
 

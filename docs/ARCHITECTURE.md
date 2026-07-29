@@ -349,13 +349,30 @@ flowchart LR
 
 | 경로 | 함수 | 어디까지 폴백하나 |
 |---|---|---|
-| 업로드·배치·watcher·finalize | `run_stt()` → `_build_stt_provider_chain()` → `_transcribe_chunk_via_chain()` (`stt.py`) | **로컬까지 전부** |
+| 업로드·배치·watcher | `run_stt()` → `_build_stt_provider_chain()` → `_transcribe_chunk_via_chain()` (`stt.py`) | **로컬까지 전부** |
 | 실시간 라이브 청크 (웹) | `_run_http_fallback._transcribe_chunk_bytes` (`web/backend/api/realtime.py`) | **Groq까지** (`fallback_provider` 이벤트로 화면에 1회 알림) |
 | 실시간 라이브 청크 (CLI) | `RealtimeTranscriber._run_stt` → `_call_stt` (`realtime_transcription.py`) | **Groq까지** (OpenAI 3회 재시도 후) |
+| 실시간 종료 후 재전사 (웹) | `_diarize_postprocess` → `run_stt()` | **로컬까지 전부** — 단 `realtime.diarize_postprocess`가 켜진 세션에서만 돈다(**기본 꺼짐**) |
 | 2-pass 보정(revise) | `_revise_worker` | 폴백 없음 — 실패 시 빠른 패스 결과 유지(그 자체가 이미 Groq로 백업됨) |
 
 라이브 청크에 로컬을 쓰지 않는 이유는 CPU 전사가 실시간을 못 따라가 지연이 세션 내내 누적되기
-때문이다. 오프라인에서도 확정 전사·회의록은 종료 후 finalize의 `run_stt`(체인 전체)가 만든다.
+때문이다.
+
+**알려진 한계 — 실시간 녹취는 오프라인에서 기록이 남지 않는다.** 위 표대로 라이브 청크는
+Groq까지만 폴백하고, 종료 후 재전사는 웹의 diarize 후처리(기본 꺼짐)에서만 돈다. CLI 실시간은
+종료 후 재전사를 아예 하지 않는다. 따라서 OpenAI·Groq가 모두 죽은 상태의 실시간 녹음은
+세그먼트 0개로 끝난다 — 이때 로컬 폴백은 발동하지 않는다.
+
+그 상황의 복구 경로는 **자동 재전사가 아니라 저장된 오디오의 재처리**다:
+- CLI는 `realtime.audio_backup`(기본 켜짐)으로 세션 WAV를 남기고, `_generate_output`이
+  세그먼트 0개 + STT 실패가 있으면 원인과 `python run_meeting.py batch <wav>` 명령을 안내한다.
+- 웹은 세션 오디오를 디스크에 남기지 않는다(`self._pcm`은 2-pass 보정이 소비하며 버려
+  종료 시 마지막 윈도만 남는다). `_finalize`가 "음성 인식 호출이 N회 실패" 로 원인만 알린다.
+
+자동 재전사를 넣지 않은 이유: (1) 확인 없이 세션 전체가 재과금돼 업로드 전 비용 확인·지출
+한도 설계와 충돌한다, (2) 로컬까지 가면 녹음 길이의 1~3배를 종료 직후 진행 표시 없이
+블로킹한다, (3) 같은 일을 하는 `batch`/`audio-watcher` 경로가 이미 있고 그쪽은 비용 확인과
+진행 표시를 갖췄다.
 
 **Groq 호출 시 주의점**(`groq_fallback()`이 공용 규칙): 모델명이 `whisper-*`라 `transcribe_chunk`가
 자동으로 `verbose_json` 경로를 타고, 화자분리는 없다(`speaker=""`). Whisper 계열 `prompt`는
@@ -847,7 +864,7 @@ LLM은 다음 고정 답변 구조를 반드시 따르도록 강제된다:
 | `models.stt_fallback` | `"gpt-4o-transcribe"` | STT 1차 폴백 — 같은 OpenAI 내 재시도 모델 |
 | `models.stt_groq` | `"whisper-large-v3-turbo"` | STT 2차 폴백(다른 벤더) — `api.groq_api_key` 필요 |
 | `models.stt_local` | `"base"` | STT 최종 백업(로컬 faster-whisper) 모델 크기 |
-| `stt.local_fallback` | `false` | 로컬 최종 백업 사용. 가중치는 웹 [설정]에서 미리 준비해야 함(전사 중 다운로드 안 함) |
+| `stt.local_fallback` | `false` | 로컬 최종 백업 사용(업로드·배치 경로). 가중치는 웹 [설정]에서 미리 준비해야 하며(전사 중 다운로드 안 함), 미준비면 체인에서 아예 제외된다 |
 | `obsidian.enabled` | `false` | Obsidian REST 연동 활성화 |
 | `obsidian.meetings_path` | `""` | 회의록 저장 경로 (`{year}`/`{month}`/`{project}` 토큰 지원 — `{project}`로 다중 도메인 분리) |
 | `obsidian.project` / `project_domains` | `""` / `{}` | 현재 도메인 + 도메인→폴더 매핑. `--project` CLI로 세션 단위 오버라이드 가능 |

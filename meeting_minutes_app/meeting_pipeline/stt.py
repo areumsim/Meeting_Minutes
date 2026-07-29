@@ -541,6 +541,15 @@ def transcribe_local(
 # ──────────────────────────────────────────────
 #  STT 제공자 폴백 체인
 # ──────────────────────────────────────────────
+# STT 호출의 HTTP 한도 — 폴백 체인이 있으므로 한 제공자에 오래 매달릴 이유가 없다.
+# SDK 기본값(요청 600초 × 재시도 2회 = 청크당 최대 30분)을 그대로 쓰면 벤더가 응답 없이
+# 매달리는 장애에서 청크 수에 비례해 처리가 멈춘 것처럼 보인다(2모델이면 60분/청크).
+# 여기 값은 "정상 응답에는 넉넉하고, 장애에는 빨리 포기"를 노린다 —
+# 20분 청크(48kbps mono ≈ 7MB) 업로드+전사가 사내망에서도 300초 안에는 끝난다.
+STT_REQUEST_TIMEOUT_SEC = 300.0
+STT_MAX_RETRIES = 1
+
+
 def groq_fallback() -> Tuple[Any, str]:
     """Groq STT 폴백 (클라이언트, 모델). 키가 없거나 생성 실패면 (None, "").
 
@@ -550,10 +559,38 @@ def groq_fallback() -> Tuple[Any, str]:
     if not gkey:
         return None, ""
     try:
-        return make_groq_client(gkey), GROQ_STT_MODEL
+        return make_groq_client(
+            gkey, timeout=STT_REQUEST_TIMEOUT_SEC, max_retries=STT_MAX_RETRIES,
+        ), GROQ_STT_MODEL
     except Exception as e:
         warn(f"  Groq 클라이언트 생성 실패 → 폴백에서 제외: {e}")
         return None, ""
+
+
+class _ChainState:
+    """파일 하나를 처리하는 동안의 제공자 건강 상태(청크 간 공유).
+
+    죽은 벤더를 청크마다 처음부터 다시 때리면, 호출마다 timeout·재시도를 품고 있어
+    청크 수에 비례해 헛시간이 쌓인다. 그래서 연속 실패가 쌓인 제공자는 이후 청크에서
+    건너뛴다.
+
+    임계값 2는 "한 번의 일시적 오류(429·순간 네트워크 끊김)로 제공자를 파일 끝까지
+    강등하지 않기" 위한 값이다 — 서로 다른 청크에서 연속 2회 실패하면 실제로 죽은
+    것으로 본다. 성공하면 카운터를 지워 '연속' 의미를 유지한다."""
+
+    DOWN_AFTER_CONSECUTIVE_FAILURES = 2
+
+    def __init__(self) -> None:
+        self._fails: Dict[int, int] = {}
+
+    def is_down(self, idx: int) -> bool:
+        return self._fails.get(idx, 0) >= self.DOWN_AFTER_CONSECUTIVE_FAILURES
+
+    def record_failure(self, idx: int) -> None:
+        self._fails[idx] = self._fails.get(idx, 0) + 1
+
+    def record_success(self, idx: int) -> None:
+        self._fails.pop(idx, None)
 
 
 def _local_stage_ready() -> bool:
@@ -585,7 +622,9 @@ def _build_stt_provider_chain(default_model: str) -> List[Tuple[str, str, Any]]:
         # 클라이언트 생성 실패(SDK 미설치·프록시 설정 오류 등)가 Groq·로컬 단계까지
         # 못 쓰게 만들면 안 된다 — Groq 와 같은 규칙으로 감싼다.
         try:
-            oclient = make_openai_client(okey)
+            oclient = make_openai_client(
+                okey, timeout=STT_REQUEST_TIMEOUT_SEC, max_retries=STT_MAX_RETRIES,
+            )
         except Exception as e:
             warn(f"OpenAI 클라이언트 생성 실패 → 폴백에서 제외: {e}")
         else:
@@ -632,7 +671,7 @@ def _transcribe_chunk_via_chain(
     chain: List[Tuple[str, str, Any]], cp: str,
     language: Optional[str], speaker_names: Optional[List[str]],
     chunk_offset: float, debug_dir: Optional[str], chunk_index: int,
-    work_dir: str,
+    work_dir: str, state: Optional["_ChainState"] = None,
 ) -> List[Dict]:
     """청크 하나를 제공자 체인 순서대로 시도. 하나가 성공하면 그 결과를 쓴다.
 
@@ -641,13 +680,28 @@ def _transcribe_chunk_via_chain(
 
     **예외뿐 아니라 '빈 전사'도 실패로 본다**: 제공자가 200 과 함께 빈 텍스트를 주는
     조용한 실패가 실제로는 예외보다 흔하다. 단, 정말 발화가 없는 구간(무음)까지 전
-    제공자를 순회하면 헛돈·헛시간이므로 `_chunk_is_silent()`로 한 번 갈라낸다."""
+    제공자를 순회하면 헛돈·헛시간이므로 `_chunk_is_silent()`로 한 번 갈라낸다.
+
+    `state`(_ChainState)를 주면 청크 간에 제공자 건강 상태를 공유해, 이미 죽은 것으로
+    판정된 제공자를 건너뛴다(같은 파일의 남은 청크에서 헛시간 반복 방지)."""
     last_err: Optional[Exception] = None
     empty_result: Optional[List[Dict]] = None   # 예외 없이 받은 빈 결과(있으면 성공으로 취급)
     silence_checked = False
     chunk_silent = False
 
-    for idx, (provider, pmodel, client) in enumerate(chain):
+    # 죽은 제공자를 뺀 이번 청크의 시도 순서. 전부 죽었다면 그대로 다시 시도해
+    # (건너뛰기 때문에 아무것도 시도하지 않는 상태를 만들지 않고) 진짜 오류를 남긴다.
+    active = [(i, e) for i, e in enumerate(chain) if not (state and state.is_down(i))]
+    if not active:
+        active = list(enumerate(chain))
+    if state and len(active) < len(chain):
+        skipped = [f"{chain[i][0]}/{chain[i][1]}"
+                   for i in range(len(chain)) if state.is_down(i)]
+        logger.debug(f"[STT] 청크 {chunk_index}: 응답 없는 제공자 건너뜀 — "
+                     f"{', '.join(skipped)}")
+
+    for pos, (idx, (provider, pmodel, client)) in enumerate(active):
+        nxt = active[pos + 1][1] if pos + 1 < len(active) else None
         try:
             if provider == "local":
                 segs = transcribe_local(cp, pmodel, language, chunk_offset)
@@ -660,12 +714,13 @@ def _transcribe_chunk_via_chain(
                 )
         except Exception as e:
             last_err = e
+            if state:
+                state.record_failure(idx)
             logger.error(f"[STT FAIL] chunk {chunk_index} via {provider}/{pmodel}: "
                          f"{type(e).__name__}: {e}")
             if _mm.DEBUG:
                 logger.debug(traceback.format_exc())
-            if idx + 1 < len(chain):
-                nxt = chain[idx + 1]
+            if nxt:
                 warn(f"  청크 {chunk_index} {provider}/{pmodel} 실패 ({e}) "
                      f"→ {nxt[0]}/{nxt[1]} 로 폴백")
             else:
@@ -673,6 +728,8 @@ def _transcribe_chunk_via_chain(
             continue
 
         if _segments_have_text(segs):
+            if state:
+                state.record_success(idx)
             return segs
 
         if empty_result is None:
@@ -681,10 +738,12 @@ def _transcribe_chunk_via_chain(
             silence_checked = True
             chunk_silent = _chunk_is_silent(cp)
         if chunk_silent:
+            # 발화가 없는 구간이다 — 제공자 탓이 아니므로 건강 상태를 깎지 않는다.
             logger.debug(f"[STT] 청크 {chunk_index} 는 무음 — 빈 전사를 그대로 사용")
             return segs
-        if idx + 1 < len(chain):
-            nxt = chain[idx + 1]
+        if state:
+            state.record_failure(idx)
+        if nxt:
             warn(f"  청크 {chunk_index} {provider}/{pmodel} 이 빈 전사를 반환"
                  f"(발화는 감지됨) → {nxt[0]}/{nxt[1]} 로 폴백")
         else:
@@ -722,6 +781,8 @@ def run_stt(
     chunks       = split_audio(audio_path, work_dir)
     all_segments: List[Dict] = []
     total_time   = 0.0
+    # 제공자 건강 상태는 이 파일 처리 동안만 유지한다(세션 간 오염 방지 — 전역 금지).
+    chain_state  = _ChainState()
 
     # 청크 분할 시 청크 간 화자 연속성은 보장되지 않지만(예: 청크1의 "화자 A"와
     # 청크2의 "화자 A"가 동일 인물이라는 보장 없음), 청크 내부에서는 diarize가
@@ -738,7 +799,7 @@ def run_stt(
         t0 = time.time()
         segs = _transcribe_chunk_via_chain(
             chain, cp, language, speaker_names,
-            chunk_offset, debug_dir, i, work_dir,
+            chunk_offset, debug_dir, i, work_dir, chain_state,
         )
         if len(chunks) > 1:
             for s in segs:

@@ -34,8 +34,11 @@ def keys(monkeypatch):
         return state.get(name, "")
 
     monkeypatch.setattr(stt, "get_api_key", _get)
-    monkeypatch.setattr(stt, "make_openai_client", lambda k: MagicMock(name="openai"))
-    monkeypatch.setattr(stt, "make_groq_client", lambda k: MagicMock(name="groq"))
+    # **kw 는 STT 체인이 넘기는 timeout/max_retries 를 받는다.
+    monkeypatch.setattr(stt, "make_openai_client",
+                        lambda k, **kw: MagicMock(name="openai"))
+    monkeypatch.setattr(stt, "make_groq_client",
+                        lambda k, **kw: MagicMock(name="groq"))
     monkeypatch.setattr(stt, "DEFAULT_STT_MODEL", "gpt-4o-mini-transcribe")
     monkeypatch.setattr(stt, "FALLBACK_STT_MODEL", "gpt-4o-transcribe")
     monkeypatch.setattr(stt, "GROQ_STT_MODEL", "whisper-large-v3-turbo")
@@ -101,7 +104,7 @@ class TestProviderChain:
         keys["OPENAI_API_KEY"] = "sk-test"
         keys["GROQ_API_KEY"] = "gsk-test"
 
-        def _boom(_k):
+        def _boom(_k, **_kw):
             raise RuntimeError("openai SDK 없음")
 
         monkeypatch.setattr(stt, "make_groq_client", _boom)
@@ -156,7 +159,7 @@ class TestLocalStageGating:
         keys["OPENAI_API_KEY"] = "sk-test"
         keys["GROQ_API_KEY"] = "gsk-test"
 
-        def _boom(_k):
+        def _boom(_k, **_kw):
             raise RuntimeError("proxy 설정 오류")
 
         monkeypatch.setattr(stt, "make_openai_client", _boom)
@@ -287,6 +290,105 @@ class TestChainFallbackBehavior:
             "c.mp3", "ko", ["김", "이"], 0.0, None, 0, "work")
         assert seen == [("whisper-large-v3", None),
                         ("gpt-4o-transcribe-diarize", ["김", "이"])]
+
+
+# ━━━━━━━━ 2.5) sticky — 죽은 제공자를 청크마다 다시 때리지 않는다 ━━━━━━━━
+# 호출마다 timeout·재시도가 붙어 있어, 죽은 벤더를 청크 수만큼 반복 시도하면 처리가
+# 멈춘 것처럼 보인다. 단, 한 번의 일시적 오류로 파일 끝까지 강등되면 안 된다.
+
+class TestStickyProvider:
+    def _chain(self):
+        return [("OpenAI", "down", MagicMock()), ("Groq", "up", MagicMock())]
+
+    def test_dead_provider_is_skipped_after_threshold(self, monkeypatch):
+        calls = []
+
+        def _checked(client, path, model, *a, **kw):
+            calls.append(model)
+            if model == "down":
+                raise RuntimeError("connection timeout")
+            return [{"start": 0.0, "end": 1.0, "text": "ok", "speaker": ""}]
+
+        monkeypatch.setattr(stt, "_transcribe_chunk_checked", _checked)
+        state = stt._ChainState()
+        for i in range(4):
+            stt._transcribe_chunk_via_chain(
+                self._chain(), "c.mp3", "ko", None, 0.0, None, i, "work", state)
+        # 임계값 2 → 청크 0,1 에서만 'down' 을 시도하고 이후엔 건너뛴다
+        assert calls.count("down") == 2
+        assert calls.count("up") == 4
+
+    def test_single_transient_failure_does_not_demote(self, monkeypatch):
+        calls = []
+        cur = {"chunk": 0}
+
+        def _checked(client, path, model, *a, **kw):
+            calls.append(model)
+            if model == "down" and cur["chunk"] == 0:
+                raise RuntimeError("429 rate limit")   # 첫 청크에서만 일시 실패
+            return [{"start": 0.0, "end": 1.0, "text": "ok", "speaker": ""}]
+
+        monkeypatch.setattr(stt, "_transcribe_chunk_checked", _checked)
+        state = stt._ChainState()
+        for i in range(3):
+            cur["chunk"] = i
+            stt._transcribe_chunk_via_chain(
+                self._chain(), "c.mp3", "ko", None, 0.0, None, i, "work", state)
+        # 청크0: down 실패 → up. 청크1·2: down 이 회복돼 계속 1순위로 쓰인다.
+        assert calls == ["down", "up", "down", "down"]
+
+    def test_all_down_still_attempts_and_raises(self, monkeypatch):
+        def _checked(client, path, model, *a, **kw):
+            raise RuntimeError(f"{model} 죽음")
+
+        monkeypatch.setattr(stt, "_transcribe_chunk_checked", _checked)
+        state = stt._ChainState()
+        for i in range(3):
+            with pytest.raises(RuntimeError):
+                stt._transcribe_chunk_via_chain(
+                    self._chain(), "c.mp3", "ko", None, 0.0, None, i, "work", state)
+        # 전부 죽었다고 판정돼도 아무것도 시도하지 않는 상태가 되면 안 된다
+        assert state.is_down(0) and state.is_down(1)
+        with pytest.raises(RuntimeError, match="죽음"):
+            stt._transcribe_chunk_via_chain(
+                self._chain(), "c.mp3", "ko", None, 0.0, None, 9, "work", state)
+
+    def test_silent_chunk_does_not_demote_provider(self, monkeypatch):
+        monkeypatch.setattr(
+            stt, "_transcribe_chunk_checked",
+            lambda *a, **kw: [{"start": 0.0, "end": 1.0, "text": "", "speaker": ""}])
+        monkeypatch.setattr(stt, "_chunk_is_silent", lambda *a, **kw: True)
+        state = stt._ChainState()
+        for i in range(3):
+            stt._transcribe_chunk_via_chain(
+                self._chain(), "c.mp3", "ko", None, 0.0, None, i, "work", state)
+        assert not state.is_down(0), "무음은 제공자 탓이 아니다"
+
+
+# ━━━━━━━━ 2.6) HTTP 한도 — 죽은 벤더에 오래 매달리지 않는다 ━━━━━━━━
+
+class TestSttHttpLimits:
+    def test_chain_clients_get_explicit_timeout(self, keys, monkeypatch):
+        seen = []
+        keys["OPENAI_API_KEY"] = "sk-test"
+        keys["GROQ_API_KEY"] = "gsk-test"
+        monkeypatch.setattr(stt, "make_openai_client",
+                            lambda k, **kw: seen.append(("openai", kw)) or MagicMock())
+        monkeypatch.setattr(stt, "make_groq_client",
+                            lambda k, **kw: seen.append(("groq", kw)) or MagicMock())
+        stt._build_stt_provider_chain("gpt-4o-mini-transcribe")
+        assert len(seen) == 2
+        for _name, kw in seen:
+            assert kw["timeout"] == stt.STT_REQUEST_TIMEOUT_SEC
+            assert kw["max_retries"] == stt.STT_MAX_RETRIES
+        # SDK 기본값(600초 × 재시도 2회)보다 짧아야 의미가 있다
+        assert stt.STT_REQUEST_TIMEOUT_SEC < 600
+        assert stt.STT_MAX_RETRIES < 2
+
+    def test_chat_clients_keep_sdk_defaults(self):
+        """채팅·회의록 생성 경로는 인자를 안 넘겨 기존 동작을 유지한다."""
+        assert llm_client._sdk_limits(None, None) == {}
+        assert llm_client._sdk_limits(300.0, 1) == {"timeout": 300.0, "max_retries": 1}
 
 
 # ━━━━━━━━ 3) Groq 클라이언트 ━━━━━━━━

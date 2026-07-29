@@ -93,30 +93,49 @@ def get_api_key(env_name: str, code_value: str = "") -> Optional[str]:
     return key
 
 
-def make_openai_client(api_key: str):
+def _sdk_limits(timeout: Optional[float], max_retries: Optional[int]) -> dict:
+    """OpenAI SDK 생성 인자 중 timeout/max_retries만 골라 넘긴다.
+
+    None 이면 인자를 아예 넣지 않아 SDK 기본값(요청 timeout 600초, 재시도 2회)을
+    유지한다 — 기존 호출자(채팅·회의록 생성)의 동작을 바꾸지 않기 위함이다.
+    폴백 체인이 있는 STT 경로만 짧은 값을 명시해 죽은 벤더에 오래 매달리지 않는다."""
+    kw: dict = {}
+    if timeout is not None:
+        kw["timeout"] = timeout
+    if max_retries is not None:
+        kw["max_retries"] = max_retries
+    return kw
+
+
+def make_openai_client(api_key: str, timeout: Optional[float] = None,
+                       max_retries: Optional[int] = None):
     """OpenAI 클라이언트 생성 (SSL 우회 지원)."""
     from openai import OpenAI
+    limits = _sdk_limits(timeout, max_retries)
     if not SSL_VERIFY and HAS_HTTPX:
         warnings.filterwarnings("ignore", message="Unverified HTTPS request")
         http_client = httpx.Client(verify=False)
         logger.debug("OpenAI client: SSL 검증 비활성화")
-        return OpenAI(api_key=api_key, http_client=http_client)
-    return OpenAI(api_key=api_key)
+        return OpenAI(api_key=api_key, http_client=http_client, **limits)
+    return OpenAI(api_key=api_key, **limits)
 
 
-def make_groq_client(api_key: str):
+def make_groq_client(api_key: str, timeout: Optional[float] = None,
+                     max_retries: Optional[int] = None):
     """Groq STT 클라이언트 생성 — OpenAI SDK를 Groq 엔드포인트로 향하게 한다.
 
     Groq는 OpenAI 호환 `audio.transcriptions.create` 를 제공하므로(whisper-large-v3 /
     whisper-large-v3-turbo) 별도 SDK 없이 base_url 만 바꿔 재사용한다. OpenAI 장애·키
     문제 시 '다른 벤더' 폴백으로 동작(같은 OpenAI 키/엔드포인트가 아니므로 동시 장애를 피함)."""
     from openai import OpenAI
+    limits = _sdk_limits(timeout, max_retries)
     if not SSL_VERIFY and HAS_HTTPX:
         warnings.filterwarnings("ignore", message="Unverified HTTPS request")
         http_client = httpx.Client(verify=False)
         logger.debug("Groq client: SSL 검증 비활성화")
-        return OpenAI(api_key=api_key, base_url=GROQ_BASE_URL, http_client=http_client)
-    return OpenAI(api_key=api_key, base_url=GROQ_BASE_URL)
+        return OpenAI(api_key=api_key, base_url=GROQ_BASE_URL,
+                      http_client=http_client, **limits)
+    return OpenAI(api_key=api_key, base_url=GROQ_BASE_URL, **limits)
 
 
 def make_anthropic_client(api_key: str):

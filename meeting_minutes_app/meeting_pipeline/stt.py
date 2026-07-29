@@ -414,6 +414,16 @@ def _transcribe_chunk_checked(
     _, _kind = stt_request_params(provider, model)
     has_ts   = _kind in ("diarized", "verbose")
     if depth < MAX_STT_RETRY_SPLIT_DEPTH and _looks_truncated(segs, dur, has_ts):
+        # 빈 전사는 '분량이 짧다'의 극단값이라 여기 걸리지만, 정말 발화가 없는 구간이면
+        # 쪼개도 나올 텍스트가 없다 → 무음이면 재시도를 생략한다.
+        # 이 판정이 없던 동안엔 무음 청크가 **제공자당** STT 3회 + ffmpeg 추출 2회를
+        # 치른 뒤에야 _transcribe_chunk_via_chain 의 무음 판정에 도달했다(4단 체인이면
+        # 최대 12회). 0e5f106 의 무음 최적화가 이 낡은 분할 재시도에 무력화돼 있었다.
+        # 비무음이면 분할 재시도는 그대로 둔다 — 큰 청크에서 벤더가 조용히 실패하고
+        # 절반씩은 성공하는 실제 복구 경로이므로 없애면 안 된다.
+        if not _segments_have_text(segs) and _chunk_is_silent(audio_path):
+            logger.debug(f"[STT] 청크 {chunk_index} 는 무음 — 2분할 재시도 생략")
+            return segs
         warn(f"  청크 {chunk_index} 전사 결과가 {dur:.0f}s 길이 대비 비정상적으로 짧음 → 2분할 재시도")
         half = dur / 2
         retried: List[Dict] = []

@@ -975,7 +975,6 @@ class RealtimeTranscriber:
         self.segments: List[Dict] = []
         self._session_start = time.time()
         self._use_diarize   = "diarize" in stt_model
-        self._use_whisper   = stt_model.startswith("whisper")
         self._groq_cached   = None   # (client, model) 지연 생성 캐시 — _groq_fallback()
         self._stt_client_cached = None   # STT 전용 클라이언트 캐시 — _stt_client()
         # STT 호출이 실패해 폐기한 청크 수 — 종료 시 "전사된 내용이 없다"의 원인을

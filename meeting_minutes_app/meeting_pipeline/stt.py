@@ -556,6 +556,22 @@ def groq_fallback() -> Tuple[Any, str]:
         return None, ""
 
 
+def _local_stage_ready() -> bool:
+    """로컬 단계를 체인에 넣어도 되는지 — 라이브러리 + 가중치가 모두 준비됐을 때만.
+
+    준비 안 된 로컬을 체인에 넣으면 마지막 단계라서 그 오류가 `last_err`가 되어
+    **앞선 진짜 원인(키 오류·한도 초과)을 덮어쓴다**. 사용자 매뉴얼도 "준비 안 된
+    상태면 이 백업은 그냥 건너뛰어집니다"라고 안내하므로 여기서 미리 걸러 낸다."""
+    if not local_lib_available():
+        warn(f"로컬 STT 폴백이 켜져 있으나 체인에서 제외 — {LOCAL_LIB_MISSING_MSG}")
+        return False
+    if not local_model_status(LOCAL_STT_MODEL).get("installed"):
+        warn(f"로컬 STT 폴백이 켜져 있으나 '{LOCAL_STT_MODEL}' 가중치가 없어 "
+             f"체인에서 제외 — {LOCAL_WEIGHTS_MISSING_MSG}")
+        return False
+    return True
+
+
 def _build_stt_provider_chain(default_model: str) -> List[Tuple[str, str, Any]]:
     """앞에서부터 시도할 (제공자명, 모델, 클라이언트) 목록.
 
@@ -566,19 +582,50 @@ def _build_stt_provider_chain(default_model: str) -> List[Tuple[str, str, Any]]:
 
     okey = get_api_key("OPENAI_API_KEY", OPENAI_API_KEY)
     if okey:
-        oclient = make_openai_client(okey)
-        chain.append(("OpenAI", default_model, oclient))
-        if FALLBACK_STT_MODEL and FALLBACK_STT_MODEL != default_model:
-            chain.append(("OpenAI", FALLBACK_STT_MODEL, oclient))
+        # 클라이언트 생성 실패(SDK 미설치·프록시 설정 오류 등)가 Groq·로컬 단계까지
+        # 못 쓰게 만들면 안 된다 — Groq 와 같은 규칙으로 감싼다.
+        try:
+            oclient = make_openai_client(okey)
+        except Exception as e:
+            warn(f"OpenAI 클라이언트 생성 실패 → 폴백에서 제외: {e}")
+        else:
+            chain.append(("OpenAI", default_model, oclient))
+            if FALLBACK_STT_MODEL and FALLBACK_STT_MODEL != default_model:
+                chain.append(("OpenAI", FALLBACK_STT_MODEL, oclient))
 
     gclient, gmodel = groq_fallback()
     if gclient is not None:
         chain.append(("Groq", gmodel, gclient))
 
-    if LOCAL_STT_ENABLED:
+    if LOCAL_STT_ENABLED and _local_stage_ready():
         chain.append(("local", LOCAL_STT_MODEL, None))
 
     return chain
+
+
+def _segments_have_text(segs: List[Dict]) -> bool:
+    return any((s.get("text") or "").strip() for s in segs)
+
+
+def _chunk_is_silent(audio_path: str, threshold_db: float = -50.0) -> bool:
+    """청크가 사실상 무음인지 ffmpeg volumedetect 로 판정한다.
+
+    STT 가 HTTP 200 으로 빈 텍스트를 주는 경우는 두 가지다 — (a) 정말 발화가 없었거나
+    (b) 제공자가 조용히 실패했거나. (b)만 다른 제공자로 넘겨야 하므로 여기서 갈라낸다.
+    판정 자체가 실패하면 False(발화 있음)로 봐서 폴백 기회를 잃지 않는다."""
+    try:
+        r = run_cmd([FFMPEG, "-i", audio_path, "-af", "volumedetect",
+                     "-f", "null", "-"], check=False)
+        m = re.search(r"mean_volume:\s*(-?\d+(?:\.\d+)?) dB", r.stderr or "")
+        if not m:
+            return False
+        mean_db = float(m.group(1))
+        logger.debug(f"[STT] 빈 전사 원인 판정: mean_volume={mean_db}dB "
+                     f"(기준 {threshold_db}dB)")
+        return mean_db < threshold_db
+    except Exception as e:
+        logger.debug(f"[STT] 무음 판정 실패({e}) — 발화 있음으로 간주")
+        return False
 
 
 def _transcribe_chunk_via_chain(
@@ -590,18 +637,27 @@ def _transcribe_chunk_via_chain(
     """청크 하나를 제공자 체인 순서대로 시도. 하나가 성공하면 그 결과를 쓴다.
 
     앞 제공자의 오류가 '일시적/영구적'인지 구분하지 않고 다음 제공자로 넘어간다 —
-    폴백의 목적은 어떤 이유로든 앞 제공자가 실패했을 때 결과를 얻는 것이기 때문이다."""
+    폴백의 목적은 어떤 이유로든 앞 제공자가 실패했을 때 결과를 얻는 것이기 때문이다.
+
+    **예외뿐 아니라 '빈 전사'도 실패로 본다**: 제공자가 200 과 함께 빈 텍스트를 주는
+    조용한 실패가 실제로는 예외보다 흔하다. 단, 정말 발화가 없는 구간(무음)까지 전
+    제공자를 순회하면 헛돈·헛시간이므로 `_chunk_is_silent()`로 한 번 갈라낸다."""
     last_err: Optional[Exception] = None
+    empty_result: Optional[List[Dict]] = None   # 예외 없이 받은 빈 결과(있으면 성공으로 취급)
+    silence_checked = False
+    chunk_silent = False
+
     for idx, (provider, pmodel, client) in enumerate(chain):
         try:
             if provider == "local":
-                return transcribe_local(cp, pmodel, language, chunk_offset)
-            # diarize 모델만 화자명 힌트를 받는다(그 외에는 미지원).
-            spk = speaker_names if "diarize" in pmodel else None
-            return _transcribe_chunk_checked(
-                client, cp, pmodel, language, spk,
-                chunk_offset, debug_dir, chunk_index, work_dir,
-            )
+                segs = transcribe_local(cp, pmodel, language, chunk_offset)
+            else:
+                # diarize 모델만 화자명 힌트를 받는다(그 외에는 미지원).
+                spk = speaker_names if "diarize" in pmodel else None
+                segs = _transcribe_chunk_checked(
+                    client, cp, pmodel, language, spk,
+                    chunk_offset, debug_dir, chunk_index, work_dir,
+                )
         except Exception as e:
             last_err = e
             logger.error(f"[STT FAIL] chunk {chunk_index} via {provider}/{pmodel}: "
@@ -614,6 +670,30 @@ def _transcribe_chunk_via_chain(
                      f"→ {nxt[0]}/{nxt[1]} 로 폴백")
             else:
                 warn(f"  청크 {chunk_index} {provider}/{pmodel} 실패 — 더 이상 폴백 없음")
+            continue
+
+        if _segments_have_text(segs):
+            return segs
+
+        if empty_result is None:
+            empty_result = segs
+        if not silence_checked:
+            silence_checked = True
+            chunk_silent = _chunk_is_silent(cp)
+        if chunk_silent:
+            logger.debug(f"[STT] 청크 {chunk_index} 는 무음 — 빈 전사를 그대로 사용")
+            return segs
+        if idx + 1 < len(chain):
+            nxt = chain[idx + 1]
+            warn(f"  청크 {chunk_index} {provider}/{pmodel} 이 빈 전사를 반환"
+                 f"(발화는 감지됨) → {nxt[0]}/{nxt[1]} 로 폴백")
+        else:
+            warn(f"  청크 {chunk_index} 모든 제공자가 빈 전사를 반환 — 그대로 사용")
+
+    # 예외 없이 받은 빈 결과가 있으면 그것을 쓴다(기존 동작 유지 — 한 청크의 공백이
+    # 파일 전체 처리를 중단시키지 않는다). 전 제공자가 예외로 죽었을 때만 던진다.
+    if empty_result is not None:
+        return empty_result
     if last_err:
         raise last_err
     raise RuntimeError("사용 가능한 STT 제공자가 없습니다.")

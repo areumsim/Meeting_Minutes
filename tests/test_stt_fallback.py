@@ -41,6 +41,12 @@ def keys(monkeypatch):
     monkeypatch.setattr(stt, "GROQ_STT_MODEL", "whisper-large-v3-turbo")
     monkeypatch.setattr(stt, "LOCAL_STT_ENABLED", False)
     monkeypatch.setattr(stt, "LOCAL_STT_MODEL", "base")
+    # 로컬 단계는 "라이브러리 + 가중치 준비됨"을 기본 전제로 둔다(개발 환경엔 둘 다 없다).
+    # 미준비 상황은 아래 TestLocalStageGating 이 따로 검증한다.
+    monkeypatch.setattr(stt, "local_lib_available", lambda: True)
+    monkeypatch.setattr(stt, "local_model_status",
+                        lambda m: {"installed": True, "model": m, "size_mb": 1.0,
+                                   "path": "p", "lib_available": True})
     return state
 
 
@@ -111,6 +117,54 @@ class TestProviderChain:
         assert "OPENAI_API_KEY" in msg and "GROQ_API_KEY" in msg
 
 
+# ━━━━━━━━ 1.5) 로컬 단계 게이팅 — 미준비면 체인에 넣지 않는다 ━━━━━━━━
+# 준비 안 된 로컬을 체인 끝에 넣으면 그 오류가 last_err 가 되어 앞선 진짜 원인
+# (401/429)을 덮어쓴다. 매뉴얼도 "준비 안 됐으면 건너뛴다"고 안내한다.
+
+class TestLocalStageGating:
+    def test_excluded_when_library_missing(self, keys, monkeypatch):
+        keys["OPENAI_API_KEY"] = "sk-test"
+        monkeypatch.setattr(stt, "LOCAL_STT_ENABLED", True)
+        monkeypatch.setattr(stt, "local_lib_available", lambda: False)
+        assert all(p != "local" for p, _m in _shape(
+            stt._build_stt_provider_chain("gpt-4o-mini-transcribe")))
+
+    def test_excluded_when_weights_missing(self, keys, monkeypatch):
+        keys["OPENAI_API_KEY"] = "sk-test"
+        monkeypatch.setattr(stt, "LOCAL_STT_ENABLED", True)
+        monkeypatch.setattr(stt, "local_model_status",
+                            lambda m: {"installed": False, "model": m, "size_mb": 0.0,
+                                       "path": "p", "lib_available": True})
+        assert all(p != "local" for p, _m in _shape(
+            stt._build_stt_provider_chain("gpt-4o-mini-transcribe")))
+
+    def test_root_cause_error_is_not_masked_by_local(self, keys, monkeypatch):
+        """로컬이 미준비면 사용자는 로컬 안내가 아니라 OpenAI 원인 오류를 봐야 한다."""
+        keys["OPENAI_API_KEY"] = "sk-test"
+        monkeypatch.setattr(stt, "LOCAL_STT_ENABLED", True)
+        monkeypatch.setattr(stt, "local_lib_available", lambda: False)
+        monkeypatch.setattr(stt, "_transcribe_chunk_checked",
+                            lambda *a, **kw: (_ for _ in ()).throw(
+                                RuntimeError("401 invalid_api_key")))
+        chain = stt._build_stt_provider_chain("gpt-4o-mini-transcribe")
+        with pytest.raises(RuntimeError, match="invalid_api_key"):
+            stt._transcribe_chunk_via_chain(
+                chain, "chunk.mp3", "ko", None, 0.0, None, 0, "work")
+
+    def test_openai_client_failure_keeps_groq(self, keys, monkeypatch):
+        """OpenAI 클라이언트 생성이 깨져도 Groq 단계는 남아야 한다."""
+        keys["OPENAI_API_KEY"] = "sk-test"
+        keys["GROQ_API_KEY"] = "gsk-test"
+
+        def _boom(_k):
+            raise RuntimeError("proxy 설정 오류")
+
+        monkeypatch.setattr(stt, "make_openai_client", _boom)
+        assert _shape(stt._build_stt_provider_chain("gpt-4o-mini-transcribe")) == [
+            ("Groq", "whisper-large-v3-turbo"),
+        ]
+
+
 # ━━━━━━━━ 2) 폴백 동작 ━━━━━━━━
 
 class TestChainFallbackBehavior:
@@ -156,6 +210,65 @@ class TestChainFallbackBehavior:
         with pytest.raises(RuntimeError, match="b 실패"):
             stt._transcribe_chunk_via_chain(
                 chain, "chunk.mp3", "ko", None, 0.0, None, 0, "work")
+
+    def test_empty_transcript_falls_through_to_next_provider(self, monkeypatch):
+        """200 + 빈 텍스트(조용한 실패)도 실패로 보고 다음 제공자로 넘어간다."""
+        calls = []
+
+        def _checked(client, path, model, *a, **kw):
+            calls.append(model)
+            if model == "first":
+                return [{"start": 0.0, "end": 1.0, "text": "   ", "speaker": ""}]
+            return [{"start": 0.0, "end": 1.0, "text": "제대로 된 전사", "speaker": ""}]
+
+        monkeypatch.setattr(stt, "_transcribe_chunk_checked", _checked)
+        monkeypatch.setattr(stt, "_chunk_is_silent", lambda *a, **kw: False)
+        chain = [("OpenAI", "first", MagicMock()), ("Groq", "second", MagicMock())]
+        segs = stt._transcribe_chunk_via_chain(
+            chain, "chunk.mp3", "ko", None, 0.0, None, 0, "work")
+        assert calls == ["first", "second"]
+        assert segs[0]["text"] == "제대로 된 전사"
+
+    def test_silent_chunk_does_not_burn_the_chain(self, monkeypatch):
+        """정말 무음인 구간은 첫 제공자의 빈 결과를 그대로 쓴다(헛돈 방지)."""
+        calls = []
+
+        def _checked(client, path, model, *a, **kw):
+            calls.append(model)
+            return [{"start": 0.0, "end": 1.0, "text": "", "speaker": ""}]
+
+        monkeypatch.setattr(stt, "_transcribe_chunk_checked", _checked)
+        monkeypatch.setattr(stt, "_chunk_is_silent", lambda *a, **kw: True)
+        chain = [("OpenAI", "first", MagicMock()), ("Groq", "second", MagicMock())]
+        segs = stt._transcribe_chunk_via_chain(
+            chain, "chunk.mp3", "ko", None, 0.0, None, 0, "work")
+        assert calls == ["first"], "무음이면 다른 제공자를 부르지 않는다"
+        assert segs[0]["text"] == ""
+
+    def test_all_empty_returns_empty_instead_of_raising(self, monkeypatch):
+        """전 제공자가 (예외 없이) 비면 파일 전체를 중단시키지 않고 빈 결과를 쓴다."""
+        monkeypatch.setattr(
+            stt, "_transcribe_chunk_checked",
+            lambda *a, **kw: [{"start": 0.0, "end": 1.0, "text": "", "speaker": ""}])
+        monkeypatch.setattr(stt, "_chunk_is_silent", lambda *a, **kw: False)
+        chain = [("OpenAI", "a", MagicMock()), ("Groq", "b", MagicMock())]
+        segs = stt._transcribe_chunk_via_chain(
+            chain, "chunk.mp3", "ko", None, 0.0, None, 0, "work")
+        assert segs[0]["text"] == ""
+
+    def test_empty_then_exception_prefers_the_empty_result(self, monkeypatch):
+        """빈 결과라도 '예외 없이 받은 것'이 있으면 예외를 던지지 않는다(기존 동작 유지)."""
+        def _checked(client, path, model, *a, **kw):
+            if model == "a":
+                return [{"start": 0.0, "end": 1.0, "text": "", "speaker": ""}]
+            raise RuntimeError("네트워크 끊김")
+
+        monkeypatch.setattr(stt, "_transcribe_chunk_checked", _checked)
+        monkeypatch.setattr(stt, "_chunk_is_silent", lambda *a, **kw: False)
+        chain = [("OpenAI", "a", MagicMock()), ("Groq", "b", MagicMock())]
+        segs = stt._transcribe_chunk_via_chain(
+            chain, "chunk.mp3", "ko", None, 0.0, None, 0, "work")
+        assert segs[0]["text"] == ""
 
     def test_speaker_hint_only_for_diarize_model(self, monkeypatch):
         """화자명 힌트는 diarize 모델만 받는다(그 외 모델은 파라미터 자체를 거부)."""

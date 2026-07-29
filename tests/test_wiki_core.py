@@ -685,6 +685,76 @@ class TestIndexableNoteFilter:
         assert vi._is_indexable_note("Meetings/x.md", ex)
 
 
+class TestIndexSaveReplaceRetry:
+    """[실전 버그] reindex 가 WinError 32(웹 서버가 인덱스 점유)로 조용히 실패해
+    낡은 인덱스가 그대로 남고, 사용자는 '재빌드했다'고 믿는 문제."""
+
+    def test_retries_on_winerror_32(self, tmp_path, monkeypatch):
+        src, dst = tmp_path / "a.tmp", tmp_path / "b.json"
+        src.write_text("new", encoding="utf-8")
+        dst.write_text("old", encoding="utf-8")
+        calls = {"n": 0}
+        real = vi.os.replace
+
+        def flaky(s, d):
+            calls["n"] += 1
+            if calls["n"] < 3:
+                err = OSError("locked")
+                err.winerror = 32
+                raise err
+            return real(s, d)
+        monkeypatch.setattr(vi.os, "replace", flaky)
+        monkeypatch.setattr(vi.time, "sleep", lambda *_: None)
+        vi._replace_with_retry(str(src), str(dst))
+        assert dst.read_text(encoding="utf-8") == "new"
+        assert calls["n"] == 3
+
+    def test_gives_up_and_raises_after_attempts(self, tmp_path, monkeypatch):
+        src, dst = tmp_path / "a.tmp", tmp_path / "b.json"
+        src.write_text("new", encoding="utf-8")
+        dst.write_text("old", encoding="utf-8")
+
+        def always_locked(s, d):
+            err = OSError("locked")
+            err.winerror = 32
+            raise err
+        monkeypatch.setattr(vi.os, "replace", always_locked)
+        monkeypatch.setattr(vi.time, "sleep", lambda *_: None)
+        with pytest.raises(OSError):
+            vi._replace_with_retry(str(src), str(dst), attempts=3)
+        assert dst.read_text(encoding="utf-8") == "old"   # 기존 인덱스 보존
+
+    def test_other_oserror_not_retried(self, tmp_path, monkeypatch):
+        calls = {"n": 0}
+
+        def boom(s, d):
+            calls["n"] += 1
+            raise OSError("disk full")
+        monkeypatch.setattr(vi.os, "replace", boom)
+        with pytest.raises(OSError):
+            vi._replace_with_retry("x", "y")
+        assert calls["n"] == 1     # 재시도하지 않는다
+
+    def test_save_failure_keeps_old_index_and_cleans_tmp(self, tmp_path, monkeypatch, capsys):
+        ix = vi.VaultIndexer(vault_path=str(tmp_path),
+                             index_path=str(tmp_path / "idx.json"))
+        ix._notes = {"a.md": {"title": "A", "tf": {}}}
+        ix._idf = {}
+        (tmp_path / "idx.json").write_text('{"notes":{"old.md":{}}}', encoding="utf-8")
+
+        def always_locked(s, d):
+            err = OSError("locked")
+            err.winerror = 32
+            raise err
+        monkeypatch.setattr(vi.os, "replace", always_locked)
+        monkeypatch.setattr(vi.time, "sleep", lambda *_: None)
+        ix._save()
+        out = capsys.readouterr().out
+        assert "낡은" in out and "사용 중" in out          # 원인·대처를 알린다
+        assert "old.md" in (tmp_path / "idx.json").read_text(encoding="utf-8")
+        assert not list(tmp_path.glob("*.tmp"))            # tmp 정리됨
+
+
 class TestSectionsInNotes:
     """후보 노트 안에서만 근거 섹션을 특정한다 (실시간 경로용 — 전체 섹션 스캔 회피).
 

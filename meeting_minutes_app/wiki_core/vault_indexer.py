@@ -439,9 +439,14 @@ class VaultIndexer:
                     "notes": self._notes,
                     "idf": self._idf,
                 }, f, ensure_ascii=False, separators=(",", ":"))
-            os.replace(tmp, self.index_path)
+            _replace_with_retry(tmp, self.index_path)
         except Exception as e:
-            print(f"[indexer] 저장 실패: {e}")
+            # 여기서 실패하면 **낡은 인덱스가 그대로 남는다** — 사용자는 "재빌드했다"고
+            # 믿고 옛 검색 결과를 계속 본다. 원인과 대처를 명시적으로 알린다.
+            print(f"[indexer] ⚠ 인덱스 저장 실패 — 기존(낡은) 인덱스가 유지됩니다: {e}")
+            if isinstance(e, OSError) and getattr(e, "winerror", None) == 32:
+                print("[indexer]   원인: 다른 프로세스가 인덱스 파일을 사용 중입니다"
+                      " (웹 서버·폴더 감시 등). 종료 후 다시 실행하세요.")
             try:
                 if os.path.isfile(tmp):
                     os.remove(tmp)
@@ -539,7 +544,7 @@ class VaultIndexer:
             }
             with open(tmp, "w", encoding="utf-8") as f:
                 json.dump(payload, f, ensure_ascii=False, separators=(",", ":"))
-            os.replace(tmp, self.emb_path)
+            _replace_with_retry(tmp, self.emb_path)
         except Exception as e:
             print(f"[indexer] 임베딩 인덱스 저장 실패 (무시): {e}")
             try:
@@ -925,6 +930,28 @@ def _fallback_parse_frontmatter(content: str):
 def _norm_path(path: str) -> str:
     """경로 비교용 정규화. 대소문자/슬래시 차이로 stale index를 놓치지 않게 한다."""
     return os.path.normcase(os.path.abspath(os.path.expanduser(path or "")))
+
+
+def _replace_with_retry(src: str, dst: str, attempts: int = 5,
+                        delay: float = 0.4) -> None:
+    """os.replace 를 짧게 재시도한다 (Windows 파일 점유 대응).
+
+    Windows 는 다른 프로세스가 대상 파일을 열고 있으면 교체가 WinError 32 로 실패한다.
+    웹 서버·폴더 감시가 인덱스를 읽는 순간과 재빌드가 겹치면 흔히 생기는데, 대개 수백
+    ms 안에 풀리는 일시적 점유다. 재시도로 넘어가지 않으면 호출부가 예외를 받아
+    "낡은 인덱스 유지" 경고를 낸다. POSIX 에서는 첫 시도에 성공한다."""
+    last: Optional[Exception] = None
+    for i in range(max(1, attempts)):
+        try:
+            os.replace(src, dst)
+            return
+        except OSError as e:
+            last = e
+            if getattr(e, "winerror", None) != 32:
+                raise
+            time.sleep(delay * (i + 1))
+    if last:
+        raise last
 
 
 def main():

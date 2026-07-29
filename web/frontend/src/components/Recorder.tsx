@@ -92,7 +92,6 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
   // 이벤트가 연달아 와도 캡처를 중복 시작하지 않게 함 — 같은 스트림을 서버가 이어서 읽는다).
   const captureStartedRef = useRef(false);
 
-  const transcriptEndRef = useRef<HTMLDivElement>(null);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
@@ -139,21 +138,27 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
 
   const transcriptRef = useRef<RealtimeSegment[]>([]);
   const transcriptPanelRef = useRef<HTMLDivElement>(null);
+  // 맨 아래로 간주하는 여유(px) — 아래 효과와 onScroll 이 **같은 기준**을 써야 한다.
+  const NEAR_BOTTOM_PX = 120;
   // 위로 스크롤해 이전 내용을 읽는 중인지 + 그 사이 새로 쌓인 줄 수(맨 아래로 버튼용).
   const [followLatest, setFollowLatest] = useState(true);
   const [unseenCount, setUnseenCount] = useState(0);
+  // 자동 따라가기 여부의 단일 진실 — "사용자가 마지막으로 스크롤한 위치"(= 의도)다.
+  // 새 내용이 붙은 **뒤에** 기하를 재면 안 된다: 한 번의 업데이트가 NEAR_BOTTOM_PX 보다
+  // 크면(revise 가 25초 창의 조각을 문장으로 한꺼번에 교체할 때, 한국어 긴 발화가 여러
+  // 줄로 감길 때) 사용자가 맨 아래에 있었는데도 '멀어졌다'고 오판해 따라가기가 멈췄고,
+  // followLatest 는 그대로 true 라서 [최신 전사로] 버튼조차 뜨지 않아 패널이 얼었다.
+  const atBottomRef = useRef(true);
   useEffect(() => {
     const prevLen = transcriptRef.current.length;
     transcriptRef.current = liveTranscript;
-    // 사용자가 위로 스크롤해 이전 내용을 읽는 중이면 자동 스크롤로 끌어내리지 않는다.
     const panel = transcriptPanelRef.current;
-    const nearBottom =
-      !panel || panel.scrollHeight - panel.scrollTop - panel.clientHeight < 120;
-    if (nearBottom) {
-      if (transcriptEndRef.current) {
-        transcriptEndRef.current.scrollIntoView({ behavior: "auto", block: "nearest" });
-      }
-      if (unseenCount) setUnseenCount(0);
+    if (atBottomRef.current) {
+      // 패널 안에서만 스크롤한다. scrollIntoView 는 document 까지 포함해 모든 스크롤
+      // 조상을 감아서, 페이지가 스크롤된 상태면 토큰마다 화면 전체가 튀었다.
+      if (panel) panel.scrollTop = panel.scrollHeight;
+      setFollowLatest(true);
+      setUnseenCount((c) => (c ? 0 : c));   // 같은 값이면 React 가 리렌더를 건너뛴다
     } else if (liveTranscript.length > prevLen) {
       setUnseenCount((c) => c + (liveTranscript.length - prevLen));
     }
@@ -162,18 +167,63 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
   const jumpToLatest = () => {
     const panel = transcriptPanelRef.current;
     if (panel) panel.scrollTo({ top: panel.scrollHeight, behavior: "smooth" });
+    atBottomRef.current = true;
     setUnseenCount(0);
     setFollowLatest(true);
   };
 
-  // 스크롤 위치로 '최신 따라가기' 상태 표시 — 사용자가 위를 읽는 동안엔 배지를 띄운다.
+  // 스크롤 위치로 '최신 따라가기' 상태 갱신 — 사용자가 위를 읽는 동안엔 배지를 띄운다.
+  // (위 효과의 자동 스크롤도 scroll 이벤트를 발생시켜 여기서 true 로 재확인된다.)
   const onTranscriptScroll = () => {
     const panel = transcriptPanelRef.current;
     if (!panel) return;
-    const atBottom = panel.scrollHeight - panel.scrollTop - panel.clientHeight < 120;
+    const atBottom =
+      panel.scrollHeight - panel.scrollTop - panel.clientHeight < NEAR_BOTTOM_PX;
+    atBottomRef.current = atBottom;
     setFollowLatest(atBottom);
-    if (atBottom && unseenCount) setUnseenCount(0);
+    if (atBottom) setUnseenCount((c) => (c ? 0 : c));
   };
+
+  // 마이크 입력 감지: volume(0~255, analyser 평균)에 저임계값 적용.
+  // 무음 노이즈 플로어(≈0~2)를 넘으면 '소리 감지 중'으로 본다.
+  // volume 은 매 프레임 갱신되므로 임계값을 그대로 쓰면 발화 중의 자연스러운 휴지마다
+  // 칩이 '소리 감지 중'↔'무음'으로 초당 여러 번 뒤집혀 "마이크가 끊겼나?"로 읽힌다.
+  // → 마지막 감지 후 SOUND_HOLD_MS 동안 유지하는 히스테리시스를 둔다.
+  const SOUND_THRESHOLD = 4;
+  const SOUND_HOLD_MS = 1200;
+  const [soundActive, setSoundActive] = useState(false);
+  const soundActiveRef = useRef(false);
+  const soundOffTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const clearSoundOffTimer = () => {
+    if (soundOffTimerRef.current) {
+      clearTimeout(soundOffTimerRef.current);
+      soundOffTimerRef.current = null;
+    }
+  };
+  const applySoundActive = (v: boolean) => {
+    soundActiveRef.current = v;
+    setSoundActive(v);          // 같은 값이면 React 가 리렌더를 건너뛴다
+  };
+  useEffect(() => {
+    if (!isRecording || isPaused) {
+      clearSoundOffTimer();
+      applySoundActive(false);
+      return;
+    }
+    if (volume > SOUND_THRESHOLD) {
+      clearSoundOffTimer();
+      applySoundActive(true);
+      return;
+    }
+    // 이미 '무음'이면 타이머를 새로 걸지 않는다(1.2초마다 헛 타이머가 도는 것 방지).
+    if (soundActiveRef.current && !soundOffTimerRef.current) {
+      soundOffTimerRef.current = setTimeout(() => {
+        soundOffTimerRef.current = null;
+        applySoundActive(false);
+      }, SOUND_HOLD_MS);
+    }
+  }, [volume, isRecording, isPaused]);
+  useEffect(() => clearSoundOffTimer, []);
 
   // 장시간 회의(수천 줄)에서 모든 줄을 그리면 스크롤·입력이 무거워진다.
   // 화면엔 최근 MAX_VISIBLE_LINES 줄만 두고, 전체는 종료 후 전사 문서에서 본다.
@@ -986,11 +1036,7 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
 
   const preset = MODE_PRESETS[modeNum] || MODE_PRESETS[2];
 
-  // 마이크 입력 감지: volume(0~255, analyser 평균)에 저임계값 적용.
-  // 무음 노이즈 플로어(≈0~2)를 넘으면 '소리 감지 중'으로 본다 → 사용자가
-  // 소리가 실제로 들어가는지/무음인지 명확히 구분할 수 있게 한다.
-  const SOUND_THRESHOLD = 4;
-  const soundDetected = isRecording && !isPaused && volume > SOUND_THRESHOLD;
+  const soundDetected = isRecording && !isPaused && soundActive;
 
   return (
       <div className="w-full max-w-4xl mx-auto bg-white border md:border-zinc-200 md:rounded-3xl md:shadow-xl overflow-hidden min-h-[calc(100dvh-5rem)] md:min-h-0 flex flex-col">
@@ -1262,9 +1308,11 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
                   <div
                     ref={transcriptPanelRef}
                     onScroll={onTranscriptScroll}
-                    className={`w-full max-w-4xl glass-panel md:rounded-[2rem] p-3 md:p-5 min-h-[220px] max-h-[42vh] md:max-h-[52vh] overflow-y-auto overscroll-contain flex flex-col gap-2 md:gap-3 transition-all duration-700 relative`}
+                    className={`w-full max-w-4xl glass-panel md:rounded-[2rem] p-3 md:p-5 min-h-[220px] max-h-[42dvh] md:max-h-[52dvh] overflow-y-auto overscroll-contain flex flex-col gap-2 md:gap-3 transition-all duration-700 relative`}
                   >
-                    <div className="sticky top-0 z-10 flex items-center justify-between gap-2 pb-2">
+                    {/* 배경이 없으면 전사 텍스트가 이 줄 뒤로 비쳐 지나간다(좌측 라벨은
+                        칩과 달리 자체 배경이 없었다). 패널 좌우 패딩만큼 넓혀 덮는다. */}
+                    <div className="sticky top-0 z-10 flex items-center justify-between gap-2 -mx-3 md:-mx-5 px-3 md:px-5 pb-2 bg-white/85 backdrop-blur-md">
                       {/* 전사 줄 수 — 얼마나 쌓였는지, 화면에 안 보이는 앞부분이 있는지 알려준다 */}
                       <span className="text-[10px] font-bold text-brand-300 tabular-nums pl-1">
                         {liveTranscript.length > 0 && `전사 ${liveTranscript.length}줄`}
@@ -1357,7 +1405,7 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
                             )}
                           </motion.div>
                         ))}
-                        <div ref={transcriptEndRef} className="h-4" />
+                        <div className="h-4" />
                       </div>
                     )}
 

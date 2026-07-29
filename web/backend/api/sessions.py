@@ -59,6 +59,26 @@ def get_session_cost(session_id: str):
     return {"ok": True, "stt_model": stt_model, "llm": llm, **cost}
 
 
+@router.get("/sessions/{session_id}/related-notes")
+def get_session_related_notes(session_id: str, cross: int = Query(8)):
+    """이 회의에서 참조된 관련 노트 + 교차 회의 집계 (FR-5).
+
+    실시간 검색이 근거(점수·섹션경로·snippet·발화·경과시각)와 함께 남긴 사이드카를
+    읽는다. 회의가 없어도 404 대신 빈 목록 — 관련 노트는 부가 정보라 상세 화면이
+    이것 때문에 실패하지 않아야 한다.
+    """
+    # 구버전 DB(테이블 없음)·조회 실패도 빈 목록으로 — 상세 화면은 계속 열려야 한다.
+    try:
+        notes = db.get_related_notes(session_id)
+    except Exception:
+        return {"notes": [], "cross": []}
+    try:
+        cross_rows = db.related_notes_cross_sessions(limit=max(0, cross))
+    except Exception:
+        cross_rows = []
+    return {"notes": notes, "cross": cross_rows}
+
+
 @router.get("/sessions/{session_id}/status")
 def get_session_status(session_id: str):
     session = db.get_session(session_id)

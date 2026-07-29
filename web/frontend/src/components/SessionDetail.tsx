@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
 import { Share as ShareIcon, ArrowLeft, Copy, Download, Loader2, CheckCircle, Clock,
-  FileText, List, Zap, AlertCircle, RefreshCw, Send, Network
+  FileText, List, Zap, AlertCircle, RefreshCw, Send, Network, BookOpen, ChevronDown
 } from "lucide-react";
 import { motion } from "motion/react";
 import Markdown from "./Markdown";
@@ -8,7 +8,8 @@ import MiniGraph from "./MiniGraph";
 import { Share } from '@capacitor/share';
 import { getSession, getSessionStatus, generateSummaryForSession, getTargetEmail,
   getSessionGraph, getNodeNeighbors, getUploadProgress, getSessionCost, cancelUpload,
-  mirrorServerSession, retrySession, type SessionCost } from "../lib/api";
+  mirrorServerSession, retrySession, getSessionRelatedNotes, type SessionCost,
+  type RelatedNoteRow, type RelatedNoteCross } from "../lib/api";
 import { formatDuration, formatTime } from "../lib/format";
 import type { Session, Segment, Document as Doc, SessionGraph, GraphNeighbors } from "../lib/types";
 
@@ -50,6 +51,10 @@ export default function SessionDetail({ id, onBack, onOpenGraph }: Props) {
   const [retrying, setRetrying] = useState(false);
   // 재시도 직후 STT 재사용 여부 안내(처리 화면 상단 배너). 재과금 가능성을 사용자가 알게 한다.
   const [retryNote, setRetryNote] = useState<string | null>(null);
+  // 회의 중 실시간 검색이 참조한 관련 노트(근거 포함) + 교차 회의 집계 (FR-5)
+  const [related, setRelated] = useState<RelatedNoteRow[]>([]);
+  const [relatedCross, setRelatedCross] = useState<RelatedNoteCross[]>([]);
+  const [relatedOpen, setRelatedOpen] = useState(false);
 
   const handleRetry = async () => {
     setRetrying(true);
@@ -117,12 +122,23 @@ export default function SessionDetail({ id, onBack, onOpenGraph }: Props) {
     }
   };
 
+  const loadRelated = async () => {
+    // 관련 노트는 부가 정보 — 실패해도 상세 화면 전체를 막지 않는다.
+    const r = await getSessionRelatedNotes(id);
+    setRelated(r.notes || []);
+    setRelatedCross(r.cross || []);
+  };
+
   useEffect(() => {
     load();
     setGraph(null);
     setExpandedNodeId(null);
     setNeighborsCache({});
+    setRelated([]);
+    setRelatedCross([]);
+    setRelatedOpen(false);
     loadGraph();
+    loadRelated();
   }, [id]);
 
   const handleToggleNeighbors = async (nodeId: string) => {
@@ -568,6 +584,82 @@ export default function SessionDetail({ id, onBack, onOpenGraph }: Props) {
               </div>
             )}
           </div>
+        </div>
+      )}
+
+      {/* 참조된 관련 노트 (FR-5) — 회의 중 실시간 검색이 찾은 내부 자료를 근거와
+          함께 다시 열람한다. 제목을 누르면 지식 그래프/위키로 이동(FR-3).
+          교차 회의 집계는 "이 노트가 최근 회의들에서 몇 번 언급됐나"를 보여준다. */}
+      {related.length > 0 && (
+        <div className="mt-6 bg-white border border-brand-200 rounded-3xl shadow-xl overflow-hidden">
+          <button
+            onClick={() => setRelatedOpen(v => !v)}
+            className="w-full px-6 py-4 flex items-center justify-between hover:bg-brand-50/60 transition-colors"
+          >
+            <span className="flex items-center gap-2 text-sm font-bold text-brand-900">
+              <BookOpen size={15} className="text-emerald-600" />
+              참조된 관련 노트 <span className="text-brand-400 font-medium">({related.length})</span>
+            </span>
+            <ChevronDown size={16} className={`text-brand-400 transition-transform ${relatedOpen ? "" : "-rotate-90"}`} />
+          </button>
+
+          {relatedOpen && (
+            <div className="px-6 pb-6">
+              <p className="text-xs text-brand-400 mb-4">
+                회의 중 발화와 관련해 자동으로 찾은 내부 자료입니다(원본 노트는 수정되지 않습니다).
+              </p>
+              <div className="space-y-3">
+                {related.map((n) => (
+                  <div key={n.note_path || n.title} className="border border-brand-100 rounded-xl p-3.5">
+                    <div className="flex items-baseline gap-2 flex-wrap">
+                      <button
+                        onClick={() => onOpenGraph?.(n.title)}
+                        className="text-sm font-bold text-brand-900 hover:text-emerald-700 hover:underline text-left"
+                        title="지식 그래프/위키에서 이 노트 보기"
+                      >
+                        {n.source_type === "paper" ? "🎓" : n.source_type === "web" ? "🌐" : "📄"}{" "}
+                        {n.section_path || n.title}
+                      </button>
+                      <span className="text-[10px] font-mono text-brand-400 tabular-nums">
+                        관련도 {(n.score ?? 0).toFixed(2)}
+                        {(n.hits ?? 1) > 1 ? ` · ${n.hits}회 참조` : ""}
+                        {n.found_by === "section" ? " · 섹션 일치" : n.found_by === "web" ? " · 웹" : ""}
+                      </span>
+                    </div>
+                    {n.snippet && <p className="text-xs text-brand-600 mt-1.5">{n.snippet}</p>}
+                    {n.segment_text && (
+                      <p className="text-[11px] text-brand-400 mt-1.5 italic">
+                        발화{n.elapsed_sec ? ` (${formatTime(n.elapsed_sec)})` : ""}: {n.segment_text}
+                      </p>
+                    )}
+                    {n.note_path && (
+                      <p className="text-[10px] text-brand-300 mt-1 font-mono truncate">{n.note_path}</p>
+                    )}
+                  </div>
+                ))}
+              </div>
+
+              {relatedCross.length > 0 && (
+                <div className="mt-6 pt-5 border-t border-brand-100">
+                  <h5 className="text-[11px] font-black uppercase tracking-[0.2em] text-brand-400 mb-3">
+                    최근 회의에서 자주 참조된 노트
+                  </h5>
+                  <div className="flex flex-wrap gap-2">
+                    {relatedCross.map((c) => (
+                      <button
+                        key={c.note_path || c.title}
+                        onClick={() => onOpenGraph?.(c.title)}
+                        title={`${c.note_path}${c.last_date ? ` · 최근 ${c.last_date.slice(0, 10)}` : ""}`}
+                        className="text-xs bg-brand-50 border border-brand-200 text-brand-700 px-2.5 py-1 rounded-full hover:bg-brand-100 transition-colors"
+                      >
+                        {c.title} <span className="text-brand-400">· 회의 {c.session_count}건</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
     </div>

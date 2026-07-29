@@ -42,6 +42,88 @@ def _c(key: str, default: Any = None) -> Any:
 #: "plan_match 미지정 — publish가 직접 탐색" 센티널 (None="매칭 없음"과 구분)
 PLAN_UNSET = object()
 
+#: 회의록에 자동 삽입되는 실시간 관련 노트 섹션 헤딩 (FR-6)
+RELATED_NOTES_HEADING = "## 🔗 관련 노트"
+
+#: 출처유형 → 표시 아이콘 (웹 UI/CLI 표시와 동일 규약: 내부 📄/🎓, 웹 🌐)
+_SOURCE_ICON = {"paper": "🎓", "web": "🌐", "note": "📄"}
+
+
+def _evidence_link(item: Dict[str, Any]) -> str:
+    """근거 1건 → "[[노트#헤딩]]" 위키링크 (헤딩 없으면 노트만)."""
+    title = str((item or {}).get("title") or "").strip()
+    if not title:
+        return ""
+    heading = str((item or {}).get("heading") or "").strip()
+    return f"[[{title}#{heading}]]" if heading else f"[[{title}]]"
+
+
+def _related_evidence_memo(evidence: Optional[List[Dict[str, Any]]],
+                           limit: int = 8) -> str:
+    """실시간 검색 근거를 회의록 생성 memo 블록으로 조립."""
+    lines = []
+    for item in (evidence or [])[:limit]:
+        link = _evidence_link(item)
+        if not link:
+            continue
+        snippet = " ".join(str(item.get("snippet") or "").split())[:160]
+        seg = " ".join(str(item.get("segment_text") or "").split())[:80]
+        row = f"- {link}"
+        if snippet:
+            row += f" — {snippet}"
+        if seg:
+            row += f" (발화: {seg})"
+        lines.append(row)
+    if not lines:
+        return ""
+    return ("[실시간 관련 노트 근거(회의 중 검색된 내부자료)]:\n"
+            + "\n".join(lines))
+
+
+def build_related_notes_section(evidence: Optional[List[Dict[str, Any]]],
+                                titles: Optional[List[str]] = None,
+                                min_score: float = 0.0,
+                                limit: int = 10) -> str:
+    """회의록 말미에 붙일 "## 🔗 관련 노트" 섹션 마크다운.
+
+    근거(섹션경로·점수)가 있으면 링크와 함께, 없으면 제목 링크만 나열한다.
+    LLM 호출 없이 결정적으로 만든다 — 실시간 검색이 찾은 사실 그대로가 남아야
+    한다(생성 모델이 관련 노트를 누락·변형하던 문제 회피).
+    """
+    rows: List[str] = []
+    seen: set = set()
+    for item in (evidence or []):
+        link = _evidence_link(item)
+        if not link or link in seen:
+            continue
+        if float(item.get("rank_score") or 0) < min_score:
+            continue
+        seen.add(link)
+        icon = _SOURCE_ICON.get(str(item.get("source_type") or "note"), "📄")
+        bits = [f"- {icon} {link}"]
+        score = float(item.get("score") or 0)
+        if score:
+            bits.append(f"(관련도 {score:.2f})")
+        hits = int(item.get("hits") or 0)
+        if hits > 1:
+            bits.append(f"· {hits}회 참조")
+        snippet = " ".join(str(item.get("snippet") or "").split())[:120]
+        if snippet:
+            bits.append(f"— {snippet}")
+        rows.append(" ".join(bits))
+        if len(rows) >= limit:
+            break
+    for t in (titles or []):
+        link = f"[[{t}]]"
+        if t and link not in seen and len(rows) < limit:
+            seen.add(link)
+            rows.append(f"- 📄 {link}")
+    if not rows:
+        return ""
+    return (f"{RELATED_NOTES_HEADING}\n\n"
+            "> 회의 중 실시간 검색으로 찾은 내부 자료입니다(자동 삽입).\n\n"
+            + "\n".join(rows) + "\n")
+
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 #  입출력 구조
@@ -78,6 +160,9 @@ class FinalizeOptions:
     artifacts_dir: Optional[Path] = None              # wiki_context.json 저장 위치
     proposal_dir: Optional[Path] = None               # 미지정 시 artifacts_dir
     extra_related_titles: List[str] = field(default_factory=list)   # 실시간 vault 검색 등
+    #: 실시간 검색 근거 [{title, filename, heading, section_path, score, snippet, ...}]
+    #: — memo 주입 + 회의록 "🔗 관련 노트" 섹션의 근거 링크로 쓰인다(FR-6)
+    extra_related_evidence: List[Dict[str, Any]] = field(default_factory=list)
     extra_memo_blocks: List[str] = field(default_factory=list)      # 웹검색 보완 블록 등
     plan_match: Any = PLAN_UNSET                      # 재탐색 방지용 전달
     indexer: Any = None
@@ -195,6 +280,11 @@ def run_post_session(
             blocks.append(
                 "[실시간 관련 노트(Vault 검색)]:\n"
                 + "\n".join(f"- [[{t}]]" for t in options.extra_related_titles[:10]))
+        # 근거(섹션경로·점수·snippet)까지 주입 — 제목만 넣던 과거엔 LLM이 어느
+        # 대목이 관련인지 몰라 관련 노트를 사실상 활용하지 못했다.
+        ev_block = _related_evidence_memo(options.extra_related_evidence)
+        if ev_block:
+            blocks.append(ev_block)
         if blocks:
             memo = "\n\n".join(([memo] if memo else []) + blocks)
     _stage("extra_memo", _extra_memo)
@@ -371,6 +461,25 @@ def run_post_session(
             else:
                 ev.on_status("claim_verify", "검증 가능한 주장을 추출하지 못했습니다")
         _stage("claim_verify", _verify)
+
+    # ── 7.5 관련 노트 섹션 자동 삽입 (FR-6) ──
+    # 사실검증 블록이 붙은 뒤에 append 해야 검증 섹션 재작성(_strip_fact_verification_
+    # sections)에 지워지지 않는다. 요약 생성 전에 넣어 요약에도 반영된다.
+    if options.extra_related_evidence or options.extra_related_titles:
+        def _related_section():
+            if RELATED_NOTES_HEADING in res.minutes:
+                return          # 이미 있으면 중복 삽입 금지 (재생성·복구 경로)
+            section = build_related_notes_section(
+                options.extra_related_evidence,
+                options.extra_related_titles,
+            )
+            if not section:
+                return
+            res.minutes = res.minutes.rstrip() + "\n\n" + section
+            ev.on_document("minutes", res.minutes)   # 병합본 재방출 (웹 DB 파리티)
+            ev.on_status("related_notes",
+                         f"관련 노트 {section.count(chr(10) + '- ')}건을 회의록에 병합")
+        _stage("related_notes", _related_section)
 
     # ── 8. 요약 ──
     def _summary():

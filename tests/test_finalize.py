@@ -253,6 +253,18 @@ class TestErrorIsolation:
         assert "summary" not in patched
 
 
+EVIDENCE = [
+    {"title": "QAOA", "filename": "02_이론_학습/QAOA.md", "heading": "요약",
+     "section_path": "QAOA › 요약", "score": 1.42, "rank_score": 0.02,
+     "hits": 3, "snippet": "QAOA는 조합최적화 근사 알고리즘", "source_type": "paper",
+     "segment_text": "QAOA 적용 가능성 논의", "elapsed_sec": 12.5},
+    {"title": "주간회의", "filename": "00_Meetings/주간회의.md", "heading": "",
+     "section_path": "주간회의", "score": 0.31, "rank_score": 0.01,
+     "hits": 1, "snippet": "지난주 결정 사항", "source_type": "note",
+     "segment_text": "지난주 결정 확인", "elapsed_sec": 40.0},
+]
+
+
 class TestExtraContext:
     def test_extra_titles_merged_and_memo_block(self, patched, tmp_path):
         res, ev = run(patched, tmp_path,
@@ -262,6 +274,77 @@ class TestExtraContext:
         # build_generation_context_memo에 전달된 base_memo에 실시간 블록 포함
         _, ctx_kwargs = patched["context"][0]
         assert "실시간 관련 노트" in (ctx_kwargs.get("base_memo") or "")
+
+    def test_evidence_injected_into_memo(self, patched, tmp_path):
+        """제목만이 아니라 근거(섹션·snippet·발화)까지 회의록 생성 memo에 들어간다."""
+        run(patched, tmp_path, extra_related_evidence=EVIDENCE)
+        _, ctx_kwargs = patched["context"][0]
+        memo = ctx_kwargs.get("base_memo") or ""
+        assert "[[QAOA#요약]]" in memo
+        assert "조합최적화" in memo
+        assert "발화: QAOA 적용 가능성 논의" in memo
+
+
+class TestRelatedNotesSection:
+    """FR-6 — 회의록에 '🔗 관련 노트'가 근거 링크와 함께 자동 삽입된다."""
+
+    def test_section_appended_with_evidence(self, patched, tmp_path):
+        res, ev = run(patched, tmp_path, extra_related_evidence=EVIDENCE)
+        assert fz.RELATED_NOTES_HEADING in res.minutes
+        assert "🎓 [[QAOA#요약]]" in res.minutes
+        assert "관련도 1.42" in res.minutes
+        assert "3회 참조" in res.minutes
+        assert "📄 [[주간회의]]" in res.minutes
+        # 사실검증 블록보다 뒤 — 검증 섹션 재작성에 지워지지 않는 위치
+        assert res.minutes.index("## 사실 검증") < res.minutes.index(fz.RELATED_NOTES_HEADING)
+        # 병합본이 재방출돼 웹 DB/화면이 최신 회의록을 받는다
+        assert [d for d, _ in ev.docs].count("minutes") >= 2
+
+    def test_titles_only_still_produces_section(self, patched, tmp_path):
+        res, _ = run(patched, tmp_path, extra_related_titles=["실시간노트1"])
+        assert "📄 [[실시간노트1]]" in res.minutes
+
+    def test_no_related_no_section(self, patched, tmp_path):
+        res, _ = run(patched, tmp_path)
+        assert fz.RELATED_NOTES_HEADING not in res.minutes
+
+    def test_section_not_duplicated(self, patched, tmp_path, monkeypatch):
+        """이미 관련 노트 섹션이 있는 회의록(재생성·복구)에는 다시 붙이지 않는다."""
+        from meeting_minutes_app.meeting_pipeline import minutes_generation as mg
+        monkeypatch.setattr(
+            mg, "generate_minutes",
+            lambda *a, **kw: f"# 회의록\n\n{fz.RELATED_NOTES_HEADING}\n\n- 📄 [[기존]]")
+        res, _ = run(patched, tmp_path, extra_related_evidence=EVIDENCE)
+        assert res.minutes.count(fz.RELATED_NOTES_HEADING) == 1
+        assert "QAOA" not in res.minutes
+
+    def test_section_failure_does_not_block_summary(self, patched, tmp_path, monkeypatch):
+        monkeypatch.setattr(fz, "build_related_notes_section",
+                            lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("boom")))
+        res, ev = run(patched, tmp_path, extra_related_evidence=EVIDENCE)
+        assert "summary" in patched
+        assert any(stage == "related_notes" for stage, _ in res.errors)
+
+
+class TestBuildRelatedNotesSection:
+    def test_dedupes_and_limits(self):
+        ev = [{"title": "A", "score": 1.0}, {"title": "A", "score": 0.5},
+              {"title": "B", "score": 0.4}]
+        md = fz.build_related_notes_section(ev, ["A", "C"], limit=2)
+        assert md.count("- ") == 2
+        assert "[[A]]" in md and "[[B]]" in md
+
+    def test_min_score_filters(self):
+        ev = [{"title": "A", "rank_score": 0.001}, {"title": "B", "rank_score": 0.5}]
+        md = fz.build_related_notes_section(ev, min_score=0.1)
+        assert "[[B]]" in md and "[[A]]" not in md
+
+    def test_empty_returns_empty_string(self):
+        assert fz.build_related_notes_section([], []) == ""
+        assert fz.build_related_notes_section(None, None) == ""
+
+    def test_untitled_evidence_skipped(self):
+        assert fz.build_related_notes_section([{"filename": "x.md"}]) == ""
 
     def test_quality_gate_rejects_bad_refined(self, patched, tmp_path, monkeypatch):
         from meeting_minutes_app.meeting_pipeline import minutes_generation as mg

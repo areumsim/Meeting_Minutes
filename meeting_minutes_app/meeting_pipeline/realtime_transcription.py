@@ -2041,11 +2041,16 @@ class RealtimeSession:
                   + " -->\n\n")
         events = _make_cli_finalize_events(self.output_dir, stem, self.labels, header)
 
-        # 실시간 vault 검색 수집분 — 회의록 컨텍스트에 병합
+        # 실시간 vault 검색 수집분 — 회의록 컨텍스트 + "🔗 관련 노트" 섹션에 병합.
+        # (CLI는 웹 SQLite 사이드카를 쓰지 않으므로 누적 저장은 회의록·wiki_context에
+        #  남는 것으로 갈음한다 — 회의별 재열람은 웹 UI 상세 화면 담당)
         _rt_titles = (self.vault_searcher.collected_titles()[:10]
                       if self.vault_searcher else [])
+        _rt_evidence = (self.vault_searcher.collected_evidence(limit=30)
+                        if self.vault_searcher else [])
         if _rt_titles:
-            print(f"  실시간 관련 노트 병합: {len(_rt_titles)}개")
+            print(f"  실시간 관련 노트 병합: {len(_rt_titles)}개"
+                  f" (근거 {len(_rt_evidence)}건)")
 
         res = fz.run_post_session(
             fz.SessionInputs(
@@ -2063,6 +2068,7 @@ class RealtimeSession:
                 plan_match=_plan_match,   # 화자추론 단계에서 1회 탐색한 결과 재사용
                 artifacts_dir=Path(self.output_dir),
                 extra_related_titles=_rt_titles,
+                extra_related_evidence=_rt_evidence,
             ),
             events,
         )

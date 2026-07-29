@@ -1607,6 +1607,15 @@ class BrowserRealtimeSession:
                 _web_findings = list(self._web_findings)
             _rt_titles = (self._searcher.collected_titles()[:10]
                           if self._searcher else [])
+            # 근거(점수·섹션경로·snippet·발화·경과시각)까지 SQLite 사이드카에 누적 —
+            # 회의 상세의 '참조된 관련 노트'·교차 회의 집계에서 다시 열람한다(FR-4/5).
+            _rt_evidence = (self._searcher.collected_evidence(limit=30)
+                            if self._searcher else [])
+            if _rt_evidence and self.session_id:
+                try:
+                    db.add_related_notes(self.session_id, _rt_evidence)
+                except Exception as _re:
+                    print(f"[realtime] 관련 노트 누적 저장 실패(무시): {_re}")
             extra_blocks = []
             if _web_findings:
                 extra_blocks.append("[웹 검색 보완]:\n" + "\n".join(
@@ -1654,6 +1663,7 @@ class BrowserRealtimeSession:
                 notify=("email" if mm._c("realtime.email_on_finish", False) else None),
                 artifacts_dir=session_out,
                 extra_related_titles=_rt_titles,
+                extra_related_evidence=_rt_evidence,
                 extra_memo_blocks=extra_blocks,
             )
 

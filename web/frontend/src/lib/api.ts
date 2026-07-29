@@ -231,6 +231,27 @@ export const getSessionCost = async (sessionId: string): Promise<SessionCost | n
   } catch { /* 백엔드 없음 */ }
   return null;
 };
+// 회의 중 실시간 검색이 참조한 관련 노트(근거 포함) + 교차 회의 집계.
+// 서버 사이드카(SQLite related_notes)에 남아 회의 종료 후에도 재열람 가능.
+export interface RelatedNoteRow {
+  note_path: string; title: string; heading?: string; section_path?: string;
+  source_type?: string; found_by?: string; score?: number; rank_score?: number;
+  hits?: number; snippet?: string; segment_text?: string; elapsed_sec?: number;
+}
+export interface RelatedNoteCross {
+  note_path: string; title: string; source_type?: string;
+  session_count: number; total_hits: number; last_date?: string;
+}
+export const getSessionRelatedNotes = async (
+  sessionId: string,
+): Promise<{ notes: RelatedNoteRow[]; cross: RelatedNoteCross[] }> => {
+  try {
+    const res = await apiFetch(`/api/sessions/${sessionId}/related-notes`);
+    if (res.ok) return await res.json();
+  } catch { /* 백엔드 없음 — 로컬 전용 모드 */ }
+  return { notes: [], cross: [] };
+};
+
 export interface CostRates { stt_model: string; stt_per_min: number; translate_per_min: number; minutes_flat: number; }
 export const getCostRates = async (): Promise<CostRates | null> => {
   try {

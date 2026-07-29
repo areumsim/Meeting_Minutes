@@ -75,9 +75,29 @@ def init_db():
                 format TEXT DEFAULT 'markdown',
                 FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE
             );
+            CREATE TABLE IF NOT EXISTS related_notes (
+                id TEXT PRIMARY KEY,
+                session_id TEXT,
+                note_path TEXT,
+                title TEXT,
+                heading TEXT,
+                section_path TEXT,
+                source_type TEXT DEFAULT 'note',
+                found_by TEXT,
+                score REAL DEFAULT 0,
+                rank_score REAL DEFAULT 0,
+                hits INTEGER DEFAULT 1,
+                snippet TEXT,
+                segment_text TEXT,
+                elapsed_sec REAL DEFAULT 0,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY(session_id) REFERENCES sessions(id) ON DELETE CASCADE
+            );
             CREATE INDEX IF NOT EXISTS idx_segments_session ON segments(session_id);
             CREATE INDEX IF NOT EXISTS idx_documents_session ON documents(session_id);
             CREATE INDEX IF NOT EXISTS idx_sessions_created ON sessions(created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_related_session ON related_notes(session_id);
+            CREATE INDEX IF NOT EXISTS idx_related_path ON related_notes(note_path);
         """)
         # 기존 DB 마이그레이션: error_detail 컬럼(실패 원인 표시용)이 없으면 추가.
         try:
@@ -183,6 +203,7 @@ def delete_session(sid: str):
     with _conn() as c:
         c.execute("DELETE FROM segments WHERE session_id = ?", (sid,))
         c.execute("DELETE FROM documents WHERE session_id = ?", (sid,))
+        c.execute("DELETE FROM related_notes WHERE session_id = ?", (sid,))
         c.execute("DELETE FROM sessions WHERE id = ?", (sid,))
         c.commit()
 
@@ -191,6 +212,7 @@ def clear_all_sessions():
     with _conn() as c:
         c.execute("DELETE FROM segments")
         c.execute("DELETE FROM documents")
+        c.execute("DELETE FROM related_notes")
         c.execute("DELETE FROM sessions")
         c.commit()
 
@@ -323,6 +345,101 @@ def upsert_document(session_id: str, doc_type: str, content: str,
                 (_new_id(), session_id, doc_type, content, fmt),
             )
         c.commit()
+
+
+# ── Related notes (실시간 관련 노트 누적 — 사이드카) ──────────
+#
+# 회의 중 실시간 검색이 찾아낸 관련 노트를 근거(점수·섹션·snippet·발화·경과시각)와
+# 함께 영속화한다. 과거엔 프런트 React state에만 있어 정지/재시작 시 사라지고
+# 회의록엔 제목만 남았다. vault 원본은 건드리지 않는다(사이드카 원칙).
+
+def add_related_notes(session_id: str, rows: List[Dict]) -> int:
+    """세션의 관련 노트 근거를 저장한다. 같은 노트가 이미 있으면 갱신(누적 재실행 대비).
+
+    반환: 기록된 행 수. 실패는 호출자가 판단하도록 예외를 그대로 올린다
+    (호출부는 finalize 부가 스테이지라 이미 try/except 로 감싼다).
+    """
+    if not session_id or not rows:
+        return 0
+    written = 0
+    with _conn() as c:
+        for r in rows:
+            note_path = str(r.get("filename") or r.get("note_path") or "")
+            title = str(r.get("title") or "")
+            if not (note_path or title):
+                continue
+            existing = c.execute(
+                "SELECT id FROM related_notes WHERE session_id = ? AND note_path = ?",
+                (session_id, note_path),
+            ).fetchone()
+            vals = (
+                title,
+                str(r.get("heading") or ""),
+                str(r.get("section_path") or ""),
+                str(r.get("source_type") or "note"),
+                str(r.get("found_by") or ""),
+                float(r.get("score") or 0),
+                float(r.get("rank_score") or 0),
+                int(r.get("hits") or 1),
+                str(r.get("snippet") or "")[:400],
+                str(r.get("segment_text") or "")[:400],
+                float(r.get("elapsed_sec") or 0),
+            )
+            if existing:
+                c.execute(
+                    """UPDATE related_notes SET title=?, heading=?, section_path=?,
+                       source_type=?, found_by=?, score=?, rank_score=?, hits=?,
+                       snippet=?, segment_text=?, elapsed_sec=? WHERE id=?""",
+                    vals + (existing["id"],),
+                )
+            else:
+                c.execute(
+                    """INSERT INTO related_notes (id, session_id, note_path, title,
+                       heading, section_path, source_type, found_by, score, rank_score,
+                       hits, snippet, segment_text, elapsed_sec)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (_new_id(), session_id, note_path) + vals,
+                )
+            written += 1
+        c.commit()
+    return written
+
+
+def get_related_notes(session_id: str) -> List[Dict]:
+    """이 회의에서 참조된 관련 노트 — 관련도(rank_score) 내림차순."""
+    with _conn() as c:
+        rows = c.execute(
+            "SELECT * FROM related_notes WHERE session_id = ? "
+            "ORDER BY rank_score DESC, score DESC",
+            (session_id,),
+        ).fetchall()
+    return [dict(r) for r in rows]
+
+
+def related_notes_cross_sessions(limit: int = 10,
+                                 recent_sessions: int = 20) -> List[Dict]:
+    """교차 회의 집계 — 최근 N개 회의에서 각 노트가 몇 번(몇 개 회의에서) 참조됐나.
+
+    "이 노트가 계속 언급된다"를 드러내 위키 보강 우선순위를 잡는 데 쓴다.
+    recent_sessions 로 시간창을 제한해 오래된 회의가 순위를 고정하지 않게 한다.
+    """
+    with _conn() as c:
+        rows = c.execute(
+            """SELECT r.note_path AS note_path,
+                      MAX(r.title) AS title,
+                      MAX(r.source_type) AS source_type,
+                      COUNT(DISTINCT r.session_id) AS session_count,
+                      SUM(r.hits) AS total_hits,
+                      MAX(s.date) AS last_date
+               FROM related_notes r
+               JOIN (SELECT id, date FROM sessions
+                     ORDER BY created_at DESC, rowid DESC LIMIT ?) s ON s.id = r.session_id
+               GROUP BY r.note_path
+               ORDER BY session_count DESC, total_hits DESC
+               LIMIT ?""",
+            (max(1, recent_sessions), max(1, limit)),
+        ).fetchall()
+    return [dict(r) for r in rows]
 
 
 # ── File Import (공통 로직 — batch.py, session_scanner.py에서 사용) ──

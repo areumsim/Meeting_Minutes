@@ -27,6 +27,16 @@ body {
   -moz-osx-font-smoothing: grayscale;
 }
 
+/* 한국어 본문 줄바꿈 — 전사/스크립트처럼 긴 한국어가 이어지는 곳에 쓴다.
+   keep-all: 브라우저 기본값은 한글 음절 사이를 아무 데서나 끊어서 어절 중간에
+   줄바꿈이 생긴다(가독성 저하). 넘치지는 않으므로 이건 가독성 개선이다.
+   anywhere: 공백 없는 긴 런(URL·제품코드)이 컨테이너를 넘겨 가로 스크롤을
+   만드는 드문 경우를 막는다 — keep-all 만 쓰면 그 경우가 오히려 악화된다. */
+@utility ko-text {
+  word-break: keep-all;
+  overflow-wrap: anywhere;
+}
+
 .glass-panel {
   background: linear-gradient(135deg, rgba(255,255,255,0.9), rgba(248,250,252,0.8));
   backdrop-filter: blur(20px);

@@ -1383,20 +1383,22 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
                               // 번역 모드: 좌=영어(보조·작게), 우=한국어(주·조금 크게).
                               // 번역이 아직 안 왔어도 2열 틀을 유지해 도착 시 레이아웃이
                               // 출렁이지 않게 하고, 자리에 '번역 중…'을 표시한다.
+                              // min-w-0: grid item 의 기본 min-width:auto 는 자식이 줄어들지
+                              // 못하게 해서 줄바꿈 속성만으로는 칼럼이 넓어지는 것을 못 막는다.
                               <div className={`flex flex-col md:grid md:grid-cols-2 gap-0.5 md:gap-3 w-full items-start ${item.provisional ? "opacity-60" : ""}`}>
                                 {/* Source (English) — 보조 */}
-                                <p className={`text-xs md:text-[13px] leading-snug ${item.start === -1 ? "text-zinc-400 italic" : "text-zinc-500"}`}>
+                                <p className={`ko-text min-w-0 text-xs md:text-[13px] leading-snug ${item.start === -1 ? "text-zinc-400 italic" : "text-zinc-500"}`}>
                                   {item.text}{item.start === -1 && " …"}
                                 </p>
                                 {/* Translated (Korean) — 주 */}
-                                <p className={`text-sm md:text-base leading-snug font-medium md:border-l-2 md:border-l-brand-300 md:pl-3 ${item.translatedText ? "text-brand-900" : "text-brand-300 italic"}`}>
+                                <p className={`ko-text min-w-0 text-sm md:text-base leading-snug font-medium md:border-l-2 md:border-l-brand-300 md:pl-3 ${item.translatedText ? "text-brand-900" : "text-brand-300 italic"}`}>
                                   {item.translatedText || "번역 중…"}
                                 </p>
                               </div>
                             ) : (
                               // 받아쓰기(비번역) 모드: 더 작게, 한 줄로 조밀하게.
                               // provisional(빠른 패스 임시 조각)은 흐리게 — 보정되면 선명해진다.
-                              <p className={`text-[13px] md:text-sm leading-snug ${
+                              <p className={`ko-text text-[13px] md:text-sm leading-snug ${
                                 item.start === -1 ? "text-brand-400 italic"
                                 : item.provisional ? "text-zinc-400"
                                 : "text-brand-900"}`}>

@@ -527,15 +527,15 @@ export default function SessionDetail({ id, onBack, onOpenGraph }: Props) {
                         <span className="text-xs text-brand-400 font-mono mt-1 shrink-0 w-14">
                           {formatTime(seg.start_time)}
                         </span>
-                        <div className="flex-1">
+                        <div className="flex-1 min-w-0">
                           {seg.speaker && (
                             <span className="text-[10px] font-black uppercase tracking-[0.2em] text-brand-400 block mb-1">
                               {seg.speaker}
                             </span>
                           )}
-                          <p className="text-brand-800 font-medium leading-relaxed">{seg.text}</p>
+                          <p className="ko-text text-brand-800 font-medium leading-relaxed">{seg.text}</p>
                           {seg.translated_text && seg.translated_text !== seg.text && (
-                            <p className="text-sm text-amber-700 mt-1 pl-4 border-l-2 border-amber-200">{seg.translated_text}</p>
+                            <p className="ko-text text-sm text-amber-700 mt-1 pl-4 border-l-2 border-amber-200">{seg.translated_text}</p>
                           )}
                         </div>
                       </div>

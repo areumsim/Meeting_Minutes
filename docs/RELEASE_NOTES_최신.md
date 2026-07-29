@@ -1,7 +1,8 @@
 # Meeting Minutes — 릴리즈 노트 (붙여넣기용 본문)
 
 > **릴리즈 작성 시**: 태그 `v2026.07.29` / 제목 `회의록 자동화 v2026.07.29 (포터블)`
-> 첨부 `MeetingMinutesPortable.zip` (95.3 MiB). 작성 절차는 `docs/배포_릴리즈_절차.md`.
+> 첨부 `MeetingMinutesPortable.zip` (185.5 MB — 로컬 STT 백업 라이브러리 포함으로 이전 95.3 MiB 대비 증가).
+> 작성 절차는 `docs/배포_릴리즈_절차.md`.
 > 아래 `---` 아랫부분만 릴리즈 본문에 붙여넣으면 됩니다.
 
 ---

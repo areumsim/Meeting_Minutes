@@ -23,7 +23,7 @@ import time
 import uuid
 import hashlib
 from pathlib import Path
-from typing import Optional, List, Dict, Any, Tuple, Sequence
+from typing import Callable, Optional, List, Dict, Any, Tuple, Sequence
 
 try:
     from meeting_minutes_app.common import config_loader as _cfg
@@ -192,7 +192,11 @@ def _compute_tf(tokens: List[str]) -> Dict[str, float]:
     return {t: c / total for t, c in freq.items()}
 
 
-def _rrf_fuse(rankings: List[List[str]], k: int = 60) -> Dict[str, float]:
+#: RRF 융합 상수 — 실시간 경로(`realtime_search`)와 벤치가 같은 값을 쓰도록 여기서만 정의한다.
+RRF_K = 60
+
+
+def _rrf_fuse(rankings: List[List[str]], k: int = RRF_K) -> Dict[str, float]:
     """Reciprocal Rank Fusion (Cormack et al., 2009) — 여러 랭킹을 융합한다.
 
     score(d) = Σ_r 1 / (k + rank_r(d)).  k=60은 표준값으로 랭킹 상위 편향을 완화한다.
@@ -202,6 +206,36 @@ def _rrf_fuse(rankings: List[List[str]], k: int = 60) -> Dict[str, float]:
         for i, key in enumerate(ranking):
             scores[key] = scores.get(key, 0.0) + 1.0 / (k + i + 1)
     return scores
+
+
+def path_matcher(path_prefixes: Optional[Sequence[str]],
+                 mode: str = "prefix") -> Optional[Callable[[str], bool]]:
+    """폴더 목록 → 노트 상대경로 판정 함수. 목록이 비면 None(= 필터 없음).
+
+    mode="prefix"  (기본) 볼트 루트 기준 접두사만. 도메인 스코프 검색용 —
+                   `vault_retrieval.domain_search_prefixes()` 는 루트 기준 경로를 준다.
+    mode="segment" 경로 중간의 폴더 세그먼트도 인정.
+                   예: "02_이론_학습" → `Archive/QC통합/02_이론_학습/x.md` 도 매칭.
+
+    두 규칙을 이 한 곳에 둔다. 과거엔 실시간 논문 arm 이 `search(path_prefixes=)` 의
+    접두사 필터를 쓰고 배지·정렬 판정만 중간일치로 해서, 하위 폴더에 있는
+    `02_이론_학습`(74노트)·`원문추출`(9노트)이 "논문 배지는 붙는데 논문 arm 에서는
+    절대 회수되지 않는" 상태였다. 규칙이 갈라지면 같은 버그가 재발한다.
+    """
+    dirs = [str(p).strip().strip("/").replace("\\", "/") for p in (path_prefixes or [])]
+    dirs = [d for d in dirs if d]
+    if not dirs:
+        return None
+    if mode == "segment":
+        def _match_segment(rel: str) -> bool:
+            r = (rel or "").replace("\\", "/")
+            return any(r.startswith(d + "/") or f"/{d}/" in r for d in dirs)
+        return _match_segment
+    allowed = tuple(d + "/" for d in dirs)
+
+    def _match_prefix(rel: str) -> bool:
+        return (rel or "").replace("\\", "/").startswith(allowed)
+    return _match_prefix
 
 
 def _l2_normalize(vec: List[float]) -> List[float]:
@@ -615,7 +649,7 @@ class VaultIndexer:
         return done
 
     def _semantic_ranking(self, query: str, limit: int,
-                          path_prefixes: Optional[Tuple[str, ...]] = None) -> List[Tuple[str, float]]:
+                          path_filter: Optional[Callable[[str], bool]] = None) -> List[Tuple[str, float]]:
         """쿼리와 노트 임베딩의 코사인 유사도 랭킹. 비활성/실패 시 빈 리스트."""
         if not self._emb_enabled() or not self._load_embeddings():
             return []
@@ -635,14 +669,15 @@ class VaultIndexer:
             (rel, _dot(qvec, e["v"]))
             for rel, e in self._emb.get("notes", {}).items()
             if rel in self._notes and e.get("v")
-            and (not path_prefixes or rel.startswith(path_prefixes))
+            and (path_filter is None or path_filter(rel))
         ]
         sims.sort(key=lambda x: -x[1])
         return [(rel, s) for rel, s in sims[:limit] if s >= min_cos]
 
     # ── 검색 ─────────────────────────────────────────────────
     def search(self, query: str, limit: int = 10,
-              path_prefixes: Optional[Sequence[str]] = None) -> List[Dict[str, Any]]:
+              path_prefixes: Optional[Sequence[str]] = None,
+              path_match: str = "prefix") -> List[Dict[str, Any]]:
         """쿼리와 관련된 노트를 반환한다.
 
         기본은 TF-IDF 랭킹. wiki_knowledge.embedding_enabled=true이고 임베딩
@@ -650,9 +685,11 @@ class VaultIndexer:
         결과의 "score"는 하위호환을 위해 항상 TF-IDF 점수이며, 융합 시
         "cosine"(임베딩 유사도)과 "rrf"(융합 점수) 필드가 추가된다.
 
-        path_prefixes: 주어지면 이 접두사로 시작하는 노트만 검색 대상으로 삼는다
+        path_prefixes: 주어지면 이 폴더에 속한 노트만 검색 대상으로 삼는다
         (예: 특정 도메인 아카이브 + 01_References로 검색 범위 좁히기).
         vault_retrieval.detect_query_domain()/domain_search_prefixes() 참고.
+        path_match: 폴더 매칭 규칙 — "prefix"(기본, 볼트 루트 기준 접두사) 또는
+        "segment"(경로 중간의 폴더명도 인정). `path_matcher()` 참고.
         """
         if not self._built:
             if not self.load():
@@ -660,14 +697,14 @@ class VaultIndexer:
         query_tokens = _tokenize(query)
         if not query_tokens:
             return []
-        allowed = tuple(p.rstrip("/") + "/" for p in path_prefixes) if path_prefixes else None
+        match = path_matcher(path_prefixes, path_match)
         scores: Dict[str, float] = {}
         for token in set(query_tokens):
             idf_val = self._idf.get(token, 0.0)
             if idf_val == 0:
                 continue
             for rel, note in self._notes.items():
-                if allowed and not rel.startswith(allowed):
+                if match is not None and not match(rel):
                     continue
                 tf_val = note["tf"].get(token, 0.0)
                 if tf_val > 0:
@@ -675,7 +712,7 @@ class VaultIndexer:
 
         candidates = max(limit * 3, limit)
         tfidf_ranked = sorted(scores.items(), key=lambda x: -x[1])[:candidates]
-        sem_ranked = self._semantic_ranking(query, candidates, path_prefixes=allowed)
+        sem_ranked = self._semantic_ranking(query, candidates, path_filter=match)
 
         fused: Dict[str, float] = {}
         cos_map: Dict[str, float] = {}
@@ -768,37 +805,40 @@ class VaultIndexer:
 
     def find_related(self, text: str, limit: int = 5,
                      min_score: float = 0.05,
-                     path_prefixes: Optional[Sequence[str]] = None) -> List[str]:
+                     path_prefixes: Optional[Sequence[str]] = None,
+                     path_match: str = "prefix") -> List[str]:
         """텍스트와 관련된 노트의 [[wiki link]] 타이틀 리스트를 반환한다.
 
         TF-IDF min_score 미달이어도 임베딩 유사도(embedding_min_cosine 이상)로
         검색된 노트는 유지한다 — 키워드가 겹치지 않는 의미적 관련 노트 회수용.
-        path_prefixes: search() 참고.
+        path_prefixes/path_match: search() 참고.
         """
-        results = self.search(text, limit=limit, path_prefixes=path_prefixes)
+        results = self.search(text, limit=limit, path_prefixes=path_prefixes,
+                              path_match=path_match)
         return [
             r["wikilink_title"] for r in results
             if r["score"] >= min_score or r.get("cosine", 0.0) > 0.0
         ]
 
     def search_sections(self, query: str, limit: int = 10,
-                        path_prefixes: Optional[Sequence[str]] = None) -> List[Dict[str, Any]]:
+                        path_prefixes: Optional[Sequence[str]] = None,
+                        path_match: str = "prefix") -> List[Dict[str, Any]]:
         """섹션 단위 TF-IDF 검색. section_index_enabled=true로 빌드된 인덱스 필요.
-        path_prefixes: search() 참고."""
+        path_prefixes/path_match: search() 참고."""
         if not self._built:
             if not self.load():
                 return []
         query_tokens = _tokenize(query)
         if not query_tokens:
             return []
-        allowed = tuple(p.rstrip("/") + "/" for p in path_prefixes) if path_prefixes else None
+        match = path_matcher(path_prefixes, path_match)
         scores: Dict[str, float] = {}
         for token in set(query_tokens):
             idf_val = self._idf.get(token, 0.0)
             if not idf_val:
                 continue
             for rel, note in self._notes.items():
-                if allowed and not rel.startswith(allowed):
+                if match is not None and not match(rel):
                     continue
                 for idx, sec in enumerate(note.get("sections", [])):
                     tf_val = sec["tf"].get(token, 0.0)
@@ -822,9 +862,11 @@ class VaultIndexer:
         return results
 
     def find_related_sections(self, text: str, limit: int = 10,
-                              path_prefixes: Optional[Sequence[str]] = None) -> List[Dict[str, Any]]:
+                              path_prefixes: Optional[Sequence[str]] = None,
+                              path_match: str = "prefix") -> List[Dict[str, Any]]:
         """텍스트와 관련된 섹션 목록 반환. search_sections()의 편의 래퍼."""
-        return self.search_sections(text[:500], limit=limit, path_prefixes=path_prefixes)
+        return self.search_sections(text[:500], limit=limit,
+                                    path_prefixes=path_prefixes, path_match=path_match)
 
     def sections_in_notes(self, query: str, rel_paths: Sequence[str],
                           ) -> Dict[str, Dict[str, Any]]:

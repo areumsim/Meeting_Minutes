@@ -512,6 +512,54 @@ class TestPathPrefixFiltering:
         assert "양자회의" not in related
 
 
+class TestPathMatcher:
+    """`path_matcher()` — 폴더 필터 규칙 정본.
+
+    실시간 논문 arm 과 배지 판정이 각각 다른 규칙을 손으로 구현해 갈라졌던 버그가
+    있었다(하위 폴더에 있는 논문 74+9노트가 arm 에서 영구히 0건). 규칙을 여기 한
+    곳으로 모았으므로 두 모드의 의미를 고정한다.
+    """
+
+    QC = "Archive/도메인_아카이브/02_이론_학습/01_기초.md"
+
+    def test_empty_means_no_filter(self):
+        assert vi.path_matcher(None) is None
+        assert vi.path_matcher([]) is None
+        assert vi.path_matcher(["", "  ", "/"]) is None
+
+    def test_prefix_mode_is_root_anchored(self):
+        m = vi.path_matcher(["02_이론_학습"])          # 기본 = prefix
+        assert m("02_이론_학습/x.md")
+        assert not m(self.QC)                          # 하위에 묻힌 폴더는 불일치
+
+    def test_segment_mode_matches_mid_path(self):
+        m = vi.path_matcher(["02_이론_학습"], "segment")
+        assert m("02_이론_학습/x.md")
+        assert m(self.QC)
+        assert not m("00_Meetings/주간회의.md")
+
+    def test_segment_mode_requires_whole_folder_name(self):
+        """부분 문자열이 아니라 폴더 세그먼트 단위로 맞아야 한다."""
+        m = vi.path_matcher(["원문추출"], "segment")
+        assert m("Archive/QC/원문추출/논문.md")
+        assert not m("Archive/QC/원문추출본_백업/논문.md")
+        assert not m("Archive/원문추출.md")            # 파일명은 폴더가 아니다
+
+    def test_trailing_slash_and_backslash_normalized(self):
+        m = vi.path_matcher(["01_References/"], "segment")
+        assert m("01_References\\Companies\\Acme.md")
+
+    def test_search_honors_segment_mode(self):
+        """search(path_match="segment") 로 하위 폴더 노트가 회수된다."""
+        ix = _make_multi_domain_indexer()
+        prefix_only = {r["title"] for r in ix.search(
+            "논의", limit=10, path_prefixes=["01_회의_세미나"])}
+        assert prefix_only == set()                    # 루트에 없으므로 0건
+        segment = {r["title"] for r in ix.search(
+            "논의", limit=10, path_prefixes=["01_회의_세미나"], path_match="segment")}
+        assert segment == {"양자회의", "피지컬회의"}
+
+
 # ━━━━━━━━━━━━━━━━━━━ date_utils ━━━━━━━━━━━━━━━━━━━
 
 class TestDateUtils:

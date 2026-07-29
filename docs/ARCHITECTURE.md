@@ -92,7 +92,7 @@ flowchart TD
 | 단계 | 함수 | 모듈 |
 |---|---|---|
 | 오디오 변환 | `prepare_audio()` · `split_audio()` | `stt.py` |
-| STT | `run_stt()` / `_transcribe_chunk_checked()` | `stt.py` |
+| STT | `run_stt()` / `_transcribe_chunk_via_chain()` / `_transcribe_chunk_checked()` | `stt.py` |
 | 날짜 파싱 | `parse_session_dt_from_path()` · `parse_iso_date_from_text()` | `date_utils.py` |
 | 문서 유형 판별(파일명) | `_detect_type_from_filename()` | `ingestion_pipeline.py` |
 | 문서 유형 판별(내용 보완) | `classify_doc_type_llm()` | `meeting_workflow.py` |
@@ -321,6 +321,47 @@ flowchart TD
 재작성에 지워지지 않음). vault 원본은 불변 — 관련정보는 전부 사이드카에 쌓인다.
 
 라이브 스모크 절차는 `docs/SMOKE_실시간_관련노트.md` 참고.
+
+---
+
+## STT 제공자 폴백 체인 (벤더 장애 대비)
+
+전사가 실패하면 회의 기록 자체가 남지 않는다. 그래서 STT는 **한 벤더에 묶이지 않는 체인**으로
+동작한다 — OpenAI 두 모델은 같은 벤더라 계정·엔드포인트 장애 시 함께 죽으므로, 진짜 백업은
+그 다음 두 단계다.
+
+```mermaid
+flowchart LR
+    A[청크] --> B[OpenAI models.stt]
+    B -- 실패 --> C[OpenAI models.stt_fallback]
+    C -- 실패 --> D[Groq models.stt_groq\napi.groq_api_key 필요]
+    D -- 실패 --> E[로컬 faster-whisper\nmodels.stt_local · stt.local_fallback=true]
+```
+
+| 경로 | 함수 | 어디까지 폴백하나 |
+|---|---|---|
+| 업로드·배치·watcher·finalize | `run_stt()` → `_build_stt_provider_chain()` → `_transcribe_chunk_via_chain()` (`stt.py`) | **로컬까지 전부** |
+| 실시간 라이브 청크 (웹) | `_run_http_fallback._transcribe_chunk_bytes` (`web/backend/api/realtime.py`) | **Groq까지** (`fallback_provider` 이벤트로 화면에 1회 알림) |
+| 실시간 라이브 청크 (CLI) | `RealtimeTranscriber._run_stt` → `_call_stt` (`realtime_transcription.py`) | **Groq까지** (OpenAI 3회 재시도 후) |
+| 2-pass 보정(revise) | `_revise_worker` | 폴백 없음 — 실패 시 빠른 패스 결과 유지(그 자체가 이미 Groq로 백업됨) |
+
+라이브 청크에 로컬을 쓰지 않는 이유는 CPU 전사가 실시간을 못 따라가 지연이 세션 내내 누적되기
+때문이다. 오프라인에서도 확정 전사·회의록은 종료 후 finalize의 `run_stt`(체인 전체)가 만든다.
+
+**Groq 호출 시 주의점**(`groq_fallback()`이 공용 규칙): 모델명이 `whisper-*`라 `transcribe_chunk`가
+자동으로 `verbose_json` 경로를 타고, 화자분리는 없다(`speaker=""`). Whisper 계열 `prompt`는
+224토큰 제한이라 실시간 정적 힌트(최대 800자)를 그대로 넘기면 요청이 거절될 수 있어 **Groq
+단계에서는 prompt를 생략**한다.
+
+**로컬 단계의 가중치 정책**: `_get_local_model()`은 `local_files_only=True`로만 로딩한다 —
+전사 도중 수백 MB 다운로드가 시작돼 처리가 몇 분 멈추는 일을 막기 위함이다. 준비가 안 됐으면
+"설정에서 [로컬 백업 모델 준비]를 누르세요" 안내로 **즉시** 실패한다. 다운로드는 웹 [설정] →
+오디오 전처리 → `[로컬 백업 모델 준비]`(`POST /api/local-stt/prepare` → `prepare_local_model()`)
+에서만 일어나고, 가중치는 `MeetingMinutesData/data/models/`에 저장된다(폴더째 옮겨도 따라간다).
+포터블 배포본에는 라이브러리(`faster-whisper`)가 포함되지만 가중치는 포함되지 않는다.
+
+비용 추정(`pricing.STT_PRICE_PER_MIN`)은 **기본 모델 기준**이다. Groq/로컬 단가도 표에 있지만
+(폴백 세션의 사후 계산용) 사전 추정은 폴백 여부를 모르므로 실제 청구액과 다를 수 있다.
 
 ---
 
@@ -794,6 +835,10 @@ LLM은 다음 고정 답변 구조를 반드시 따르도록 강제된다:
 |---|---|---|
 | `models.llm` | `"gpt"` | LLM 선호 (gpt / claude) |
 | `models.stt` | `"gpt-4o-mini-transcribe"` | STT 모델(저렴·빠름). 고정확은 `gpt-4o-transcribe`, 화자분리 배치는 `gpt-4o-transcribe-diarize`(Realtime 미지원) |
+| `models.stt_fallback` | `"gpt-4o-transcribe"` | STT 1차 폴백 — 같은 OpenAI 내 재시도 모델 |
+| `models.stt_groq` | `"whisper-large-v3-turbo"` | STT 2차 폴백(다른 벤더) — `api.groq_api_key` 필요 |
+| `models.stt_local` | `"base"` | STT 최종 백업(로컬 faster-whisper) 모델 크기 |
+| `stt.local_fallback` | `false` | 로컬 최종 백업 사용. 가중치는 웹 [설정]에서 미리 준비해야 함(전사 중 다운로드 안 함) |
 | `obsidian.enabled` | `false` | Obsidian REST 연동 활성화 |
 | `obsidian.meetings_path` | `""` | 회의록 저장 경로 (`{year}`/`{month}`/`{project}` 토큰 지원 — `{project}`로 다중 도메인 분리) |
 | `obsidian.project` / `project_domains` | `""` / `{}` | 현재 도메인 + 도메인→폴더 매핑. `--project` CLI로 세션 단위 오버라이드 가능 |

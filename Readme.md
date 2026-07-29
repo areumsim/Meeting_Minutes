@@ -493,13 +493,17 @@ cp   config.example.json config.json   # Mac/Linux
 {
   "api": {
     "openai_api_key":    "sk-proj-...",   // 필수
-    "anthropic_api_key": "sk-ant-..."     // 선택 (Claude 폴백 사용 시)
+    "anthropic_api_key": "sk-ant-...",    // 선택 (Claude 폴백 사용 시)
+    "groq_api_key":      "gsk_..."        // 선택 (STT 2차 폴백 — OpenAI STT 장애 시 자동 전환)
   },
   "ssl": {
     "verify": true     // 기본 true(권장). 회사/학교망 SSL 오류 시에만 false (MITM 위험)
   },
   "models": {
     "stt":             "gpt-4o-mini-transcribe",     // 기본값. 화자 분리는 "gpt-4o-transcribe-diarize"
+    "stt_fallback":    "gpt-4o-transcribe",          // STT 1차 폴백(같은 OpenAI 내 재시도)
+    "stt_groq":        "whisper-large-v3-turbo",     // STT 2차 폴백(Groq — groq_api_key 필요)
+    "stt_local":       "base",                       // STT 최종 백업(로컬 faster-whisper) 크기
     "llm":             "gpt",                // 기본 gpt(OpenAI 키만 필요) | claude(Anthropic 키 별도)
     "gpt_model":       "gpt-4o-mini",
     "minutes_model":   "gpt-4o",             // 회의록 생성 모델 (기본: gpt-4o)

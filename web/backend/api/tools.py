@@ -178,6 +178,42 @@ def reindex():
         return {"ok": False, "message": f"재빌드 실패: {e}"}
 
 
+# ── 3.5) 로컬 STT 백업 모델 준비 ──────────────────
+def _local_stt_model() -> str:
+    from meeting_minutes_app.common import config_loader as _cfg
+    return str(_cfg.get("models.stt_local", "base") or "base")
+
+
+@router.get("/local-stt/status")
+def local_stt_status():
+    """로컬 백업 STT(faster-whisper) 준비 상태 — 라이브러리·가중치 유무."""
+    try:
+        from meeting_minutes_app.meeting_pipeline import stt
+        return {"ok": True, **stt.local_model_status(_local_stt_model())}
+    except Exception as e:
+        traceback.print_exc()
+        return {"ok": False, "lib_available": False, "installed": False,
+                "model": "", "path": "", "size_mb": 0.0, "message": str(e)}
+
+
+@router.post("/local-stt/prepare")
+def local_stt_prepare():
+    """로컬 백업 모델 가중치를 미리 내려받는다(수백 MB·수 분 걸릴 수 있음).
+
+    전사 경로는 다운로드를 하지 않으므로(stt._get_local_model), 장애 전에 여기서 한 번
+    준비해 두는 것이 전제다. 실패는 예외 대신 {ok:false} 로 돌려 설정 화면에 표시한다."""
+    try:
+        from meeting_minutes_app.meeting_pipeline import stt
+        model = _local_stt_model()
+        st = stt.prepare_local_model(model)
+        return {"ok": True, "message":
+                f"로컬 백업 모델 준비 완료 — {model} ({st['size_mb']}MB, "
+                f"{st['elapsed_sec']}초)", **st}
+    except Exception as e:
+        traceback.print_exc()
+        return {"ok": False, "message": f"준비 실패: {e}"}
+
+
 # ── 4) 회의 준비 브리핑 ───────────────────────────
 @router.get("/cost/rates")
 def cost_rates():

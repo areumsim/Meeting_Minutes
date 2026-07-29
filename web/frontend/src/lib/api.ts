@@ -281,6 +281,35 @@ export const reindexVault = async (): Promise<{ ok: boolean; message: string }> 
   }
 };
 
+// 로컬 STT 백업(faster-whisper) — 가중치를 회의 전에 미리 내려받아 둔다.
+// 전사 도중에는 절대 다운로드하지 않으므로(서버 stt._get_local_model) 이 버튼이 유일한 준비 경로.
+export interface LocalSttStatus {
+  ok: boolean;
+  lib_available: boolean;
+  installed: boolean;
+  model: string;
+  path: string;
+  size_mb: number;
+  message?: string;
+}
+
+export const localSttStatus = async (): Promise<LocalSttStatus | null> => {
+  try {
+    const res = await apiFetch("/api/local-stt/status");
+    if (res.ok) return await res.json();
+  } catch { /* 백엔드 없음 */ }
+  return null;
+};
+
+export const prepareLocalStt = async (): Promise<{ ok: boolean; message: string }> => {
+  try {
+    const res = await apiFetch("/api/local-stt/prepare", { method: "POST" });
+    return await res.json();
+  } catch (e: any) {
+    return { ok: false, message: `준비 실패: ${e?.message || e}` };
+  }
+};
+
 // 폴더 자동 감시(vault_watcher) — 서버 내장 감시 제어/상태 (패키지 모드 전용).
 export interface WatcherStatus {
   running: boolean;

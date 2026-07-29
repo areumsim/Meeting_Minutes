@@ -12,8 +12,22 @@ STT_PRICE_PER_MIN = {
     "gpt-4o-mini-transcribe":            0.003,
     "gpt-4o-mini-transcribe-2025-12-15": 0.003,
     "whisper-1":                         0.006,
+    # Groq STT 폴백(OpenAI 장애 시) — 공개 단가는 시간당이라 /60 환산.
+    # whisper-large-v3-turbo $0.04/시간, whisper-large-v3 $0.111/시간 (2026-07 기준).
+    "whisper-large-v3-turbo":            0.000667,
+    "whisper-large-v3":                  0.00185,
+    # 로컬 faster-whisper 최종 백업 — API 호출이 없어 과금 0.
+    # (키는 models.stt_local 선택지와 동일한 모델 크기 이름)
+    "tiny":                              0.0,
+    "base":                              0.0,
+    "small":                             0.0,
+    "medium":                            0.0,
+    "large-v3":                          0.0,
 }
 DEFAULT_STT_PRICE_PER_MIN = 0.006
+
+# 주의: 비용 추정은 **기본 STT 모델 기준**이다. 실제 세션에서 폴백(OpenAI 폴백모델·
+# Groq·로컬)이 걸리면 청구액이 추정과 달라진다(대개 더 싸다 — Groq/로컬이 더 저렴).
 
 # LLM 토큰 단가 ($/1M tokens) — 회의록/요약 생성 비용 추정용.
 # Claude 단가가 과거 이 표에 없어 LLM_TOKEN=claude 세션도 항상 gpt-4o 가격으로

@@ -11,10 +11,11 @@ import {
   getApiKey, setApiKey, getAnthropicKey, setAnthropicKey,
   getWatcherStatus, startWatcher, stopWatcher, obsidianDiagnose, pickFolder,
   getBackendUrl, setBackendUrl, testBackendUrl, revealSecret,
+  localSttStatus, prepareLocalStt,
 } from "../lib/api";
 import { Capacitor } from "@capacitor/core";
 import type { Profile } from "../lib/types";
-import type { WatcherStatus, DiagnoseResult } from "../lib/api";
+import type { WatcherStatus, DiagnoseResult, LocalSttStatus } from "../lib/api";
 
 // 네이티브 앱(iOS/Android)에서만 'PC 서버 연결' 카드를 노출한다.
 const IS_NATIVE = Capacitor.isNativePlatform();
@@ -166,6 +167,7 @@ export default function SettingsView() {
   const [testing, setTesting] = useState<string>("");
   const [testMsg, setTestMsg] = useState<Record<string, { ok: boolean; message: string }>>({});
   const [diag, setDiag] = useState<DiagnoseResult | null>(null);
+  const [localStt, setLocalStt] = useState<LocalSttStatus | null>(null);
 
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [showNewProfile, setShowNewProfile] = useState(false);
@@ -202,6 +204,7 @@ export default function SettingsView() {
     // 그룹 펼침 초기화: 필수는 펼침, 고급은 접힘
     setOpen(Object.fromEntries(sch.map((g) => [g.id, !g.advanced])));
     setProfiles(await getProfiles());
+    if (pm) setLocalStt(await localSttStatus());
   };
 
   useEffect(() => { load(); }, []);
@@ -331,6 +334,17 @@ export default function SettingsView() {
     setTesting("");
   };
 
+  // 로컬 백업 모델 가중치 미리 받기 — 수백 MB·수 분 걸릴 수 있어 진행 중 안내를 남긴다.
+  // (전사 중에는 서버가 다운로드를 하지 않으므로 이 버튼이 유일한 준비 경로다.)
+  const handlePrepareLocalStt = async () => {
+    setTesting("localstt");
+    if (Object.values(dirty).some(Boolean)) { if (!(await handleSave())) { setTesting(""); return; } }
+    const res = await prepareLocalStt();
+    setTestMsg((prev) => ({ ...prev, localstt: res }));
+    setLocalStt(await localSttStatus());
+    setTesting("");
+  };
+
   const handleDiagnose = async () => {
     setTesting("diagnose");
     if (Object.values(dirty).some(Boolean)) { if (!(await handleSave())) { setTesting(""); return; } }
@@ -423,6 +437,22 @@ export default function SettingsView() {
               <>
                 <TestRow label="OpenAI 연결 테스트" busy={testing === "openai"} result={testMsg.openai} onClick={() => runTest("openai")} />
                 <TestRow label="Claude 연결 테스트" busy={testing === "anthropic"} result={testMsg.anthropic} onClick={() => runTest("anthropic")} />
+              </>
+            )}
+            {/* 로컬 STT 최종 백업 — 가중치 사전 준비 (OpenAI·Groq가 모두 죽었을 때의 마지막 수단) */}
+            {packaged && group.id === "audio" && (
+              <>
+                <TestRow
+                  label={`로컬 백업 모델 준비${localStt?.installed ? ` — 준비됨 (${localStt.model} · ${localStt.size_mb}MB)` : " — 미준비"}`}
+                  busy={testing === "localstt"}
+                  result={testMsg.localstt}
+                  onClick={handlePrepareLocalStt}
+                />
+                <p className="text-xs text-brand-400 mt-1">
+                  {localStt && !localStt.lib_available
+                    ? "이 설치본에는 로컬 전사 라이브러리(faster-whisper)가 없습니다. 포터블 배포본에서는 기본 포함됩니다."
+                    : "회의 중에 내려받지 않도록 미리 준비하세요. 모델 크기에 따라 수십~수백 MB, 1~3분 걸립니다. 준비하지 않으면 위 '로컬 STT 최종 백업'을 켜도 폴백이 즉시 실패합니다."}
+                </p>
               </>
             )}
             {packaged && group.id === "email" && (

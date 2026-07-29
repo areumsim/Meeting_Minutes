@@ -8,9 +8,11 @@
   "_config_version_comment": "스키마 버전 — 앱 시작 시 자동 마이그레이션(누락 키 기본값 주입)에 사용. 직접 수정하지 마세요.",
   "config_version": 1,
   "api": {
-    "_comment": "API 키 — 비워 두세요(웹 [설정]에서 입력). 예시 형식은 sk-proj-.../sk-ant-... · 환경변수(OPENAI_API_KEY 등)가 있으면 환경변수 우선",
+    "_comment": "API 키 — 비워 두세요(웹 [설정]에서 입력). 예시 형식은 sk-proj-.../sk-ant-.../gsk_... · 환경변수(OPENAI_API_KEY/GROQ_API_KEY 등)가 있으면 환경변수 우선",
     "openai_api_key": "",
-    "anthropic_api_key": ""
+    "anthropic_api_key": "",
+    "_groq_api_key_comment": "선택 — STT 2차 폴백(다른 벤더). OpenAI STT가 통째로 실패할 때 Groq Whisper large-v3로 자동 폴백. console.groq.com/keys 무료 발급. 비우면 폴백에서 제외.",
+    "groq_api_key": ""
   },
   "ssl": {
     "_comment": "OpenAI/Anthropic 등 외부 API 호출의 SSL 인증서 검증. 기본 true(권장). 회사/학교망 SSL 검사로 인증서 오류가 나면 false 로 설정(단, MITM 노출 위험).",
@@ -35,7 +37,24 @@
       "whisper-1"
     ],
     "stt": "gpt-4o-mini-transcribe",
-    "_llm_comment": "회의록/요약/용어보완 생성 LLM. STT(음성인식)는 항상 OpenAI 사용(하이브리드).",
+    "_stt_fallback_comment": "STT 1차 폴백 — 기본 STT 모델 실패 시 같은 OpenAI 내에서 먼저 재시도할 모델.",
+    "stt_fallback": "gpt-4o-transcribe",
+    "_stt_groq_comment": "STT 2차 폴백(다른 벤더) — OpenAI가 통째로 실패할 때 Groq로 폴백할 모델. api.groq_api_key 필요. whisper-large-v3-turbo($0.04/시간) 또는 whisper-large-v3($0.111/시간).",
+    "_stt_groq_options": [
+      "whisper-large-v3-turbo",
+      "whisper-large-v3"
+    ],
+    "stt_groq": "whisper-large-v3-turbo",
+    "_stt_local_comment": "STT 최종 백업(로컬 오프라인) — stt.local_fallback=true 일 때 쓰는 faster-whisper 모델 크기. 클수록 정확하나 느림(CPU).",
+    "_stt_local_options": [
+      "tiny",
+      "base",
+      "small",
+      "medium",
+      "large-v3"
+    ],
+    "stt_local": "base",
+    "_llm_comment": "회의록/요약/용어보완 생성 LLM. STT는 OpenAI 기본 → OpenAI 폴백 → Groq → 로컬(faster-whisper) 순으로 폴백.",
     "_llm_options": [
       "gpt",
       "claude"
@@ -74,7 +93,9 @@
     "_trim_silence_comment": "무음 제거(silenceremove). 파일↓·환각↓이나 무음을 지워 타임스탬프가 실제 시간과 어긋남. 기본 꺼짐.",
     "trim_silence": false,
     "_translation_review_comment": "번역(EN→KR) 후 원문·번역을 병치해 주제 맥락으로 오역·누락을 재검토·교정. 별도 LLM 호출로 비용↑. 기본 켜짐.",
-    "translation_review": true
+    "translation_review": true,
+    "_local_fallback_comment": "true 시 OpenAI·Groq STT가 모두 실패하면 이 PC에서 faster-whisper로 전사(네트워크·API 무관 최종 백업). 포터블 배포본은 라이브러리 포함(그 외 환경은 pip install faster-whisper). 가중치는 웹 [설정]의 [로컬 백업 모델 준비]로 미리 내려받아야 하며(전사 중 다운로드 안 함), 사용 모델은 models.stt_local. 기본 꺼짐.",
+    "local_fallback": false
   },
   "realtime": {
     "_comment": "실시간 녹취(realtime_transcription.py) 기본값",

@@ -39,6 +39,7 @@ def _eval_config_globals() -> Dict[str, Any]:
         "CLAUDE_MODEL": _c("models.claude_model", _CLAUDE_MODEL_DEFAULT) or _CLAUDE_MODEL_DEFAULT,
         "OPENAI_API_KEY": _c("api.openai_api_key", "") or "",
         "ANTHROPIC_API_KEY": _c("api.anthropic_api_key", "") or "",
+        "GROQ_API_KEY": _c("api.groq_api_key", "") or "",
         "SSL_VERIFY": _c("ssl.verify", True),  # 안전 기본값: 키 누락 시 검증 켜짐
     }
 
@@ -48,18 +49,23 @@ GPT_MODEL = _globals["GPT_MODEL"]
 CLAUDE_MODEL = _globals["CLAUDE_MODEL"]
 OPENAI_API_KEY = _globals["OPENAI_API_KEY"]
 ANTHROPIC_API_KEY = _globals["ANTHROPIC_API_KEY"]
+GROQ_API_KEY = _globals["GROQ_API_KEY"]
 SSL_VERIFY = _globals["SSL_VERIFY"]
+
+# Groq OpenAI 호환 엔드포인트 — audio.transcriptions.create 를 OpenAI SDK 그대로 재사용.
+GROQ_BASE_URL = "https://api.groq.com/openai/v1"
 
 
 def _refresh_config_globals() -> None:
     """config_loader.reload() 훅 — 웹 UI에서 설정 저장 시 재시작 없이
     키/모델/SSL 전역을 재평가한다(위 상수들은 import 시점 값으로 고정되므로)."""
-    global GPT_MODEL, CLAUDE_MODEL, OPENAI_API_KEY, ANTHROPIC_API_KEY, SSL_VERIFY
+    global GPT_MODEL, CLAUDE_MODEL, OPENAI_API_KEY, ANTHROPIC_API_KEY, GROQ_API_KEY, SSL_VERIFY
     g = _eval_config_globals()
     GPT_MODEL = g["GPT_MODEL"]
     CLAUDE_MODEL = g["CLAUDE_MODEL"]
     OPENAI_API_KEY = g["OPENAI_API_KEY"]
     ANTHROPIC_API_KEY = g["ANTHROPIC_API_KEY"]
+    GROQ_API_KEY = g["GROQ_API_KEY"]
     SSL_VERIFY = g["SSL_VERIFY"]
 
 
@@ -96,6 +102,21 @@ def make_openai_client(api_key: str):
         logger.debug("OpenAI client: SSL 검증 비활성화")
         return OpenAI(api_key=api_key, http_client=http_client)
     return OpenAI(api_key=api_key)
+
+
+def make_groq_client(api_key: str):
+    """Groq STT 클라이언트 생성 — OpenAI SDK를 Groq 엔드포인트로 향하게 한다.
+
+    Groq는 OpenAI 호환 `audio.transcriptions.create` 를 제공하므로(whisper-large-v3 /
+    whisper-large-v3-turbo) 별도 SDK 없이 base_url 만 바꿔 재사용한다. OpenAI 장애·키
+    문제 시 '다른 벤더' 폴백으로 동작(같은 OpenAI 키/엔드포인트가 아니므로 동시 장애를 피함)."""
+    from openai import OpenAI
+    if not SSL_VERIFY and HAS_HTTPX:
+        warnings.filterwarnings("ignore", message="Unverified HTTPS request")
+        http_client = httpx.Client(verify=False)
+        logger.debug("Groq client: SSL 검증 비활성화")
+        return OpenAI(api_key=api_key, base_url=GROQ_BASE_URL, http_client=http_client)
+    return OpenAI(api_key=api_key, base_url=GROQ_BASE_URL)
 
 
 def make_anthropic_client(api_key: str):

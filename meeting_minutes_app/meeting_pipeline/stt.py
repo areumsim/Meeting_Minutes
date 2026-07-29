@@ -18,7 +18,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from meeting_minutes_app.common.llm_client import (
-    LLMClient, OPENAI_API_KEY, get_api_key, make_openai_client,
+    LLMClient, OPENAI_API_KEY, GROQ_API_KEY, get_api_key,
+    make_openai_client, make_groq_client,
 )
 from meeting_minutes_app.common.text_filters import (
     is_cjk_hallucination as _is_cjk_hallucination,
@@ -27,7 +28,9 @@ from meeting_minutes_app.common.text_filters import (
 )
 from meeting_minutes_app.meeting_pipeline import meeting_minutes as _mm
 from meeting_minutes_app.meeting_pipeline.meeting_minutes import (
-    DEFAULT_STT_MODEL, FALLBACK_STT_MODEL, MAX_FILE_SIZE_MB, MAX_CHUNK_DURATION_SEC,
+    DEFAULT_STT_MODEL, FALLBACK_STT_MODEL, GROQ_STT_MODEL,
+    LOCAL_STT_ENABLED, LOCAL_STT_MODEL,
+    MAX_FILE_SIZE_MB, MAX_CHUNK_DURATION_SEC,
     MIN_STT_CHARS_PER_SEC, MAX_STT_RETRY_SPLIT_DEPTH, UPLOAD_FORMATS,
     logger, step, info, ok, warn, debug_save,
     ts, file_mb, run_cmd, audio_duration, FFMPEG,
@@ -37,11 +40,16 @@ from meeting_minutes_app.meeting_pipeline.meeting_minutes import (
 def _refresh_config_globals() -> None:
     """config_loader.reload() 훅 — 위 from-import 로 복사된 키/모델 전역을
     웹 UI 설정 저장 시 재시작 없이 갱신한다(원본 모듈 훅이 먼저 실행됨)."""
-    global OPENAI_API_KEY, DEFAULT_STT_MODEL, FALLBACK_STT_MODEL
+    global OPENAI_API_KEY, GROQ_API_KEY, DEFAULT_STT_MODEL, FALLBACK_STT_MODEL
+    global GROQ_STT_MODEL, LOCAL_STT_ENABLED, LOCAL_STT_MODEL
     from meeting_minutes_app.common import llm_client as _llm
     OPENAI_API_KEY = _llm.OPENAI_API_KEY
+    GROQ_API_KEY = _llm.GROQ_API_KEY
     DEFAULT_STT_MODEL = _mm.DEFAULT_STT_MODEL
     FALLBACK_STT_MODEL = _mm.FALLBACK_STT_MODEL
+    GROQ_STT_MODEL = _mm.GROQ_STT_MODEL
+    LOCAL_STT_ENABLED = _mm.LOCAL_STT_ENABLED
+    LOCAL_STT_MODEL = _mm.LOCAL_STT_MODEL
 
 
 try:
@@ -383,6 +391,234 @@ def _transcribe_chunk_checked(
     return segs
 
 
+# ──────────────────────────────────────────────
+#  로컬 STT — faster-whisper (네트워크 무관 최종 백업)
+# ──────────────────────────────────────────────
+_LOCAL_MODEL_CACHE: Dict[str, Any] = {}
+
+LOCAL_LIB_MISSING_MSG = (
+    "로컬 STT 라이브러리(faster-whisper)가 없습니다 → pip install faster-whisper "
+    "(포터블 배포본에는 기본 포함)"
+)
+LOCAL_WEIGHTS_MISSING_MSG = (
+    "로컬 백업 모델이 준비되지 않았습니다 — 웹 [설정] → '오디오 전처리'의 "
+    "[로컬 백업 모델 준비]를 먼저 눌러 가중치를 내려받으세요"
+)
+
+
+def local_models_dir() -> str:
+    """로컬 STT 가중치 저장 폴더 — 쓰기 가능한 데이터 폴더 아래(MM_DATA_DIR 반영).
+
+    HuggingFace 기본 캐시(~/.cache)가 아니라 앱 데이터 폴더에 두어, 포터블 배포본을
+    폴더째 옮기거나 여러 PC 에 복사해도 준비해 둔 가중치가 함께 따라가게 한다."""
+    from meeting_minutes_app.common import app_paths
+    d = app_paths.get_data_dir() / "models"
+    try:
+        d.mkdir(parents=True, exist_ok=True)
+    except OSError as e:
+        logger.debug(f"[STT local] 모델 폴더 생성 실패({e}) — 경로만 반환")
+    return str(d)
+
+
+def _local_snapshot_dir(model_size: str) -> Optional[Path]:
+    """내려받은 가중치(model.bin)가 있는 스냅샷 폴더. 없으면 None.
+
+    huggingface_hub 캐시 구조: <root>/models--Systran--faster-whisper-<size>/snapshots/<rev>/"""
+    root = Path(local_models_dir())
+    if not root.exists():
+        return None
+    for repo in root.iterdir():
+        if not repo.is_dir() or not repo.name.endswith(f"faster-whisper-{model_size}"):
+            continue
+        for snap in (repo / "snapshots").glob("*"):
+            if (snap / "model.bin").exists():
+                return snap
+    return None
+
+
+def local_lib_available() -> bool:
+    """faster-whisper 설치 여부(무거운 import 없이 확인)."""
+    import importlib.util
+    return importlib.util.find_spec("faster_whisper") is not None
+
+
+def local_model_status(model_size: str) -> Dict[str, Any]:
+    """로컬 백업 준비 상태 — 웹 [설정]의 상태 배지용."""
+    snap = _local_snapshot_dir(model_size)
+    size_mb = 0.0
+    if snap:
+        size_mb = round(sum(
+            f.stat().st_size for f in snap.rglob("*") if f.is_file()
+        ) / (1024 * 1024), 1)
+    return {
+        "lib_available": local_lib_available(),
+        "installed": snap is not None,
+        "model": model_size,
+        "path": str(snap) if snap else local_models_dir(),
+        "size_mb": size_mb,
+    }
+
+
+def _get_local_model(model_size: str, allow_download: bool = False):
+    """faster-whisper 모델을 로딩(최초 1회, 이후 캐시).
+
+    CPU int8 로 로딩해 GPU 없이도 동작한다(포터블 배포 환경 고려).
+    allow_download=False(기본)면 이미 내려받은 가중치만 쓴다 — 전사 도중에
+    수백 MB 다운로드가 시작돼 회의 처리가 몇 분 멈추는 일을 막는다.
+    다운로드는 prepare_local_model()(웹 [설정] 버튼)에서만 일어난다."""
+    m = _LOCAL_MODEL_CACHE.get(model_size)
+    if m is not None:
+        return m
+    from faster_whisper import WhisperModel  # 지연 임포트 — 미설치 시 여기서만 실패
+    if allow_download:
+        info(f"  로컬 STT 모델 준비: faster-whisper '{model_size}' 다운로드/로딩")
+    else:
+        info(f"  로컬 STT 모델 로딩: faster-whisper '{model_size}' (준비된 가중치 사용)")
+    m = WhisperModel(
+        model_size, device="cpu", compute_type="int8",
+        download_root=local_models_dir(),
+        local_files_only=not allow_download,
+    )
+    _LOCAL_MODEL_CACHE[model_size] = m
+    return m
+
+
+def prepare_local_model(model_size: str) -> Dict[str, Any]:
+    """로컬 백업 모델 가중치를 미리 내려받는다(웹 [설정] 버튼 → tools API).
+
+    실제 전사 경로는 절대 다운로드하지 않으므로(위 _get_local_model 참고) 사용자가
+    장애 전에 한 번 눌러 두는 것이 이 기능의 전제다. 라이브러리 미설치는 그대로 알린다."""
+    if not local_lib_available():
+        raise RuntimeError(LOCAL_LIB_MISSING_MSG)
+    t0 = time.time()
+    _get_local_model(model_size, allow_download=True)
+    st = local_model_status(model_size)
+    st["elapsed_sec"] = round(time.time() - t0, 1)
+    return st
+
+
+def transcribe_local(
+    audio_path: str, model_size: str,
+    language: Optional[str] = None, offset: float = 0.0,
+) -> List[Dict]:
+    """faster-whisper 로 로컬 전사 — OpenAI/Groq 세그먼트와 동일한 dict 형식으로 반환.
+
+    faster-whisper 는 세그먼트 단위 타임스탬프를 제공하므로 verbose 경로와 같은 형태로
+    맞춘다. 화자분리는 없다(speaker=\"\"). 긴 파일도 내부에서 처리하므로 별도 분할 불필요."""
+    try:
+        model = _get_local_model(model_size)
+    except ImportError as e:
+        raise RuntimeError(LOCAL_LIB_MISSING_MSG) from e
+    except Exception as e:
+        # local_files_only=True 라 가중치가 없으면 huggingface_hub 가 여기서 실패한다
+        # (LocalEntryNotFoundError 등). 원인 메시지를 붙여 사용자 안내로 바꾼다.
+        raise RuntimeError(f"{LOCAL_WEIGHTS_MISSING_MSG} ({type(e).__name__}: {e})") from e
+
+    lang: Optional[str] = None
+    if language and str(language).strip().lower() != "auto":
+        lang = language
+
+    logger.debug(f"[STT local] model={model_size}, file={audio_path}, "
+                 f"{file_mb(audio_path):.2f}MB, offset={offset:.1f}s, lang={lang}")
+    t0 = time.time()
+    # vad_filter: 무음 구간을 걸러 환각(없는 말 생성)을 줄인다.
+    segments, _info = model.transcribe(audio_path, language=lang, beam_size=5, vad_filter=True)
+    out: List[Dict] = []
+    for seg in segments:  # 제너레이터 — 순회 시 실제 전사가 수행됨
+        txt = (getattr(seg, "text", "") or "").strip()
+        if txt:
+            out.append({
+                "start": (getattr(seg, "start", 0.0) or 0.0) + offset,
+                "end":   (getattr(seg, "end",   0.0) or 0.0) + offset,
+                "text":  txt, "speaker": "",
+            })
+    logger.debug(f"[STT local TIME] {time.time()-t0:.1f}s, {len(out)} segs")
+    if not out:
+        out.append({"start": offset, "end": offset, "text": "", "speaker": ""})
+    return out
+
+
+# ──────────────────────────────────────────────
+#  STT 제공자 폴백 체인
+# ──────────────────────────────────────────────
+def groq_fallback() -> Tuple[Any, str]:
+    """Groq STT 폴백 (클라이언트, 모델). 키가 없거나 생성 실패면 (None, "").
+
+    배치 체인과 실시간(http 청크) 경로가 같은 규칙을 쓰도록 여기 한 곳에 둔다.
+    호출부는 client 가 None 이면 Groq 단계를 건너뛴다."""
+    gkey = get_api_key("GROQ_API_KEY", GROQ_API_KEY)
+    if not gkey:
+        return None, ""
+    try:
+        return make_groq_client(gkey), GROQ_STT_MODEL
+    except Exception as e:
+        warn(f"  Groq 클라이언트 생성 실패 → 폴백에서 제외: {e}")
+        return None, ""
+
+
+def _build_stt_provider_chain(default_model: str) -> List[Tuple[str, str, Any]]:
+    """앞에서부터 시도할 (제공자명, 모델, 클라이언트) 목록.
+
+    OpenAI 기본 → OpenAI 폴백모델 → Groq(다른 벤더) → 로컬 faster-whisper.
+    OpenAI 두 항목은 같은 벤더라 벤더 전체 장애 시 함께 죽는다 — Groq/로컬이 그때의
+    진짜 백업이다. 로컬은 client=None 으로 표시(별도 경로)."""
+    chain: List[Tuple[str, str, Any]] = []
+
+    okey = get_api_key("OPENAI_API_KEY", OPENAI_API_KEY)
+    if okey:
+        oclient = make_openai_client(okey)
+        chain.append(("OpenAI", default_model, oclient))
+        if FALLBACK_STT_MODEL and FALLBACK_STT_MODEL != default_model:
+            chain.append(("OpenAI", FALLBACK_STT_MODEL, oclient))
+
+    gclient, gmodel = groq_fallback()
+    if gclient is not None:
+        chain.append(("Groq", gmodel, gclient))
+
+    if LOCAL_STT_ENABLED:
+        chain.append(("local", LOCAL_STT_MODEL, None))
+
+    return chain
+
+
+def _transcribe_chunk_via_chain(
+    chain: List[Tuple[str, str, Any]], cp: str,
+    language: Optional[str], speaker_names: Optional[List[str]],
+    chunk_offset: float, debug_dir: Optional[str], chunk_index: int,
+    work_dir: str,
+) -> List[Dict]:
+    """청크 하나를 제공자 체인 순서대로 시도. 하나가 성공하면 그 결과를 쓴다.
+
+    앞 제공자의 오류가 '일시적/영구적'인지 구분하지 않고 다음 제공자로 넘어간다 —
+    폴백의 목적은 어떤 이유로든 앞 제공자가 실패했을 때 결과를 얻는 것이기 때문이다."""
+    last_err: Optional[Exception] = None
+    for idx, (provider, pmodel, client) in enumerate(chain):
+        try:
+            if provider == "local":
+                return transcribe_local(cp, pmodel, language, chunk_offset)
+            # diarize 모델만 화자명 힌트를 받는다(그 외에는 미지원).
+            spk = speaker_names if "diarize" in pmodel else None
+            return _transcribe_chunk_checked(
+                client, cp, pmodel, language, spk,
+                chunk_offset, debug_dir, chunk_index, work_dir,
+            )
+        except Exception as e:
+            last_err = e
+            logger.error(f"[STT FAIL] chunk {chunk_index} via {provider}/{pmodel}: "
+                         f"{type(e).__name__}: {e}")
+            if _mm.DEBUG:
+                logger.debug(traceback.format_exc())
+            if idx + 1 < len(chain):
+                nxt = chain[idx + 1]
+                warn(f"  청크 {chunk_index} {provider}/{pmodel} 실패 ({e}) "
+                     f"→ {nxt[0]}/{nxt[1]} 로 폴백")
+            else:
+                warn(f"  청크 {chunk_index} {provider}/{pmodel} 실패 — 더 이상 폴백 없음")
+    if last_err:
+        raise last_err
+    raise RuntimeError("사용 가능한 STT 제공자가 없습니다.")
+
+
 def run_stt(
     audio_path: str, model: str = DEFAULT_STT_MODEL,
     language: Optional[str] = None,
@@ -393,8 +629,15 @@ def run_stt(
     step(f"STT 수행 중  (model: {model})")
     work_dir = work_dir or tempfile.gettempdir()
 
-    key    = get_api_key("OPENAI_API_KEY", OPENAI_API_KEY)
-    client = make_openai_client(key)
+    chain = _build_stt_provider_chain(model)
+    if not chain:
+        raise RuntimeError(
+            "사용 가능한 STT 제공자가 없습니다.\n"
+            "  → OpenAI API 키(OPENAI_API_KEY)를 설정하거나,\n"
+            "  → Groq 키(GROQ_API_KEY) 또는 로컬 폴백(stt.local_fallback)을 켜세요."
+        )
+    if len(chain) > 1:
+        info("  STT 폴백 체인: " + " → ".join(f"{p}/{m}" for p, m, _ in chain))
 
     chunks       = split_audio(audio_path, work_dir)
     all_segments: List[Dict] = []
@@ -403,10 +646,9 @@ def run_stt(
     # 청크 분할 시 청크 간 화자 연속성은 보장되지 않지만(예: 청크1의 "화자 A"와
     # 청크2의 "화자 A"가 동일 인물이라는 보장 없음), 청크 내부에서는 diarize가
     # 유효하므로 완전히 포기하지 않고 청크별로 유지 + 라벨에 청크 번호를 붙여
-    # 청크 간 오인 병합을 방지한다.
-    effective_model   = model
-    per_chunk_diarize = len(chunks) > 1 and "diarize" in model
-    if per_chunk_diarize:
+    # 청크 간 오인 병합을 방지한다. (diarize가 아닌 제공자로 폴백되면 speaker가
+    # 비어 있어 아래 라벨링이 자연히 건너뛰어진다.)
+    if len(chunks) > 1 and "diarize" in model:
         warn(f"  청크 분할됨({len(chunks)}개): 청크별 diarize 유지 (청크 간 화자 연속성은 보장되지 않음)")
 
     for i, (cp, chunk_offset) in enumerate(chunks):
@@ -414,30 +656,15 @@ def run_stt(
             info(f"  청크 {i+1}/{len(chunks)} 처리 중...")
 
         t0 = time.time()
-        try:
-            segs = _transcribe_chunk_checked(
-                client, cp, effective_model, language, speaker_names,
-                chunk_offset, debug_dir, i, work_dir,
-            )
-            if per_chunk_diarize:
-                for s in segs:
-                    if s.get("speaker"):
-                        s["speaker"] = f"{s['speaker']} (청크{i+1})"
-            all_segments.extend(segs)
-        except Exception as e:
-            logger.error(f"[STT FAIL] chunk {i}: {type(e).__name__}: {e}")
-            if _mm.DEBUG:
-                logger.debug(traceback.format_exc())
-            if effective_model != FALLBACK_STT_MODEL:
-                warn(f"  {model} 실패 ({e})")
-                warn(f"  → {FALLBACK_STT_MODEL} 로 폴백")
-                segs = _transcribe_chunk_checked(
-                    client, cp, FALLBACK_STT_MODEL, language, None,
-                    chunk_offset, debug_dir, i, work_dir,
-                )
-                all_segments.extend(segs)
-            else:
-                raise
+        segs = _transcribe_chunk_via_chain(
+            chain, cp, language, speaker_names,
+            chunk_offset, debug_dir, i, work_dir,
+        )
+        if len(chunks) > 1:
+            for s in segs:
+                if s.get("speaker"):
+                    s["speaker"] = f"{s['speaker']} (청크{i+1})"
+        all_segments.extend(segs)
 
         elapsed     = time.time() - t0
         total_time += elapsed

@@ -6,6 +6,7 @@
 """
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -731,6 +732,36 @@ class TestIndexableNoteFilter:
         ex = ["99_원본파일", "바이너리"]
         assert not vi._is_indexable_note("Archive/QC/99_원본파일(바이너리)/x.md", ex)
         assert vi._is_indexable_note("Meetings/x.md", ex)
+
+    def test_iter_note_files_is_the_shared_gate(self, tmp_path, monkeypatch):
+        """파일 목록 자체를 한 함수에서 받는다 — 규칙을 복제하면 다시 갈라진다.
+
+        인덱서·graph_sync 백필·그림자 노드 마이그레이션이 모두 이 함수를 쓴다.
+        exclude_dirs 기본값도 여기(default_exclude_dirs) 하나뿐이어야 한다."""
+        vault = tmp_path / "v"
+        (vault / "00_Meetings").mkdir(parents=True)
+        (vault / "99_원본파일").mkdir()
+        for rel in ("00_Meetings/진짜회의.md", "00_Meetings/requirements.txt.md",
+                    "00_Meetings/_템플릿.md", "99_원본파일/원본.md"):
+            (vault / rel).write_text("x", encoding="utf-8")
+        (vault / "루트노트.md").write_text("x", encoding="utf-8")
+
+        monkeypatch.setattr(vi, "_c", lambda key, default=None: default)
+        assert vi.default_exclude_dirs() == vi._DEFAULT_EXCLUDE_DIRS
+        got = {os.path.relpath(f, vault).replace("\\", "/")
+               for f in vi.iter_note_files(str(vault))}
+        assert got == {"00_Meetings/진짜회의.md", "루트노트.md"}
+
+        # 설정을 바꾸면 한 곳만 바꿔도 목록이 따라온다(복제돼 있으면 여기서 깨진다)
+        monkeypatch.setattr(vi, "_c",
+                            lambda key, default=None: (["00_Meetings"] if key ==
+                                                       "indexing.exclude_dirs" else default))
+        got2 = {os.path.relpath(f, vault).replace("\\", "/")
+                for f in vi.iter_note_files(str(vault))}
+        assert got2 == {"루트노트.md", "99_원본파일/원본.md"}
+
+    def test_iter_note_files_handles_missing_vault(self):
+        assert vi.iter_note_files("") == []
 
 
 class TestIndexSaveReplaceRetry:

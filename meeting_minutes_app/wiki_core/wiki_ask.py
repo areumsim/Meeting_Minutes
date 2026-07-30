@@ -423,12 +423,17 @@ class WikiQA:
                         if path_key and path_key not in seen_paths:
                             seen_paths.add(path_key)
                             obs_results.append(hit)
-                from meeting_minutes_app.wiki_core.vault_indexer import _is_indexable_note
+                from meeting_minutes_app.wiki_core.vault_indexer import (
+                    _is_indexable_note, default_exclude_dirs,
+                )
+                _ex_dirs = default_exclude_dirs()
                 for i, r in enumerate(obs_results):
                     fname = r.get("filename", "")
                     # 비-.md / 그림자 사본(*.txt.md 등)은 회의로 오인용되므로 제외(인덱서와 동일 기준).
+                    # exclude_dirs 도 함께 넘긴다 — 안 넘기던 동안엔 이 REST 레이어만
+                    # 제외 폴더(바이너리 원본 아카이브)의 노트를 근거로 인용할 수 있었다.
                     _fn = str(fname).replace("\\", "/")
-                    if not _fn.lower().endswith(".md") or not _is_indexable_note(_fn):
+                    if not _fn.lower().endswith(".md") or not _is_indexable_note(_fn, _ex_dirs):
                         continue
                     title = Path(fname.replace("\\", "/")).stem
                     norm = _norm_title(title)

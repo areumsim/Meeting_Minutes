@@ -83,6 +83,41 @@ _SHADOW_EXTS: set = {
 }
 
 
+#: `indexing.exclude_dirs` 기본값 — 바이너리 원본 아카이브·휴지통.
+_DEFAULT_EXCLUDE_DIRS = ["99_원본파일", "바이너리", "/.trash/"]
+
+
+def default_exclude_dirs() -> List[str]:
+    """현재 설정의 제외 폴더 목록(미설정이면 기본값).
+
+    이 값과 아래 `iter_note_files()`가 "무엇을 노트로 볼지"의 단일 소스다. 과거엔
+    인덱서와 graph_sync 가 glob·`_` 접두·기본값 리스트를 각자 복제해 실제로 갈라졌고
+    (인덱서 473개 vs 그래프 805개), 위키 검색에는 없는 노트가 그래프 노드로 들어갔다.
+    새 소비자(마이그레이션·wiki_ask REST 필터)도 반드시 이 함수를 쓴다."""
+    return list(_c("indexing.exclude_dirs", _DEFAULT_EXCLUDE_DIRS) or [])
+
+
+def iter_note_files(vault_path: str,
+                    exclude_dirs: Optional[Sequence[str]] = None) -> List[str]:
+    """볼트에서 '노트'로 볼 .md 파일 경로 목록(절대경로).
+
+    제외: `_` 접두(템플릿·색인) · 그림자 사본 · exclude_dirs.
+    exclude_dirs 를 생략하면 `default_exclude_dirs()`를 쓴다.
+    (리스트로 돌려준다 — 호출부가 개수를 로그로 남긴다.)"""
+    if not vault_path:
+        return []
+    ex = default_exclude_dirs() if exclude_dirs is None else list(exclude_dirs)
+    out: List[str] = []
+    for f in glob.glob(os.path.join(vault_path, "**", "*.md"), recursive=True):
+        if os.path.basename(f).startswith("_"):
+            continue
+        rel = os.path.relpath(f, vault_path).replace("\\", "/")
+        if not _is_indexable_note(rel, ex):
+            continue
+        out.append(f)
+    return out
+
+
 def _is_indexable_note(rel_path: str, exclude_dirs: Sequence[str] = ()) -> bool:
     """볼트의 .md 파일을 '노트'로 인덱싱할지 판정한다.
 
@@ -303,17 +338,9 @@ class VaultIndexer:
         raw: Dict[str, str] = {}  # rel_path → body text
         notes: Dict[str, Dict] = {}
 
-        md_files = glob.glob(os.path.join(self.vault_path, "**", "*.md"), recursive=True)
-        # 언더스코어로 시작하는 템플릿/인덱스 노트 제외 (false positive 방지)
-        md_files = [f for f in md_files if not os.path.basename(f).startswith("_")]
-        # 그림자 사본(*.txt.md 등)·바이너리 아카이브 폴더 제외 — 회의 오인용 1차 방어.
-        exclude_dirs = _c("indexing.exclude_dirs",
-                          ["99_원본파일", "바이너리", "/.trash/"]) or []
-        md_files = [
-            f for f in md_files
-            if _is_indexable_note(
-                os.path.relpath(f, self.vault_path).replace("\\", "/"), exclude_dirs)
-        ]
+        # `_` 접두(템플릿·색인)·그림자 사본(*.txt.md 등)·바이너리 아카이브 폴더 제외.
+        # 판정은 iter_note_files() 한 곳 — graph_sync 백필·마이그레이션도 같은 함수를 쓴다.
+        md_files = iter_note_files(self.vault_path)
         if verbose:
             print(f"[indexer] {len(md_files)}개 .md 파일 발견 (_시작·그림자·제외폴더 제외)")
 

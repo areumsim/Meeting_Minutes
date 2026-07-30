@@ -14,7 +14,6 @@ Obsidian 노트는 절대 수정하지 않는다.
 
 from __future__ import annotations
 
-import glob
 import json
 import os
 import re
@@ -319,22 +318,15 @@ def _iter_vault_notes():
     그림자 사본(`*.txt.md` 등)과 `indexing.exclude_dirs`를 제외해 473개를 인덱싱하는데
     여기는 `_` 접두만 걸러 805개를 스캔했다. 그 차이(약 330개)만큼 **위키 검색에는
     없는 노트가 그래프에는 노드로 들어갔다** — 그림자 사본이 회의로 오인용되던 문제와
-    같은 뿌리다. 그래서 판정은 `_is_indexable_note()` 한 곳으로 수렴시킨다."""
+    같은 뿌리다. 그래서 파일 목록 자체를 `vault_indexer.iter_note_files()`에서 받는다
+    (규칙을 복제하지 않는다 — 복제하면 기본값 하나만 바뀌어도 다시 갈라진다)."""
     from meeting_minutes_app.common import config_loader
-    from meeting_minutes_app.wiki_core.vault_indexer import _is_indexable_note
+    from meeting_minutes_app.wiki_core.vault_indexer import iter_note_files
 
     vault_path = config_loader.get("indexing.vault_path") or config_loader.get("obsidian.vault_path", "")
     if not vault_path:
         return
-    # 기본값도 인덱서와 같아야 한다(둘 중 하나만 바뀌면 다시 갈라진다).
-    exclude_dirs = config_loader.get("indexing.exclude_dirs",
-                                    ["99_원본파일", "바이너리", "/.trash/"]) or []
-    for fpath in glob.glob(os.path.join(vault_path, "**", "*.md"), recursive=True):
-        if os.path.basename(fpath).startswith("_"):
-            continue
-        rel = os.path.relpath(fpath, vault_path).replace("\\", "/")
-        if not _is_indexable_note(rel, exclude_dirs):
-            continue
+    for fpath in iter_note_files(vault_path):
         try:
             content = open(fpath, encoding="utf-8", errors="replace").read()
         except Exception:

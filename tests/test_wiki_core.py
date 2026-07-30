@@ -723,6 +723,14 @@ class TestIndexableNoteFilter:
         assert not vi._is_indexable_note("c/data.json.md")
         assert not vi._is_indexable_note("d/slides.pptx.md")
 
+    def test_excludes_hwp_msg_sh_shadow_copies(self):
+        """[실전 버그] 이 4개가 _SHADOW_EXTS에 없어 24건이 인덱스에 들어와 있었다
+        (2026-07-30 실측, 그중 6건이 실명 참가신청서·개인정보동의서)."""
+        assert not vi._is_indexable_note("Inbox/[첨부1] 참가신청서(홍길동).hwp.md")
+        assert not vi._is_indexable_note("Inbox/[별첨1] 프로그램 신청서.hwpx.md")
+        assert not vi._is_indexable_note("메일/Re 임원 참여 계획 회신.msg.md")
+        assert not vi._is_indexable_note("code/setup_tmux_vscode.sh.md")
+
     def test_keeps_real_notes(self):
         assert vi._is_indexable_note("회의별/260625 메가존 해커톤 회의.md")
         assert vi._is_indexable_note("notes/2026-07-08.md")

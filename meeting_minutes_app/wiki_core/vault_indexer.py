@@ -77,9 +77,13 @@ def _resolve_note_date(meta: Dict[str, Any], rel_path: str) -> str:
 
 # 텍스트추출 그림자 사본(requirements.txt.md, foo.md.md, bar.json.md 등)의 원본 확장자.
 # 바이너리/코드 원본의 부산물이라 '노트'가 아니며, '가장 최근 회의'로 오인용되던 원인이다.
+# 목록에서 빠진 확장자는 조용히 인덱스로 새어 든다 — 2026-07-30 실측에서 .hwp/.hwpx/.msg/.sh
+# 24건이 이미 들어와 있었고 그중 6건이 실명 참가신청서·개인정보동의서였다. 한글(hwp)·이메일
+# (msg)·셸(sh)은 국내 사내 문서와 코드 아카이브에 흔하므로 처음부터 넣어 둔다.
 _SHADOW_EXTS: set = {
     ".txt", ".md", ".json", ".csv", ".tsv", ".py", ".ipynb", ".yaml", ".yml",
     ".pptx", ".ppt", ".docx", ".doc", ".xlsx", ".xls", ".pdf", ".log", ".html",
+    ".hwp", ".hwpx", ".msg", ".sh",
 }
 
 

@@ -242,6 +242,15 @@ export default function FileUpload({ onComplete }: { onComplete: (id: string) =>
                 className="w-full px-3 py-2.5 bg-zinc-50 border border-zinc-200 rounded-lg focus:ring-2 focus:ring-zinc-900 outline-none transition-all font-medium text-sm"
               />
             </div>
+            {/*
+              녹취 고지 — Recorder 의 문구와 같은 톤·같은 자리(입력 아래 정적 한 줄).
+              모달·상시 배너는 두지 않는다(0c28713 판단 유지: 매번 확인 강제는 실익 없이
+              사용자만 이탈시킨다). 실시간 경로에만 있던 안내를 업로드 경로에도 둔 것은
+              "이 도구는 몰래 녹음용이 아니다"가 진입점마다 최소 1회 보여야 하기 때문이다.
+            */}
+            <p className="text-xs text-zinc-400 sm:col-span-2">
+              업로드하는 녹음은 <b>참석자에게 녹음·자동 전사 사실을 알린 뒤</b> 취득한 것이어야 합니다.
+            </p>
           </div>
 
           <div className="space-y-3">

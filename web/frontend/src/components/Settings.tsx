@@ -780,8 +780,15 @@ function WatcherCard() {
           {running ? "● 감시 중" : "○ 중지됨"}
         </span>
       </h3>
-      <p className="text-xs text-brand-500 mb-3">
+      <p className="text-xs text-brand-500 mb-1">
         지정한 폴더에 새 녹음 파일이 생기면 자동으로 회의록을 생성합니다. 아래에서 감시할 폴더를 추가하세요.
+      </p>
+      {/*
+        녹취 고지 — Recorder·FileUpload 와 같은 톤의 정적 한 줄. 자동 처리 경로라
+        처리 시점에 사람이 없으므로, 폴더를 **지정하는** 이 자리가 유일한 고지 지점이다.
+      */}
+      <p className="text-xs text-brand-400 mb-3">
+        감시 폴더에 넣는 녹음은 <b>참석자에게 녹음·자동 전사 사실을 알린 뒤</b> 취득한 것이어야 합니다.
       </p>
 
       {/* 감시 폴더 목록 + 추가/삭제 */}

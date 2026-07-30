@@ -3,7 +3,7 @@ import {
   Rocket, KeyRound, FolderOpen, RefreshCw, Power, LifeBuoy, ExternalLink, Sparkles,
   Wand2, Settings as SettingsIcon, FileAudio, Mic, FileText, MessageCircleQuestion,
   ClipboardList, CheckCircle, ChevronDown, Mail, Copy, Download, Share2, Network,
-  CalendarClock, Search, Trash2, Zap, AlertCircle, GitMerge, Play, ListChecks,
+  CalendarClock, Search, Trash2, Zap, AlertCircle, GitMerge, Play, ListChecks, ShieldCheck,
 } from "lucide-react";
 
 // 도움말에서 특정 화면으로 바로 이동시키기 위한 최소 프롭(선택).
@@ -347,6 +347,23 @@ export default function Help({ onNavigate }: { onNavigate?: (v: NavTarget) => vo
             <p>문제가 계속되면 <span className="font-mono">MeetingMinutesData\data\logs\web_exe.log</span> 파일을 배포/개발 담당자에게 전달하세요. 원인 파악에 큰 도움이 됩니다.</p>
           </Detail>
         </div>
+      </Card>
+
+      {/*
+        녹취 정책 — 제품 정체성이라 도움말 안에 고정해 둔다(PRD_Natively FR-A3/A4).
+        README 에만 있으면 배포본 사용자는 볼 일이 없다.
+      */}
+      <Card icon={<ShieldCheck size={16} />} title="녹취 정책 · 사용 수칙">
+        <p>
+          이 도구는 <b>참가자 고지·동의를 전제로 한 회의 기록 도구</b>이며, 탐지 회피(스텔스)
+          기능 — 창 숨김, 프로세스 위장, 화면공유 회피 — 을 <b>의도적으로 제공하지 않습니다.</b>
+        </p>
+        <ul className="list-disc pl-5 space-y-1 mt-2">
+          <li><b>녹음 전에 알리기.</b> 실시간 녹음·파일 업로드·폴더 감시 어느 경로든, 참석자에게 녹음과 자동 전사 사실을 먼저 알려 주세요.</li>
+          <li><b>승인이 필요한 회의 구분.</b> 외부 참석자가 있거나 민감 정보가 오가는 회의는 사내 규정에 따라 사전 승인을 받으세요. 개인정보·인사 관련 논의는 녹취 대상에서 빼는 편이 안전합니다.</li>
+          <li><b>산출물에 출처가 남습니다.</b> 만들어진 회의록 노트에는 녹취 방식(업로드/실시간/폴더감시)·처리 시각·사용한 STT·LLM 모델·도구 버전이 자동으로 기록됩니다. 나중에 "이 회의록이 어떻게 만들어졌나"를 확인할 수 있고, 몰래 만든 기록이 아니라는 증거가 됩니다.</li>
+          <li><b>데이터는 이 PC 에 남습니다.</b> 오디오·회의록·검색 인덱스는 전부 내 PC 에 저장되고, 외부로 나가는 것은 STT·LLM API 호출 내용뿐입니다(내 API 키 사용). 다만 <b>로컬 실행이 곧 정책 준수는 아닙니다</b> — 위의 고지·승인은 별개로 지켜야 합니다.</li>
+        </ul>
       </Card>
 
       <p className="text-center text-xs text-brand-400 mt-4">

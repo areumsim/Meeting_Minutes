@@ -921,15 +921,6 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
       const mixed = audioContext.createGain();
       source.connect(mixed);
 
-      if (modeDef.system) {
-        const sysStream = await captureSystemAudio();
-        if (sysStream) {
-          displayStreamRef.current = sysStream;
-          audioContext.createMediaStreamSource(sysStream).connect(mixed);
-          setSystemAudioOn(true);
-        }
-      }
-
       const analyser = audioContext.createAnalyser();
       analyser.fftSize = 256;
       mixed.connect(analyser);
@@ -993,6 +984,32 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
       setIsRecording(true);
       setIsPaused(false);
       setStatus("recording");
+
+      // 이 PC 소리는 마이크가 이미 흐르기 시작한 **뒤에** 붙인다. 공유 창을 고르는 데는
+      // 몇 초~수십 초가 걸리는데, 그동안 마이크 파이프라인까지 멈춰 있으면 그 구간 발화가
+      // 통째로 유실된다(회의 도중에 녹음을 시작하면 바로 겪는다). mixed 노드는 이미 살아
+      // 있으므로 사용자가 공유를 허용하는 순간 라이브로 합류한다.
+      // 여기서 실패해도 이미 돌아가는 마이크 녹음을 죽이면 안 된다(아래 catch 는 마이크
+      // 권한 거부용이라 안내가 엉뚱해지고 세션이 idle 로 돌아간다) → 자체 try 로 가둔다.
+      if (modeDef.system) {
+        try {
+          const sysStream = await captureSystemAudio();
+          if (sysStream) {
+            // 공유를 고르는 사이 사용자가 녹음을 멈췄을 수 있다. 그때 stopAll()이 이미
+            // AudioContext 를 닫았으므로 여기서 노드를 만들면 예외가 난다 — 스트림만 정리한다.
+            if (audioContextRef.current === audioContext) {
+              audioContext.createMediaStreamSource(sysStream).connect(mixed);
+              displayStreamRef.current = sysStream;
+              setSystemAudioOn(true);
+            } else {
+              sysStream.getTracks().forEach((t) => t.stop());
+            }
+          }
+        } catch (e) {
+          console.error("System audio attach failed:", e);
+          setCaptureNote("이 PC 소리를 붙이지 못했습니다 — 마이크만 녹음합니다.");
+        }
+      }
 
     } catch (err: any) {
       console.error("Audio capture error:", err);
@@ -1439,7 +1456,7 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
                       </div>
                       <p className="text-[11px] text-zinc-400 leading-relaxed">
                         {captureMode === "mic+system"
-                          ? "시작하면 공유 창이 뜹니다 — [전체 화면]을 고르고 아래 [시스템 오디오도 공유]를 꼭 켜세요. 화면은 녹화되지 않고 소리만 씁니다."
+                          ? "녹음이 시작된 직후 공유 창이 뜹니다 — [전체 화면]을 고르고 아래 [시스템 오디오도 공유]를 꼭 켜세요. 고르는 동안에도 마이크는 이미 녹음 중이고, 화면은 녹화되지 않습니다."
                           : captureMode === "room"
                           ? "멀리서 나는 소리가 지워지지 않도록 에코 취소를 끄고 마이크 감도를 올립니다."
                           : "헤드셋·근접 발화 기준입니다. 온라인 회의 상대 목소리나 회의실 TV 소리가 안 잡히면 위에서 상황을 바꿔보세요."}

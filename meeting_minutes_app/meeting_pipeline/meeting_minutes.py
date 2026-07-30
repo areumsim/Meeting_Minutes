@@ -539,6 +539,9 @@ def main():
                         help="이전 실행 이어서 (STT 건너뜀)")
     parser.add_argument("--force-stt", action="store_true",
                         help="기존 STT/전사 결과가 있어도 새로 STT 수행")
+    parser.add_argument("--force-republish", action="store_true",
+                        help="같은 녹음의 회의록이 볼트에 이미 있어도 다시 발행(덮어쓰기). "
+                             "기본은 중복 생성을 막기 위해 볼트 기록을 건너뛴다")
     parser.add_argument("--estimate-cost", action="store_true",
                         help="비용 추정만 수행 (실제 처리 안 함)")
     parser.add_argument("--notify", choices=["email", "slack", "teams"],

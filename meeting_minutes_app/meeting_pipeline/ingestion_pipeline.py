@@ -379,6 +379,10 @@ class IngestionPipeline:
                     "source_file_date": _extract_date_from_path(audio_path),
                     "stt_meta": stt_meta,
                     "transcript_md": transcript_md,
+                    # --force 는 여기서도 같은 뜻이다 — 위(:235)의 '이미 처리된 녹음 노트'
+                    # 검사는 예상 경로만 보므로 폴더 라우팅이 갈리면 못 잡는다.
+                    # 발행 직전 frontmatter 판정이 그 빈틈을 막고, --force 로 덮어쓴다.
+                    "force_republish": bool(force),
                 },
             )
             res = fz.run_post_session(inputs, options)

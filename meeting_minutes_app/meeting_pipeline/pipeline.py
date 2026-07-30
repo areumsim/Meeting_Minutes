@@ -324,6 +324,7 @@ def process_single(
                 "source_file_date": source_file_date,
                 "stt_meta": stt_meta,
                 "transcript_md": transcript_for_publish,
+                "force_republish": bool(getattr(args, "force_republish", False)),
             },
         ),
         _BatchEvents(),

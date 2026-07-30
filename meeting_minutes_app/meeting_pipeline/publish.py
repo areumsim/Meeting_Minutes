@@ -220,6 +220,61 @@ def _stt_quality_meta(
     }
 
 
+#: frontmatter 를 찾기 위해 노트 앞부분만 읽는다(전문 로드는 볼트 전체에서 낭비).
+#: 회의록 frontmatter 는 길어야 1.5KB 남짓이라 넉넉하다.
+_FRONTMATTER_PROBE_BYTES = 8192
+
+
+def find_existing_note_for_audio(source_audio: str, session_date: str) -> str:
+    """같은 오디오·같은 회의 날짜로 이미 만들어진 회의록의 볼트 상대경로(없으면 '').
+
+    같은 오디오를 재처리하면 회의록이 하나 더 생기던 문제의 마지막 방어선이다.
+    파일명 규칙(note_builder.meeting_note_basename)을 고쳐도 남는 축이 둘 있다 —
+    classify_meeting_route() 가 LLM 으로 고르는 **저장 폴더**가 실행마다 갈리고,
+    **title** 이 진입점마다 다르다(웹은 사용자 입력, 폴더감시는 파일 stem). 그래서
+    경로로는 같은 회의를 알아볼 수 없고 frontmatter 로 판정해야 한다.
+
+    키는 `source_audio`(basename) + `session_date` — 2026-07-30 실볼트 실측에서
+    중복 4쌍 전부가 이 두 필드는 일치했다(달랐던 건 파일명·폴더·title 뿐).
+
+    노트 목록은 vault_indexer.iter_note_files() 하나만 쓴다(그림자 사본·제외 폴더
+    판정을 복제하면 갈라진다). 볼트 경로가 없으면 판정을 포기하고 '' 를 돌려준다 —
+    막지 못할 뿐 오탐으로 발행을 멈추지는 않는다.
+    """
+    audio = os.path.basename(str(source_audio or "")).strip()
+    date = str(session_date or "").strip()
+    if not audio or not date:
+        return ""
+    try:
+        from meeting_minutes_app.wiki_core.vault_indexer import iter_note_files
+        from meeting_minutes_app.wiki_core.obsidian import parse_frontmatter, date_key
+    except ImportError:
+        return ""
+
+    vault = _c("indexing.vault_path", "") or _c("obsidian.vault_path", "")
+    if not vault or not os.path.isdir(str(vault)):
+        return ""
+
+    want_date = date_key(date) or date
+    for fpath in iter_note_files(str(vault)):
+        try:
+            with open(fpath, encoding="utf-8", errors="replace") as f:
+                head = f.read(_FRONTMATTER_PROBE_BYTES)
+        except OSError:
+            continue
+        if audio not in head:                      # 값싼 사전 필터 — 대부분 여기서 걸러진다
+            continue
+        meta, _ = parse_frontmatter(head)
+        if str(meta.get("type", "")).strip().strip('"') == "transcript":
+            continue                               # 전사 노트는 부모를 따라간다
+        if os.path.basename(str(meta.get("source_audio", "")).strip().strip('"')) != audio:
+            continue
+        note_date = date_key(str(meta.get("session_date") or meta.get("date") or ""))
+        if note_date and note_date == want_date:
+            return os.path.relpath(fpath, str(vault)).replace("\\", "/")
+    return ""
+
+
 def _detect_meeting_scope(title: str = "", topic: str = "") -> str:
     """내부/외부 회의 구분을 보수적으로 추론한다."""
     text = f"{title} {topic}".lower()
@@ -290,6 +345,7 @@ def enrich_and_publish(
     stt_meta: Optional[Dict[str, Any]] = None,
     transcript_md: str = "",
     evidence: Optional[List[str]] = None,
+    force_republish: bool = False,
 ) -> Dict[str, Any]:
     """배치/실시간/화자수정 경로가 공유하는 후처리:
        1) 용어·인물·기업 외부검색 보완(enrichment)
@@ -375,7 +431,23 @@ def enrich_and_publish(
             do_merge = _confirm_plan_merge(match, title) if match else False
             result["merged"] = do_merge
 
-            if match and do_merge:
+            # 2-3) 같은 오디오로 이미 만든 회의록이 있으면 새로 만들지 않는다.
+            # 파일명 규칙을 고쳐도 저장 폴더(LLM 라우팅)와 title(진입점별)이 달라지면
+            # 경로가 갈려 노트가 하나 더 생긴다. 덮어쓸지 이전 것을 버릴지는 사람이
+            # 판단할 일이라 여기서는 멈추고 알린다(폴더감시의 '이미 처리됨 → 건너뜀'과
+            # 같은 결). 계획 노트 병합은 대상 노트가 이미 정해져 있으므로 제외한다.
+            dup = ""
+            if not (match and do_merge) and not force_republish:
+                dup = find_existing_note_for_audio(source_audio, session_dt or source_file_date)
+
+            if dup:
+                result["duplicate_of"] = dup
+                result["obsidian_path"] = dup
+                warn(f"같은 녹음의 회의록이 이미 있습니다 → {dup}")
+                warn("  새 노트를 만들지 않고 볼트 기록만 건너뜁니다"
+                     "(output 폴더 산출물·알림은 정상 진행).")
+                warn("  덮어쓰려면 --force(폴더감시) 또는 force_republish=True 로 다시 실행하세요.")
+            elif match and do_merge:
                 path = obs.update_planned_note(
                     match, title=title, body_md=minutes_md, doc_type=doc_type,
                     topic=topic, attendees=attendees or [], session_dt=session_dt,

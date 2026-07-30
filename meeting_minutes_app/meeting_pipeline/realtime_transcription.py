@@ -980,6 +980,10 @@ class RealtimeTranscriber:
         # STT 호출이 실패해 폐기한 청크 수 — 종료 시 "전사된 내용이 없다"의 원인을
         # 마이크 문제와 구분해 안내하기 위해 센다(_generate_output 참조).
         self._stt_error_chunks = 0
+        # 예외 없이 빈 텍스트만 돌아온 청크 수. VAD가 발화로 판정한 청크만 STT로 가지만
+        # (AudioRecorder._process_frame) VAD도 잡음을 발화로 볼 수 있어, 이 수만으로
+        # 원인을 단정하지 않는다 — 세그먼트 0으로 끝난 세션의 안내에만 쓴다.
+        self._stt_empty_chunks = 0
         # 번역을 STT와 병렬 실행하기 위한 스레드 풀
         self._translator_pool = ThreadPoolExecutor(max_workers=2)
 
@@ -1131,6 +1135,7 @@ class RealtimeTranscriber:
         # diarize 모델: result가 List[Dict] (화자별 세그먼트)
         if self._use_diarize and isinstance(result, list):
             if not result or all(not s.get("text", "").strip() for s in result):
+                self._stt_empty_chunks += 1
                 return None
             combined_text = ""
             for ds in result:
@@ -1176,7 +1181,14 @@ class RealtimeTranscriber:
 
         # 일반 모델: result가 str
         text = result if isinstance(result, str) else ""
-        if not text or _is_cjk_hallucination(text):
+        if not text.strip():
+            # 호출은 성공했는데 내용이 비어 있다. VAD가 발화로 판정한 청크이므로
+            # 원인은 저음량이거나 제공자의 조용한 실패다 — 어느 쪽인지는 여기서
+            # 단정하지 않고, 세그먼트가 하나도 없이 끝났을 때만 안내에 쓴다.
+            self._stt_empty_chunks += 1
+            return None
+        if _is_cjk_hallucination(text):
+            # 환각 필터가 지운 것은 '빈 인식 결과'가 아니다(위 카운터에 넣지 않는다).
             return None
         text = self._clean_text(text)
         if not text:
@@ -2066,9 +2078,18 @@ class RealtimeSession:
             # 원인이 둘인데 과거엔 늘 마이크 문제로 안내해 오진을 유발했다.
             # STT 호출이 실패해 폐기된 청크가 있으면 마이크가 아니라 음성 인식 쪽이다.
             failed = getattr(self.transcriber, "_stt_error_chunks", 0)
-            if failed:
-                print(f"\n  전사된 내용이 없습니다 — 마이크 문제가 아니라 음성 인식 호출이"
-                      f" {failed}회 실패했습니다.")
+            empty  = getattr(self.transcriber, "_stt_empty_chunks", 0)
+            if failed or empty:
+                if failed:
+                    print(f"\n  전사된 내용이 없습니다 — 마이크 문제가 아니라 음성 인식 호출이"
+                          f" {failed}회 실패했습니다.")
+                else:
+                    # 호출은 성공했는데 내용이 비어서 돌아왔다 — 저음량일 수도, 제공자가
+                    # 내용을 주지 않은 것일 수도 있어 한쪽으로 단정하지 않는다.
+                    print(f"\n  전사된 내용이 없습니다 — 발화로 감지된 구간 {empty}개가 모두"
+                          f" 빈 인식 결과로 돌아왔습니다.")
+                    print("  마이크 음량이 매우 낮거나, 음성 인식이 내용을 돌려주지 못한"
+                          " 경우입니다(둘 다 확인해 보세요).")
                 if self._audio_backup_path:
                     print(f"  녹음은 저장돼 있습니다: {self._audio_backup_path}")
                     print(f"  아래 명령으로 다시 처리하면 Groq·로컬 백업까지 쓰는 전체"

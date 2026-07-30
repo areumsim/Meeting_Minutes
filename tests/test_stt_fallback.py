@@ -608,6 +608,39 @@ class TestSttFailureIsCounted:
         assert tr.process(np.zeros(16, dtype=np.float32)) is None
         assert tr.process(np.zeros(16, dtype=np.float32)) is None
         assert tr._stt_error_chunks == 2
+        # 예외로 폐기된 청크는 '빈 인식 결과'가 아니다(두 원인을 섞으면 안내가 흐려진다)
+        assert tr._stt_empty_chunks == 0
+
+    def test_process_counts_empty_transcripts_separately(self, monkeypatch):
+        """예외 없이 빈 텍스트가 온 청크는 별도로 센다.
+
+        원인이 둘(저음량 / 제공자의 조용한 실패)이라 어느 쪽으로도 단정할 수 없지만,
+        세지 않으면 전사 0건 세션이 전부 "마이크를 확인하세요"로만 안내된다."""
+        import numpy as np
+        rt = _import_rt(monkeypatch)
+
+        tr = rt.RealtimeTranscriber(MagicMock(), stt_model="gpt-4o-transcribe",
+                                    language="ko")
+        monkeypatch.setattr(rt.AudioRecorder, "to_wav_bytes",
+                            staticmethod(lambda _a: b"\x00" * 16))
+        monkeypatch.setattr(tr, "_run_stt", lambda _w: "   ")
+        assert tr.process(np.zeros(16, dtype=np.float32)) is None
+        assert tr._stt_empty_chunks == 1
+        assert tr._stt_error_chunks == 0
+
+    def test_hallucination_filtered_text_is_not_counted_as_empty(self, monkeypatch):
+        """환각 필터가 지운 텍스트는 '빈 인식 결과'가 아니다 — 인식은 됐다."""
+        import numpy as np
+        rt = _import_rt(monkeypatch)
+
+        tr = rt.RealtimeTranscriber(MagicMock(), stt_model="gpt-4o-transcribe",
+                                    language="ko")
+        monkeypatch.setattr(rt.AudioRecorder, "to_wav_bytes",
+                            staticmethod(lambda _a: b"\x00" * 16))
+        monkeypatch.setattr(tr, "_run_stt", lambda _w: "这是中文的幻觉文本内容")
+        assert tr.process(np.zeros(16, dtype=np.float32)) is None
+        assert tr._stt_empty_chunks == 0
+        assert tr._stt_error_chunks == 0
 
 
 def _mock_openai_client() -> MagicMock:

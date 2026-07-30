@@ -199,6 +199,11 @@ class BrowserRealtimeSession:
         # STT 호출이 실패해 폐기한 청크 수 — 종료 시 "저장할 내용이 없다"의 원인을
         # 무발화와 구분해 안내하기 위해 센다(_finalize 참조).
         self._stt_failed_chunks = 0
+        # 예외 없이 빈 텍스트만 돌아온 청크 수. 이것만으로는 원인을 단정할 수 없다 —
+        # 무음 청크 드롭(realtime.drop_silent_chunks)을 끄면 무음도 STT 로 가고, 켜져
+        # 있어도 발화 판정은 RMS 임계값 한 번 넘김이라 잡음 구간이 통과한다. 그래서
+        # 세그먼트가 0인 종료 분기에서 "가능한 원인 두 가지"를 함께 알리는 데만 쓴다.
+        self._stt_empty_chunks = 0
 
     async def run(self):
         """메인 실행 루프."""
@@ -1158,6 +1163,12 @@ class BrowserRealtimeSession:
                             pass
                 else:
                     stt_fail_streak = 0
+                    if not (text or "").strip():
+                        # 예외 없이 빈 텍스트 — 원인이 둘이다(무음/저음량 구간이거나,
+                        # 제공자가 200 과 함께 아무 내용도 주지 않는 조용한 실패).
+                        # 여기서는 세기만 한다: 라이브 중 경고나 다른 제공자 재시도는
+                        # 발화 판정(RMS)이 거칠어 오탐 비용이 더 크다.
+                        self._stt_empty_chunks += 1
                     await _emit_text(text or "", c_start, c_end)
             except Exception:
                 traceback.print_exc()
@@ -1543,6 +1554,17 @@ class BrowserRealtimeSession:
                     f"없습니다 (마이크 문제 아님) — API 키·네트워크를 확인하세요."
                 )
                 _empty_reason = "stt_failed"
+            elif self._stt_empty_chunks:
+                # 호출은 성공했는데 내용이 비어서 돌아온 경우. 마이크 음량이 매우 낮은
+                # 것일 수도, 제공자가 응답만 하고 내용을 주지 않은 것일 수도 있어
+                # 한쪽으로 단정하지 않는다(단정하면 나머지 절반에게 틀린 지시가 된다).
+                _empty_msg = (
+                    f"소리가 있던 구간 {self._stt_empty_chunks}개가 모두 빈 인식 결과로 "
+                    f"돌아와 저장할 내용이 없습니다 — 마이크 음량이 매우 낮거나, 음성 "
+                    f"인식이 내용을 돌려주지 못한 경우입니다. 마이크 음량과 API 키·"
+                    f"네트워크를 함께 확인해 주세요."
+                )
+                _empty_reason = "stt_failed"   # 프런트는 조치가 필요한 안내로 취급
             else:
                 _empty_msg = "음성이 감지되지 않아 저장할 내용이 없습니다."
                 _empty_reason = "no_speech"

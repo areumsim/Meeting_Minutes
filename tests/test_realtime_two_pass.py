@@ -391,6 +391,53 @@ class TestTwoPassPipeline:
 
 # ━━━━━━━━ 통합: 환각 방어 (무음 스킵 / 언어 고정 / 반복 차단) ━━━━━━━━
 
+class TestEmptyTranscriptDiagnosis:
+    """전사 0건으로 끝난 세션의 원인 안내.
+
+    과거엔 늘 "음성이 감지되지 않았다"(=마이크)로만 안내했다. 원인은 셋이고 조치가
+    다르다: (a) 정말 무발화, (b) STT 호출 실패(예외), (c) 호출은 됐는데 빈 결과.
+    (c)는 저음량일 수도 제공자의 조용한 실패일 수도 있어 **어느 쪽으로도 단정하지
+    않는다** — 단정하면 나머지 절반에게 틀린 조치를 지시하게 된다."""
+
+    def test_empty_transcripts_are_counted(self):
+        """발화로 판정된 청크가 빈 텍스트를 돌려주면 센다(라이브 폴백은 유발하지 않음)."""
+        frames = [{"bytes": _loud_frame(5.5)} for _ in range(2)]
+        session, ws, client = _run_session(
+            frames, _FakeCfg({"realtime.two_pass": False}), fast_text="")
+        assert client.audio.transcriptions.create.call_count == 2
+        assert session._stt_empty_chunks == 2
+        assert session._stt_failed_chunks == 0
+        assert not [m for m in ws.sent if m.get("type") == "segment"]
+
+    def _finalize_payload(self, failed=0, empty=0):
+        ws = _FakeWS([])
+        session = rt.BrowserRealtimeSession(ws, {})
+        session.session_id = None          # DB 기록·삭제 생략
+        session._stt_failed_chunks = failed
+        session._stt_empty_chunks = empty
+        asyncio.run(session._finalize(MagicMock(), "ko", False, "meeting", "", ""))
+        return [m for m in ws.sent if m.get("type") == "empty"][0]
+
+    def test_no_speech_keeps_microphone_wording(self):
+        msg = self._finalize_payload()
+        assert msg["reason"] == "no_speech"
+        assert "음성이 감지되지 않아" in msg["message"]
+
+    def test_stt_exception_says_not_microphone(self):
+        msg = self._finalize_payload(failed=3)
+        assert msg["reason"] == "stt_failed"
+        assert "3회 실패" in msg["message"] and "마이크 문제 아님" in msg["message"]
+
+    def test_empty_results_offer_both_causes(self):
+        msg = self._finalize_payload(empty=4)
+        assert msg["reason"] == "stt_failed"      # 조치가 필요한 안내로 취급(6초 표시)
+        assert "4개" in msg["message"]
+        # 한쪽으로 단정하지 않는다 — 두 원인이 모두 문장에 있어야 한다
+        assert "마이크 음량" in msg["message"]
+        assert "API 키" in msg["message"]
+        assert "마이크 문제 아님" not in msg["message"]
+
+
 class TestHallucinationDefense:
     """한국어 회의 전사에 외국어 조각·반복 문장이 섞이던 문제(2026-07-28)의 회귀 방어."""
 

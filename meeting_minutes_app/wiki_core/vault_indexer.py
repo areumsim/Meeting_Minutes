@@ -277,6 +277,35 @@ def path_matcher(path_prefixes: Optional[Sequence[str]],
     return _match_prefix
 
 
+def _embedding_cost_estimate(chars: int, model: str) -> float:
+    """임베딩 예상 비용(USD). pricing 을 못 불러오면 0(판정 포기)."""
+    try:
+        from meeting_minutes_app.common import pricing
+        return pricing.embedding_cost_from_chars(chars, model)
+    except Exception:
+        return 0.0
+
+
+def _embedding_budget_blocked(est_cost: float) -> str:
+    """월 지출 한도를 넘기면 사유 문자열, 아니면 ''.
+
+    한도는 지금까지 파일 업로드 경로에서만 강제됐는데, 위키 임베딩은 세션 없이
+    (재빌드 버튼·폴더 연결·시작 시 자동·CLI reindex) 돌아서 그 검사를 통째로
+    비켜 갔다. 합계 판정은 usage_log 한 곳을 쓴다 — 웹과 CLI 가 갈리지 않게.
+    """
+    try:
+        from meeting_minutes_app.common import usage_log
+        cap = float(_c("cost.monthly_cap_usd", 0) or 0)
+        if cap <= 0:                    # 0 = 무제한(기본값)
+            return ""
+        mtd = usage_log.month_to_date_spend()
+        if mtd + est_cost > cap:
+            return f"이번 달 ${mtd:.2f} + 예상 ${est_cost:.4f} > 한도 ${cap:.2f}"
+    except Exception:
+        pass                            # 판정 실패로 인덱싱을 막지는 않는다
+    return ""
+
+
 def _l2_normalize(vec: List[float]) -> List[float]:
     norm = math.sqrt(sum(x * x for x in vec)) or 1.0
     return [x / norm for x in vec]
@@ -561,22 +590,48 @@ class VaultIndexer:
             self._emb_client = None
         return self._emb_client
 
-    def _embed_texts(self, texts: List[str]) -> Optional[List[Optional[List[float]]]]:
-        """텍스트 목록을 임베딩한다. 실패 시 None (호출부는 TF-IDF로 폴백)."""
+    def _embed_texts(self, texts: List[str],
+                     meter: Optional[str] = None) -> Optional[List[Optional[List[float]]]]:
+        """텍스트 목록을 임베딩한다. 실패 시 None (호출부는 TF-IDF로 폴백).
+
+        meter 를 주면 **실사용 토큰**(응답 usage)으로 비용을 usage_log 에 기록한다.
+        임베딩 API 는 usage 를 돌려주므로 STT/LLM 과 달리 추정이 아닌 정확한 값을
+        남길 수 있다. 실시간 쿼리 임베딩은 계량하지 않는다(meter=None): 1건이
+        $0.0000006 인데 세그먼트마다 DB write 를 하면 기록 비용이 API 비용을 넘고,
+        실시간 경로에 WAL 잠금 경합을 새로 만든다.
+        """
         client = self._get_emb_client()
         if client is None:
             return None
+        model = self._emb_model()
         try:
             resp = client.embeddings.create(
-                model=self._emb_model(), input=texts, dimensions=self._emb_dims()
+                model=model, input=texts, dimensions=self._emb_dims()
             )
             vecs: List[Optional[List[float]]] = [None] * len(texts)
             for item in resp.data:
                 vecs[item.index] = _l2_normalize(list(item.embedding))
+            if meter:
+                self._record_embedding_usage(resp, texts, model, meter)
             return vecs
         except Exception as e:
             print(f"[indexer] 임베딩 호출 실패 (무시): {e}")
             return None
+
+    @staticmethod
+    def _record_embedding_usage(resp: Any, texts: List[str], model: str, meter: str) -> None:
+        """임베딩 실사용량을 월 지출 합계에 반영. 실패해도 인덱싱을 막지 않는다."""
+        try:
+            from meeting_minutes_app.common import pricing, usage_log
+            tokens = float(getattr(getattr(resp, "usage", None), "total_tokens", 0) or 0)
+            if tokens <= 0:      # SDK/프록시가 usage 를 안 주면 문자수로 추정
+                tokens = sum(len(t) for t in texts) / pricing.EMBEDDING_CHARS_PER_TOKEN
+            usage_log.record(
+                kind="embedding", model=model, units=tokens, unit_kind="tokens",
+                cost_usd=pricing.embedding_cost_from_tokens(tokens, model), note=meter,
+            )
+        except Exception:
+            pass
 
     def _load_embeddings(self) -> bool:
         if self._emb_loaded:
@@ -657,12 +712,25 @@ class VaultIndexer:
 
         done = 0
         if pending:
+            est_chars = sum(len(t) for _, _, t in pending)
+            est_cost = _embedding_cost_estimate(est_chars, model)
             if verbose:
-                print(f"[indexer] 임베딩 대상: {len(pending)}개 노트 ({model}, {dims}차원)")
+                print(f"[indexer] 임베딩 대상: {len(pending)}개 노트 ({model}, {dims}차원)"
+                      f" · 예상 비용 약 ${est_cost:.4f}")
+            blocked = _embedding_budget_blocked(est_cost)
+            if blocked:
+                # 임베딩만 건너뛰고 TF-IDF 인덱스는 정상 완료한다 — build() 가 이미
+                # 임베딩 실패를 비치명으로 다루고, 검색이 통째로 죽는 게 아니라
+                # 의미검색만 빠지므로 하드 스톱의 부작용이 작다.
+                print(f"[indexer] 월 지출 한도 초과 — 임베딩 건너뜀 ({blocked}). "
+                      f"TF-IDF 검색은 정상 동작합니다.")
+                self._emb = {"model": model, "dims": dims, "notes": existing}
+                self._save_embeddings()
+                return 0
             BATCH = 64
             for i in range(0, len(pending), BATCH):
                 chunk = pending[i:i + BATCH]
-                vecs = self._embed_texts([t for _, _, t in chunk])
+                vecs = self._embed_texts([t for _, _, t in chunk], meter="index")
                 if vecs is None:
                     print("[indexer] 임베딩 중단 — 완료분까지 저장 (TF-IDF 검색은 정상 동작)")
                     break

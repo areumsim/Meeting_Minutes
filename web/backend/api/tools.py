@@ -178,8 +178,16 @@ def reindex():
         idx = VaultIndexer.from_config()
         if not idx:
             return {"ok": False, "message": "노트 폴더가 설정되지 않았습니다. 설정에서 노트 폴더(.md)를 지정하세요."}
+        from meeting_minutes_app.common import usage_log
+        _before = usage_log.month_to_date_by_kind().get("embedding", 0.0)
         n = idx.build(verbose=False)
         msg = f"인덱스 재빌드 완료 — 노트 {n}개"
+        # 임베딩 과금은 사용자가 버튼을 눌러 일으킨 지출이다 — 사후에라도 보여 준다.
+        # (사전 확인 다이얼로그는 두지 않는다: 볼트 전량이 보통 $0.02 수준이고,
+        #  '폴더 연결 직후'·'앱 시작 시' 자동 인덱싱 경로에는 물어볼 자리가 없다.)
+        _spent = usage_log.month_to_date_by_kind().get("embedding", 0.0) - _before
+        if _spent > 0:
+            msg += f" · 임베딩 비용 약 ${_spent:.4f}"
         # 같은 .md 폴더에서 지식 그래프도 함께 최신화(부가 단계 — 실패해도 인덱스는 성공).
         try:
             msg += _rebuild_graph_from_vault()

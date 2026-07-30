@@ -182,21 +182,18 @@ def update_session_status(sid: str, status: str, **kwargs):
 
 
 def month_to_date_spend(now: Optional[datetime] = None) -> float:
-    """이번 달(로컬 시각 기준) 1일 00:00 이후 생성된 세션들의 예상비용 합(USD).
+    """이번 달(로컬 시각 기준) 1일 00:00 이후의 예상 지출 합(USD).
 
     지출 한도(cost.monthly_cap_usd) 검사용. 실패(error) 세션은 제외하고 진행 중
     (processing)도 포함해, 동시에 여러 건을 올려 한도를 우회하지 못하게 한다.
-    `date` 컬럼(생성 시각, 로컬 ISO)을 기준으로 필터한다.
+
+    합계 정본은 common/usage_log.py 다 — 세션 비용(sessions.cost_estimate)에 더해
+    **세션에 속하지 않는 사용량**(위키 임베딩 등 usage_log)까지 함께 센다. 예전엔
+    세션 합계만 봐서, 세션 없이 도는 재빌드·reindex 의 임베딩 과금이 한도 밖에 있었다.
+    core 쪽 CLI 도 같은 함수를 쓰므로 웹/CLI 판정 기준이 갈리지 않는다.
     """
-    now = now or datetime.now()
-    start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0).isoformat()
-    with _conn() as c:
-        row = c.execute(
-            "SELECT COALESCE(SUM(cost_estimate), 0) AS s FROM sessions "
-            "WHERE date >= ? AND status != 'error'",
-            (start,),
-        ).fetchone()
-    return float(row["s"] or 0.0)
+    from meeting_minutes_app.common import usage_log
+    return usage_log.month_to_date_spend(now, db_path=DB_PATH)
 
 
 def delete_session(sid: str):

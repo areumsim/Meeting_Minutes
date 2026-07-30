@@ -64,6 +64,42 @@ MINUTES_OUTPUT_TOKENS = 3_000
 
 TRANSLATE_COST_PER_MIN = 0.0002  # gpt-4o-mini 실시간 번역 (~173 tok/min × 2방향)
 
+# 임베딩 단가 ($/1M tokens) — 위키 인덱스(vault_indexer.build_embeddings)가 쓴다.
+# 이 항목이 없어서 임베딩 과금이 월 지출한도(cost.monthly_cap_usd) 계산에 아예
+# 잡히지 않았다: 한도는 업로드 경로에서만 강제되고 합계는 sessions.cost_estimate
+# 뿐이었는데, [검색 인덱스·그래프 재빌드]나 reindex 는 그 어느 쪽도 거치지 않는다.
+EMBEDDING_PRICE_PER_1M = {
+    "text-embedding-3-small": 0.02,
+    "text-embedding-3-large": 0.13,
+    "text-embedding-ada-002": 0.10,
+}
+DEFAULT_EMBEDDING_PRICE_PER_1M = 0.02
+
+#: 사전 추정용 문자→토큰 환산. 한국어 혼합 텍스트 기준으로 **보수적으로 크게** 잡는다
+#: — 한도 판정에서 과소평가는 한도를 넘겨 버리고, 과대평가는 재빌드가 한 번 미뤄질 뿐이다.
+#: 실제 기록은 추정이 아니라 응답의 usage.total_tokens 를 쓴다(아래 참조).
+EMBEDDING_CHARS_PER_TOKEN = 2.0
+
+
+def embedding_rate_per_1m(model: str) -> float:
+    """임베딩 모델의 100만 토큰당 단가($). 미등록 모델은 기본 단가.
+
+    표를 직접 .get 하지 말 것 — 호출부마다 기본값이 갈린다(STT 단가에서 실제로
+    0.003 vs 0.006 로 갈렸던 전례)."""
+    return EMBEDDING_PRICE_PER_1M.get(model, DEFAULT_EMBEDDING_PRICE_PER_1M)
+
+
+def embedding_cost_from_tokens(tokens: float, model: str) -> float:
+    """실사용 토큰 수 → 비용(USD). 임베딩 API 는 응답에 usage 를 주므로
+    STT/LLM 과 달리 **정확한** 기록이 공짜로 가능하다."""
+    return max(0.0, float(tokens)) / 1_000_000 * embedding_rate_per_1m(model)
+
+
+def embedding_cost_from_chars(chars: float, model: str) -> float:
+    """문자 수 → 예상 비용(USD). 호출 **전** 한도 판정용 추정."""
+    return embedding_cost_from_tokens(
+        max(0.0, float(chars)) / EMBEDDING_CHARS_PER_TOKEN, model)
+
 
 def _resolve_llm_key(llm: str = "gpt", model: str | None = None) -> str:
     """config models.llm('gpt'|'claude') + 구체 모델명 → LLM_TOKEN_PRICE 키."""

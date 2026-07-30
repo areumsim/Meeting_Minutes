@@ -196,3 +196,99 @@ class TestCliRunningCostEstimate:
         rt = self._rt(monkeypatch, {"models.llm": "gpt"})
         got = rt.estimate_cost("gpt-4o-mini-transcribe", True, "whisper-1")
         assert got["translate"] == 0.0 and got["total"] > 0
+
+
+# ━━━━━━━━ 임베딩 비용 — 한도 밖에서 과금되던 구멍 ━━━━━━━━
+
+class TestEmbeddingPricing:
+    def test_known_and_unknown_models(self):
+        assert pricing.embedding_rate_per_1m("text-embedding-3-small") == 0.02
+        assert pricing.embedding_rate_per_1m("text-embedding-3-large") == 0.13
+        # 미등록 모델은 기본 단가 — 표를 직접 .get 하면 호출부마다 기본값이 갈린다
+        assert (pricing.embedding_rate_per_1m("아무거나")
+                == pricing.DEFAULT_EMBEDDING_PRICE_PER_1M)
+
+    def test_cost_from_tokens_is_exact(self):
+        assert pricing.embedding_cost_from_tokens(1_000_000, "text-embedding-3-small") == 0.02
+
+    def test_cost_from_chars_uses_conservative_ratio(self):
+        """한도 판정에서 과소평가는 한도를 넘겨 버린다 — 크게 잡는 쪽이 안전."""
+        chars = 1_000_000
+        est = pricing.embedding_cost_from_chars(chars, "text-embedding-3-small")
+        assert est == pricing.embedding_cost_from_tokens(
+            chars / pricing.EMBEDDING_CHARS_PER_TOKEN, "text-embedding-3-small")
+
+    def test_negative_inputs_are_clamped(self):
+        assert pricing.embedding_cost_from_tokens(-5, "text-embedding-3-small") == 0.0
+
+
+class TestUsageLogInMonthlyTotal:
+    """[실전 구멍] 월 한도는 sessions 합계만 봤는데, 위키 임베딩은 세션이 아니다.
+
+    재빌드 버튼·폴더 연결·시작 시 자동 인덱싱·CLI reindex 가 전부 세션 없이
+    임베딩 API 를 불러서 그 과금이 한도 밖에 있었다."""
+
+    def test_embedding_cost_counts_toward_monthly_total(self, fresh_db):
+        from meeting_minutes_app.common import usage_log
+        _insert("a", datetime.now().replace(day=1, hour=1).isoformat(), 0.30)
+        usage_log.record(kind="embedding", model="text-embedding-3-small",
+                         units=1_000_000, unit_kind="tokens", cost_usd=0.02,
+                         db_path=fresh_db)
+        assert db.month_to_date_spend() == pytest.approx(0.32)
+
+    def test_previous_month_usage_is_excluded(self, fresh_db):
+        import sqlite3
+        from meeting_minutes_app.common import usage_log
+        usage_log.record(kind="embedding", cost_usd=0.05, db_path=fresh_db)
+        with sqlite3.connect(str(fresh_db)) as c:   # 지난달로 밀어 놓는다
+            c.execute("UPDATE usage_log SET ts = '2020-01-05T00:00:00'")
+        assert db.month_to_date_spend() == 0.0
+
+    def test_missing_usage_log_table_falls_back_to_sessions(self, fresh_db):
+        """구버전 DB(포터블 배포본을 덮어쓴 사용자)에 usage_log 가 없어도
+        한도 검사가 깨지면 안 된다."""
+        _insert("a", datetime.now().replace(day=1, hour=1).isoformat(), 0.10)
+        assert db.month_to_date_spend() == pytest.approx(0.10)
+
+    def test_by_kind_breakdown(self, fresh_db):
+        from meeting_minutes_app.common import usage_log
+        usage_log.record(kind="embedding", cost_usd=0.02, db_path=fresh_db)
+        usage_log.record(kind="embedding", cost_usd=0.03, db_path=fresh_db)
+        assert usage_log.month_to_date_by_kind(db_path=fresh_db) == {
+            "embedding": pytest.approx(0.05)}
+
+    def test_record_never_raises_on_bad_path(self, tmp_path):
+        from meeting_minutes_app.common import usage_log
+        bad = tmp_path / "없는폴더" / "x" / "db.sqlite"
+        assert usage_log.record(kind="embedding", cost_usd=1.0, db_path=bad) in (True, False)
+
+
+class TestEmbeddingBudgetGate:
+    """한도를 넘으면 임베딩만 건너뛰고 TF-IDF 인덱스는 정상 완료한다."""
+
+    def test_no_cap_means_unlimited(self, monkeypatch):
+        from meeting_minutes_app.wiki_core import vault_indexer as vi
+        monkeypatch.setattr(vi, "_c", lambda k, d=None: 0 if k == "cost.monthly_cap_usd" else d)
+        assert vi._embedding_budget_blocked(999.0) == ""
+
+    def test_blocks_when_over_cap(self, monkeypatch):
+        from meeting_minutes_app.wiki_core import vault_indexer as vi
+        from meeting_minutes_app.common import usage_log
+        monkeypatch.setattr(vi, "_c", lambda k, d=None: 1.0 if k == "cost.monthly_cap_usd" else d)
+        monkeypatch.setattr(usage_log, "month_to_date_spend", lambda *a, **k: 0.99)
+        assert vi._embedding_budget_blocked(0.50) != ""
+
+    def test_allows_when_under_cap(self, monkeypatch):
+        from meeting_minutes_app.wiki_core import vault_indexer as vi
+        from meeting_minutes_app.common import usage_log
+        monkeypatch.setattr(vi, "_c", lambda k, d=None: 1.0 if k == "cost.monthly_cap_usd" else d)
+        monkeypatch.setattr(usage_log, "month_to_date_spend", lambda *a, **k: 0.10)
+        assert vi._embedding_budget_blocked(0.01) == ""
+
+    def test_gate_failure_does_not_block_indexing(self, monkeypatch):
+        """판정이 터져도 인덱싱을 막지 않는다 — 비용 기록은 부수 효과다."""
+        from meeting_minutes_app.wiki_core import vault_indexer as vi
+        def boom(k, d=None):
+            raise RuntimeError("config 없음")
+        monkeypatch.setattr(vi, "_c", boom)
+        assert vi._embedding_budget_blocked(5.0) == ""

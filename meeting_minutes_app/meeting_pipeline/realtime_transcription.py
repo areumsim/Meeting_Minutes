@@ -2089,8 +2089,9 @@ class RealtimeSession:
                     pass
 
         if not segments:
-            # 원인이 둘인데 과거엔 늘 마이크 문제로 안내해 오진을 유발했다.
-            # STT 호출이 실패해 폐기된 청크가 있으면 마이크가 아니라 음성 인식 쪽이다.
+            # 원인이 셋(무발화 / STT 호출 실패 / 호출은 됐지만 빈 결과)인데 과거엔 늘
+            # 마이크 문제로 안내해 오진을 유발했다. 폐기된 청크가 있으면 마이크가 아니라
+            # 음성 인식 쪽이고, 빈 결과뿐이면 둘 다 가능하므로 단정하지 않는다.
             failed = getattr(self.transcriber, "_stt_error_chunks", 0)
             empty  = getattr(self.transcriber, "_stt_empty_chunks", 0)
             if failed or empty:

@@ -48,5 +48,9 @@ python run_meeting.py reindex          # 위키/그래프 인덱스 재빌드
 - `TODO.md` 도 gitignore 대상 개인 파일(코드 TODO + 개인 볼트 정리 로그 혼재).
 - 재생성 가능 산출물(`build/`, `dist/MeetingMinutesPortable/`, `__pycache__/`, `.pytest_cache/`,
   `*.log`)만 정리 대상이다. 사용자 데이터(위 참조)는 건드리지 않는다.
-- 위키 인덱싱은 볼트의 `*.md` 중 그림자 사본(`*.txt.md` 등)·`indexing.exclude_dirs` 폴더를 제외한다.
+- 위키 인덱싱과 지식그래프 백필은 **같은 노트 판정**을 쓴다 — `vault_indexer.iter_note_files()`
+  (`*.md` 중 `_` 접두·그림자 사본(`*.txt.md` 등)·`indexing.exclude_dirs` 제외). 새로 볼트를
+  스캔하는 코드는 이 함수를 쓴다(규칙을 복제하면 갈라진다 — 실제로 갈라진 적 있음).
+  이전 필터로 들어온 그래프 노드는 `graph_sync.prune_shadow_note_nodes()`가 정리하며
+  웹 [검색 인덱스·그래프 재빌드]가 백필 직전에 자동 실행한다.
   볼트 내용이 바뀌면 `reindex`로 재빌드해야 위키 검색에 반영된다.

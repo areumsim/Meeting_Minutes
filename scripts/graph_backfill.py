@@ -7,7 +7,10 @@ Wiki Knowledge Graph 1회성 백필 — registry(action/decision) + Obsidian vau
     python scripts/graph_backfill.py               # 실제 반영
     python scripts/graph_backfill.py --dry-run      # 반영 없이 카운트만 미리보기
     python scripts/graph_backfill.py --merge-duplicates  # note/entity 이중 정체성 마이그레이션
-    python scripts/graph_backfill.py --prune-shadow-notes  # 그림자 사본 note 노드 정리
+    python scripts/graph_backfill.py --prune-shadow-notes  # 인덱서가 제외하는 note 노드 정리
+                                                           # (그림자 사본 + exclude_dirs)
+                                                           # 웹 [검색 인덱스·그래프 재빌드]가
+                                                           # 같은 정리를 자동으로 한다
 """
 import sys
 import os
@@ -35,7 +38,7 @@ def main():
 
     if args.prune_shadow_notes:
         verb = "미리보기(dry-run)" if args.dry_run else "반영"
-        print(f"[graph-backfill] 그림자 사본 note 노드 정리 {verb} 시작...")
+        print(f"[graph-backfill] 인덱서가 제외하는 note 노드 정리 {verb} 시작...")
         result = graph_sync.prune_shadow_note_nodes(dry_run=args.dry_run)
         print(f"  - 삭제 {'예정' if args.dry_run else '완료'}: {result['pruned']}개")
         if result["skipped_with_edges"]:

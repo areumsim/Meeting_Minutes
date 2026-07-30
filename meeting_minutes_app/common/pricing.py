@@ -2,7 +2,9 @@
 
 과거 이 표가 4곳(meeting_minutes.COST_PER_MIN, run_realtime._STT_PRICE_PER_MIN,
 realtime_transcription._PRICING / RealtimeSession._STT_PRICE)에 복사돼 있어
-단가 변경 시 서로 어긋날 수 있었다. 모든 비용 추정은 이 모듈을 import한다.
+단가 변경 시 서로 어긋날 수 있었다. 그 복사본은 모두 제거됐고(위 이름들은 이제 없다),
+모든 비용 추정은 이 모듈을 import한다 — 단가는 `stt_rate_per_min()`,
+회의록 생성 단가는 `minutes_cost()`, 어떤 모델이 쓰이는지는 `current_models()`.
 """
 
 # STT 단가 ($/min)

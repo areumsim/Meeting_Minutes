@@ -546,8 +546,10 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
           setStatus("completed");
           setWsStatus(msg.message || "음성이 감지되지 않았습니다.");
           try { ws.close(); } catch {}
-          // 원인이 음성 인식 실패면 조치가 필요한 안내라 읽을 시간을 더 준다
-          // (무발화는 볼 것이 없으니 기존처럼 바로 복귀).
+          // reason="stt_failed" 는 조치가 필요한 두 경우를 함께 덮는다 — 인식 호출이
+          // 실패했거나, 호출은 됐는데 빈 결과만 돌아온 경우(후자는 마이크 음량 문제일
+          // 수도 있어 서버 문구가 둘 다 안내한다). 읽을 시간을 더 준다.
+          // (무발화는 볼 것이 없으니 기존처럼 바로 복귀.)
           setTimeout(() => onExit?.(), msg.reason === "stt_failed" ? 6000 : 1500);
           break;
         }

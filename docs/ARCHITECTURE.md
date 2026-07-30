@@ -351,7 +351,7 @@ flowchart LR
 |---|---|---|
 | 업로드·배치·watcher | `run_stt()` → `_build_stt_provider_chain()` → `_transcribe_chunk_via_chain()` (`stt.py`) | **로컬까지 전부** |
 | 실시간 라이브 청크 (웹) | `_run_http_fallback._transcribe_chunk_bytes` (`web/backend/api/realtime.py`) | **Groq까지** — 기본모델 → 폴백모델 → Groq (`fallback_provider` 이벤트로 화면에 1회 알림) |
-| 실시간 라이브 청크 (CLI) | `RealtimeSession._run_stt` → `_call_stt` (`realtime_transcription.py`) | **Groq까지** — 같은 모델 3회 → 폴백모델 1회 → Groq |
+| 실시간 라이브 청크 (CLI) | `RealtimeTranscriber._run_stt` → `_call_stt` (`realtime_transcription.py`) | **Groq까지** — 같은 모델 3회 → 폴백모델 1회 → Groq |
 | 실시간 종료 후 재전사 (웹) | `_diarize_postprocess` → `run_stt()` | 체인 자체는 로컬까지지만 **로컬이 기여할 수는 없다**(아래 참고). `realtime.diarize_postprocess`가 켜진 세션에서만 돈다(**기본 꺼짐**) |
 | 2-pass 보정(revise) | `_revise_worker` | 폴백 없음 — 실패 시 빠른 패스 결과 유지(그 자체가 이미 Groq로 백업됨) |
 
@@ -383,9 +383,11 @@ diarize 후처리를 켜도 로컬이 그 세션을 구제하지는 못한다. *
 
 그 상황의 복구 경로는 **자동 재전사가 아니라 저장된 오디오의 재처리**다:
 - CLI는 `realtime.audio_backup`(기본 켜짐)으로 세션 WAV를 남기고, `_generate_output`이
-  세그먼트 0개 + STT 실패가 있으면 원인과 `python run_meeting.py batch <wav>` 명령을 안내한다.
+  세그먼트 0개 + (STT 실패 **또는** 빈 결과)가 있으면 원인과
+  `python run_meeting.py batch <wav>` 명령을 안내한다.
 - 웹은 세션 오디오를 디스크에 남기지 않는다(`self._pcm`은 2-pass 보정이 소비하며 버려
-  종료 시 마지막 윈도만 남는다). `_finalize`가 "음성 인식 호출이 N회 실패" 로 원인만 알린다.
+  종료 시 마지막 윈도만 남는다). `_finalize`가 원인만 알린다 — 예외였으면 "호출이 N회
+  실패"(마이크 아님), 빈 결과였으면 저음량과 인식 실패 두 가능성을 함께.
 
 자동 재전사를 넣지 않은 이유: (1) 확인 없이 세션 전체가 재과금돼 업로드 전 비용 확인·지출
 한도 설계와 충돌한다, (2) 로컬까지 가면 녹음 길이의 1~3배를 종료 직후 진행 표시 없이
@@ -781,7 +783,7 @@ python run_meeting.py obsidian --project PhysicalAI --where
 | `wiki_core/wiki_knowledge.py` | Wiki 지식 순환 — 준비 브리프 + Registry + Context Package. `extract_decisions_from_minutes()`는 결정 항목 아래 "배경:" 서브라인을 rationale로 함께 파싱해 `{"summary","rationale"}` dict로 반환(하위호환 문자열 입력도 허용) | `build_prep_brief()`, `load_action_registry()`, `load_decision_registry()`, `extract_decisions_from_minutes()`, `build_wiki_update_proposal()`, `build_wiki_context_package()`, `save_wiki_context_package()` | VaultIndexer, Obsidian REST (LLM 호출 없음) |
 | `wiki_core/graph_db.py` | Wiki Knowledge Graph SQLite 저장소 | `upsert_node()`, `upsert_edge()`, `get_node_by_key()`(진행 중인 트랜잭션 재사용 가능), `get_neighbors()`, `find_path()`, `get_session_subgraph()` | `data/wiki_graph.db` |
 | `wiki_core/graph_sync.py` | registry/vault/세션 산출물 → 그래프 동기화, 엔티티 정규화. `backfill_from_vault()`는 노트 자신이 참조 노트(인물/기업/용어 설명)면 `note` 타입 대신 그 엔티티 타입으로 직접 upsert해 다른 글의 위키링크가 만드는 노드와 하나로 합쳐진다(과거 note/entity 이중 정체성 해소). `merge_note_duplicates_into_entities()`는 이 수정 이전에 만들어진 기존 중복을 정리하는 1회성 마이그레이션. 볼트 스캔은 `vault_indexer.iter_note_files()`를 써 인덱서와 같은 노트 판정을 공유하고, 그 필터 이전에 들어온 노드는 `prune_shadow_note_nodes()`가 정리한다(재빌드가 백필 직전에 자동 실행) | `backfill_from_registries()`, `backfill_from_vault()`, `sync_session_graph()`, `resolve_canonical_key()`, `_resolve_or_create_note_node()`, `merge_note_duplicates_into_entities()`, `prune_shadow_note_nodes()` | graph_db, wiki_knowledge, vault_indexer |
-| `wiki_core/vault_indexer.py` (~770줄) | TF-IDF/하이브리드 오프라인 인덱서. `search()`/`find_related()`/`search_sections()`는 `path_prefixes` 인자로 도메인 스코프 검색(위 "도메인 스코프 검색" 절)을 지원 | `VaultIndexer.build()` (한국어 바이그램+영어), `.load()`, `.search()` (RRF 융합, path_prefixes), `.find_related()` | 파일시스템, OpenAI 임베딩(선택) |
+| `wiki_core/vault_indexer.py` (~770줄) | TF-IDF/하이브리드 오프라인 인덱서. `search()`/`find_related()`/`search_sections()`는 `path_prefixes` 인자로 도메인 스코프 검색(위 "도메인 스코프 검색" 절)을 지원 | `VaultIndexer.build()` (한국어 바이그램+영어), `.load()`, `.search()` (RRF 융합, path_prefixes), `.find_related()`, `iter_note_files()`/`default_exclude_dirs()` (볼트 스캔·노트 판정의 단일 소스 — graph_sync 백필·정리도 이걸 쓴다) | 파일시스템, OpenAI 임베딩(선택) |
 | `wiki_core/obsidian.py` (~1070줄) | Obsidian REST API 클라이언트 (노트 포맷팅은 `note_builder.py`로 분리). `create_reference_note()`는 동일 이름 노트가 이미 있으면 스킵 대신 "추가 언급 기록" 섹션으로 보강한다 — "참조 노트 자동 보강" 절 참고. `write_meeting_note()`는 `output_folder` 인자로 자동분류 라우팅 결과를 받는다(2026-07: 녹음 전용이던 `write_recording_note()`는 watcher가 이 함수로 통합되며 삭제됨) | `ping()`, `ensure_running()`, `search_simple()`, `get_note()`, `put_note()`, `write_meeting_note()`, `create_reference_note()`, `parse_frontmatter()` | https://127.0.0.1:27124 |
 | `wiki_core/note_builder.py` | Obsidian 노트 마크다운/frontmatter 조립 (순수 함수, HTTP 의존성 없음) | `build_frontmatter()`, `build_meeting_note_content()`, `build_reference_note_update()` | — |
 | `wiki_core/supermemory_client.py` | Supermemory SDK 래퍼 — 크로스세션 팩트 메모리 | `SupermemoryClient.save()`, `.search()`, `get_client()` | Supermemory API 또는 로컬 서버 |
@@ -924,7 +926,7 @@ LLM은 다음 고정 답변 구조를 반드시 따르도록 강제된다:
 | `wiki.context_max_chars` | `6000` | 노트당 주입 최대 글자 수 (코드 fallback은 2000, 배포 config.example 기본은 6000) |
 | `wiki.online_search_enabled` | `false` | 웹 리서치 (Anthropic web_search tool) |
 | `wiki.realtime_vault_search` | `true` | 녹음 중 발화별 관련 노트 검색(내부자료 우선). 인덱스/볼트 미설정 시 조용히 비활성 + 웹 UI에 사유 배지 |
-| `wiki.realtime_search_interval` | `3` | N개 세그먼트마다 1회 검색(스로틀) |
+| `wiki.realtime_search_interval` | `3` | N개 세그먼트마다 1회 검색(스로틀). `1`=매 세그먼트. **`0`/빈값은 기본 3으로 처리**(`max(int(v or 3), 1)`) — "0=매 세그먼트"가 아니다 |
 | `wiki.realtime_search_backend` | `"auto"` | `auto`=인덱스 우선·REST 폴백 / `index` / `rest` |
 | `wiki.realtime_note_candidates` / `realtime_paper_candidates` | `10` / `4` | 발화별 내부 후보 수(노트 / 논문폴더 한정 보강). 표시는 상위 N개, 나머지는 종료 후 누적 검토용 |
 | `wiki.realtime_display_count` | `3` | 녹음 화면 칩으로 한 번에 표시할 개수 |

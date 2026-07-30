@@ -101,6 +101,42 @@ def parse_session_dt_from_path(path: str, *, default: str = "") -> str:
     return default
 
 
+#: 제목 **맨 앞**에 오는 날짜 토큰. 순서 주의 — 4자리 연도를 2자리보다 먼저 본다
+#: (`20260627`을 YYMMDD로 읽으면 20년 26월이 되어 검증에서 탈락하고 접두를 놓친다).
+_LEADING_DATE_PATTERNS = (
+    # 2026-06-29 / 2026_06_29 / 2026.06.29 / 2026 06 29 / 2026년 06월 29일
+    # 구분자에 공백을 포함해야 한다 — `2026 06 29 14.10 남우진교수` 가 실볼트에 실재하고
+    # 기존 파서(obsidian.date_key · parse_iso_date_from_text)는 둘 다 이 형식을 놓쳤다.
+    re.compile(r"^\s*(20\d{2}|19\d{2})[-_.년/\s]{1,2}\s*(\d{1,2})[-_.월/\s]{1,2}\s*(\d{1,2})\s*일?"),
+    # 20260629
+    re.compile(r"^\s*(20\d{2}|19\d{2})(\d{2})(\d{2})(?!\d)"),
+    # 260629 — 2자리 연도는 현 세기로만 본다
+    re.compile(r"^\s*(\d{2})(\d{2})(\d{2})(?!\d)"),
+)
+
+
+def leading_date_iso(title: str) -> str:
+    """제목이 날짜로 **시작하면** 그 날짜(YYYY-MM-DD), 아니면 ''.
+
+    회의록 파일명은 `{YYMMDD} {제목}` 인데 제목 자체가 파일명에서 온 경우가 많아
+    (`260627_5`, `2026-06-29 14.10_남우진교수`) 접두가 두 번 붙는다 —
+    `260627 260627_5.md`. 그 판정용이다.
+
+    반드시 **앞에서만** 찾고(`^` 앵커) `_valid_date`로 검증한다. 문자열 어디서나
+    찾으면 `2026년 예산 회의`·`3분기 회의` 같은 정상 제목이 날짜로 오인된다."""
+    s = str(title or "")
+    for pat in _LEADING_DATE_PATTERNS:
+        m = pat.match(s)
+        if not m:
+            continue
+        y, mo, d = map(int, m.groups())
+        if y < 100:
+            y += 2000
+        if _valid_date(y, mo, d):
+            return f"{y:04d}-{mo:02d}-{d:02d}"
+    return ""
+
+
 def iso_to_yymmdd(iso_date: str) -> str:
     d = parse_iso_date_from_text(iso_date, default_today=False)
     return f"{d[2:4]}{d[5:7]}{d[8:10]}" if d else ""

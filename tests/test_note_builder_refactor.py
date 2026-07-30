@@ -80,6 +80,14 @@ class TestWriteMeetingNote:
         assert box == golden["calls"]
 
     def test_append_transcript_no_glossary(self, monkeypatch, frozen_now, no_supermemory):
+        """session_dt 가 비었을 때(= 날짜를 못 뽑은 경우).
+
+        골든의 **경로만** 한 번 갱신됐다: `260703 테스트 회의2.md` → `테스트 회의2.md`.
+        예전에는 날짜가 없으면 '오늘'(frozen 2026-07-03)을 파일명 접두로 썼는데, 그러면
+        같은 오디오를 다른 날 재처리할 때 파일명이 달라져 같은 회의의 노트가 하나 더
+        생겼다. 노트 **본문은 byte 단위로 그대로**다(frontmatter date 는 종전대로 오늘로
+        폴백한다 — 날짜가 아예 없으면 정렬·최근회의 조회가 깨지기 때문). 아래
+        test_no_date_omits_filename_prefix 가 이 동작을 경로만으로 다시 못박는다."""
         monkeypatch.setattr(ob, "_c", _cfg("append"))
         client = _make_client()
         box = _capture(client, monkeypatch)
@@ -143,6 +151,94 @@ class TestWriteMeetingNote:
         )
         transcript_paths = [p for p, _ in box if "전사" in p]
         assert transcript_paths == ["00_Meetings/주간보고/260708 주간보고 - 전사.md"]
+
+
+class TestMeetingNoteFilename:
+    """[실전 버그] 같은 오디오를 재처리하면 회의록이 하나 더 생겼다.
+
+    put_note()는 덮어쓰기라 원인은 '경로가 실행마다 달라지는 것'이었다. 여기서는
+    파일명 축 둘(오늘 폴백 · 날짜 접두 중복)을 못박는다. 실볼트 잔재 예:
+    `260627 260627 5.md`, `260707 2026 07 07 14.47 새로운녹음3 잠정세미나.md`.
+    """
+
+    def _write(self, monkeypatch, title, session_dt="2026-06-27"):
+        monkeypatch.setattr(ob, "_c", _cfg("off"))
+        client = _make_client()
+        _capture(client, monkeypatch)
+        return client.write_meeting_note(
+            title=title, body_md="본문", doc_type="meeting", topic="",
+            session_dt=session_dt, processed_at="2026-06-27T09:00:00",
+        )
+
+    @pytest.mark.parametrize("title", [
+        "260627_5",                       # YYMMDD
+        "2026-06-29 14.10_남우진교수",     # YYYY-MM-DD
+        "2026_06_29 회의",                 # YYYY_MM_DD
+        "2026.06.29 회의",                 # YYYY.MM.DD
+        "2026 06 29 14.10 남우진교수",     # 공백 구분 — 기존 파서가 못 잡던 형식
+        "2026년 06월 29일 정기회의",       # 한글
+        "20260627 주간보고",               # YYYYMMDD
+        "실시간 2026년 07월 30일 14:30",   # (선두가 아니므로 접두는 붙어야 한다 — 아래 확인)
+    ])
+    def test_leading_date_is_not_prefixed_twice(self, monkeypatch, frozen_now,
+                                                no_supermemory, title):
+        path = self._write(monkeypatch, title)
+        base = Path(path).stem
+        if title.startswith("실시간"):
+            assert base == f"260627 {title}".replace(":", " ")
+        else:
+            assert not base.startswith("260627 "), f"접두가 두 번 붙었다: {base}"
+
+    @pytest.mark.parametrize("title", [
+        "2026년 예산 회의",       # 연도로 시작하지만 날짜가 아니다
+        "3분기 회의",
+        "2026-13-45 잘못된날짜",  # 유효하지 않은 날짜 — date_key 가 통과시키던 값
+        "991301 잘못된날짜",
+        "AX 인텔리전스 레이더 기획 회의",
+    ])
+    def test_non_date_titles_still_get_prefix(self, monkeypatch, frozen_now,
+                                              no_supermemory, title):
+        path = self._write(monkeypatch, title)
+        assert Path(path).stem.startswith("260627 ")
+
+    def test_no_date_omits_filename_prefix(self, monkeypatch, frozen_now, no_supermemory):
+        """날짜를 못 뽑으면 '오늘'을 접두로 쓰지 않는다 — 그것이 재처리 중복의 원인이었다."""
+        path = self._write(monkeypatch, "제목만 있는 회의", session_dt="")
+        assert Path(path).stem == "제목만 있는 회의"
+        assert "260703" not in path      # frozen now 가 파일명에 새지 않는다
+
+    def test_is_idempotent(self, monkeypatch, frozen_now, no_supermemory):
+        """같은 인자로 두 번 쓰면 같은 경로 — 덮어쓰기가 되어 중복이 안 생긴다."""
+        a = self._write(monkeypatch, "260627_5")
+        b = self._write(monkeypatch, "260627_5")
+        assert a == b
+
+    def test_source_file_date_used_when_session_dt_missing(self, monkeypatch, frozen_now,
+                                                           no_supermemory):
+        monkeypatch.setattr(ob, "_c", _cfg("off"))
+        client = _make_client()
+        _capture(client, monkeypatch)
+        path = client.write_meeting_note(
+            title="회의", body_md="본문", doc_type="meeting", topic="",
+            session_dt="", source_file_date="2026-06-27",
+            processed_at="2026-06-27T09:00:00",
+        )
+        assert Path(path).stem == "260627 회의"
+
+    def test_expected_recording_paths_match_write_meeting_note(self, monkeypatch,
+                                                               frozen_now, no_supermemory):
+        """[계약] 폴더감시의 '이미 처리됐나' 사전 검사와 실제 저장 경로가 같은 규칙을 쓴다.
+
+        규칙이 두 곳에 복제돼 있어 한쪽만 고치면 사전 검사가 빗나가고, 그러면 이미
+        처리된 파일이 한 번 더 처리돼 중복 노트가 생긴다."""
+        from meeting_minutes_app.meeting_pipeline import ingestion_pipeline as ip
+
+        monkeypatch.setattr(ip, "_c", lambda key, default=None:
+                            "00_Meetings/기타" if key == "obsidian.meetings_path" else default)
+        for title in ("260627_5", "제목만 있는 회의", "2026 06 29 회의"):
+            expected = ip._expected_recording_note_paths(title, session_dt="2026-06-27")
+            actual = self._write(monkeypatch, title)
+            assert Path(expected[0]).stem == Path(actual).stem, title
 
 
 class TestUpdatePlannedNote:

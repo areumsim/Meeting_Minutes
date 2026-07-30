@@ -13,10 +13,10 @@
     ]
   },
   "meeting_note_append": {
-    "path": "00_Meetings/테스트프로젝트/260703 테스트 회의2.md",
+    "path": "00_Meetings/테스트프로젝트/테스트 회의2.md",
     "calls": [
       [
-        "00_Meetings/테스트프로젝트/260703 테스트 회의2.md",
+        "00_Meetings/테스트프로젝트/테스트 회의2.md",
         "---\ntitle: \"테스트 회의2\"\ndate: \"2026-07-03\"\nsession_date: \"2026-07-03\"\ntype: \"seminar\"\nproject: \"테스트프로젝트\"\ntopic: \"주제2\"\ntags:\n  - \"회의록\"\n  - \"seminar\"\ncreated: \"2026-07-01T11:00:00\"\nprocessed_at: \"2026-07-01T11:00:00\"\nreview_status: \"pending\"\nconfidence: \"medium\"\nsource_type: \"generated\"\n---\n\n# 테스트 회의2\n\n본문2\n\n## 전사 (Transcript)\n\n전사 내용\n"
       ]
     ]

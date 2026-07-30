@@ -144,6 +144,7 @@ def _detect_obsidian_config(api_key_hint: str = "") -> dict:
 # ── 노트 포맷팅 유틸 (마크다운/frontmatter 조립은 note_builder.py로 분리) ──
 from meeting_minutes_app.wiki_core.note_builder import (  # noqa: E402
     build_frontmatter, safe_filename, wikilink, build_references,
+    meeting_note_basename,
     render_transcript_note, build_meeting_note_content,
     build_planned_note_merge_content, build_recording_into_plan_content,
     build_reference_note_update,
@@ -202,17 +203,16 @@ def parse_frontmatter(content: str):
 
 def date_key(s: str) -> str:
     """다양한 날짜 표기 → 'YYYY-MM-DD'. 추출 실패 시 ''.
-    예: '2026년 06월 27일 09:00', '2026-06-27', '2026/6/27' → '2026-06-27'."""
-    s = str(s or "")
-    m = re.search(r"(\d{4})\s*[-/.년]\s*(\d{1,2})\s*[-/.월]\s*(\d{1,2})", s)
-    if not m:
-        m = re.search(r"(\d{4})(\d{2})(\d{2})", s)
-    if m:
-        try:
-            return f"{int(m.group(1)):04d}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
-        except ValueError:
-            return ""
-    return ""
+    예: '2026년 06월 27일 09:00', '2026-06-27', '2026/6/27' → '2026-06-27'.
+
+    date_utils.normalize_iso_date 에 위임한다 — 여기 있던 자체 정규식은 **유효성 검증이
+    없어** '2026-13-45' 같은 값을 그대로 통과시켰고(그 값이 파일명·폴더 템플릿까지 흘러갔다),
+    구분자도 '-/.년'만 알아 '2026 06 29'(공백)를 놓쳤다. 날짜 파싱은 date_utils 한 곳이다."""
+    try:
+        from meeting_minutes_app.meeting_pipeline.date_utils import normalize_iso_date
+    except ImportError:
+        return ""
+    return normalize_iso_date(s)
 
 
 def yymmdd_key(s: str) -> str:
@@ -661,9 +661,14 @@ class ObsidianClient:
         ("[[노트#헤딩]]" 또는 "[[노트]]") 목록.
         """
         processed_iso = processed_at or datetime.now().isoformat(timespec="seconds")
-        date_str = date_key(session_dt) or date_key(source_file_date) or datetime.now().strftime("%Y-%m-%d")
-        file_date = yymmdd_key(date_str) or datetime.now().strftime("%y%m%d")
-        base = safe_filename(f"{file_date} {title}" if title else f"{file_date} 회의록")
+        # 파일명 접두는 **실제로 뽑힌 날짜로만** 만든다. 예전에는 못 뽑으면 '오늘'로
+        # 폴백했는데, 그러면 같은 오디오를 다른 날 재처리할 때 파일명이 달라져 같은
+        # 회의의 노트가 하나 더 생겼다(put_note 는 덮어쓰기라 경로만 안정되면 중복 없음).
+        # frontmatter date·폴더 템플릿({year}/{month})은 날짜가 없으면 곤란하므로
+        # 종전대로 오늘을 쓴다 — 파일명만 분리한다.
+        parsed_date = date_key(session_dt) or date_key(source_file_date)
+        date_str = parsed_date or datetime.now().strftime("%Y-%m-%d")
+        base = meeting_note_basename(title, yymmdd_key(parsed_date))
         path = f"{self._meeting_folder(output_folder, date_str=date_str)}/{base}.md"
 
         meta = {
@@ -826,7 +831,10 @@ class ObsidianClient:
                 merged_tags.append(x)
 
         now_iso = processed_at or datetime.now().isoformat(timespec="seconds")
-        date_str = date_key(pmeta.get("date")) or date_key(session_dt) or date_key(source_file_date) or datetime.now().strftime("%Y-%m-%d")
+        # write_meeting_note 와 같은 규칙 — 파일명 접두는 실제로 뽑힌 날짜로만(아래 참조).
+        parsed_date = (date_key(pmeta.get("date")) or date_key(session_dt)
+                       or date_key(source_file_date))
+        date_str = parsed_date or datetime.now().strftime("%Y-%m-%d")
         meta = {
             "title": pmeta.get("title") or title,
             "date": date_str,
@@ -852,8 +860,7 @@ class ObsidianClient:
 
         transcript_mode = str(_c("obsidian.transcript_mode", "separate") or "separate").lower()
         if transcript_md.strip() and transcript_mode in ("separate", "note", "file"):
-            file_date = yymmdd_key(date_str) or datetime.now().strftime("%y%m%d")
-            base = safe_filename(f"{file_date} {title}" if title else f"{file_date} 회의록")
+            base = meeting_note_basename(title, yymmdd_key(parsed_date))
             transcript_folder = self._transcript_folder(self._meeting_folder(date_str=date_str), date_str)
             transcript_note_path = f"{transcript_folder}/{base} - 전사.md"
             transcript_meta = {

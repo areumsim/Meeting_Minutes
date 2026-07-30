@@ -280,7 +280,16 @@ def process_single(
 
     # 교정본은 '원문 언어'이므로 품질 지표(refined_ratio)도 원문 세그먼트 기준으로 계산
     stt_meta = _stt_quality_meta(segments, refined_text, bool(refined_text), stt_source)
+    # 파일명에서 날짜를 못 뽑으면 오디오 mtime 을 쓴다 — 예전엔 여기가 빈 값이면
+    # obsidian 이 '오늘'로 폴백해, 같은 오디오를 다른 날 재처리할 때 회의록 파일명이
+    # 달라지고 같은 회의의 노트가 하나 더 생겼다. mtime 은 재처리에 불변이다.
     source_file_date = _date_key_local(parse_session_dt_from_filename(input_path))
+    if not source_file_date:
+        try:
+            source_file_date = datetime.fromtimestamp(
+                os.path.getmtime(input_path)).strftime("%Y-%m-%d")
+        except OSError:
+            pass
     _root_out = Path(__file__).resolve().parent.parent.parent / str(_c("output_dir", "output"))
 
     res = fz.run_post_session(

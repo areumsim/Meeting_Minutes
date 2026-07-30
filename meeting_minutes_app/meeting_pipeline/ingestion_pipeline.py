@@ -55,12 +55,21 @@ _TYPE_PATTERNS = {
 def _extract_date_from_path(audio_path: str) -> str:
     """파일명과 상위 폴더명에서 날짜를 추출한다.
     YYMMDD(6자리), YYYYMMDD, YYYY-MM-DD, YYYY_MM_DD 패턴을 지원.
-    찾지 못하면 오늘 날짜를 반환한다.
-    """
+
+    못 찾으면 **오디오 파일의 수정 시각(mtime)** 을 쓴다. 예전에는 '오늘'로 폴백했는데
+    그러면 같은 파일을 다른 날 재처리할 때 값이 달라져 회의록 파일명이 바뀌고 같은
+    회의의 노트가 하나 더 생겼다. mtime 은 재처리에 불변이고, 파일을 복사해 mtime 이
+    바뀌었다면 그건 사실상 다른 입력이다. mtime 도 못 읽을 때만 오늘로 떨어진다."""
     try:
         from meeting_minutes_app.meeting_pipeline.date_utils import parse_iso_date_from_text
-        return parse_iso_date_from_text(audio_path, default_today=True)
+        found = parse_iso_date_from_text(audio_path, default_today=False)
+        if found:
+            return found
     except Exception:
+        pass
+    try:
+        return datetime.fromtimestamp(os.path.getmtime(audio_path)).strftime("%Y-%m-%d")
+    except OSError:
         return datetime.now().strftime("%Y-%m-%d")
 
 
@@ -445,16 +454,20 @@ def _expected_recording_note_paths(title: str, topic: str = "", session_dt: str 
     생략 — llm=None) 라우팅 후보도 함께 반환한다. 완벽한 예측은 불가능하고 최악의
     경우 이미 처리된 파일이 한 번 더 처리될 뿐(중복 노트, 데이터 유실은 아님)."""
     try:
-        from meeting_minutes_app.wiki_core.obsidian import _expand_path_template, safe_filename
+        from meeting_minutes_app.wiki_core.obsidian import _expand_path_template
+        from meeting_minutes_app.wiki_core.note_builder import meeting_note_basename
         from meeting_minutes_app.meeting_pipeline.date_utils import iso_to_yymmdd
     except Exception:
-        safe_filename = lambda s: re.sub(r'[\\/:*?"<>|]', "_", s).strip()[:80]  # noqa: E731
         _expand_path_template = lambda path, date_str="", project="": str(path or "").strip("/")  # noqa: E731
         iso_to_yymmdd = lambda s: re.sub(r"\D", "", s)[:6]  # noqa: E731
+        meeting_note_basename = lambda t, fd="", fb="회의록": re.sub(  # noqa: E731
+            r'[\\/:*?"<>|]', "_", f"{fd} {t}".strip() if t else f"{fd} {fb}".strip()).strip()[:80]
 
+    # 파일명 조립은 note_builder.meeting_note_basename 한 곳 — 여기와 write_meeting_note 가
+    # 갈라지면 '이미 처리됐나' 사전 검사가 실제 저장 경로를 못 맞춘다.
+    parsed_date = iso_to_yymmdd((session_dt or "")[:10])
     date_str = (session_dt or datetime.now().strftime("%Y-%m-%d"))[:10]
-    file_date = iso_to_yymmdd(date_str) or datetime.now().strftime("%y%m%d")
-    base = safe_filename(f"{file_date} {title}" if title else f"{file_date} 녹음 기록")
+    base = meeting_note_basename(title, parsed_date, fallback_label="녹음 기록")
 
     meetings_path = _c("obsidian.meetings_path", "")
     default_folder = meetings_path or _c("vault_watcher.output_folder", "Inbox/Processed Recordings")

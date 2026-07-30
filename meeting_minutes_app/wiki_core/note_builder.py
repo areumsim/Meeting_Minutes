@@ -51,6 +51,36 @@ def safe_filename(name: str, max_len: int = 80) -> str:
     return name[:max_len].strip()
 
 
+def meeting_note_basename(title: str, file_date: str = "",
+                          fallback_label: str = "회의록") -> str:
+    """회의록/전사 노트의 파일명(확장자 제외)을 만든다 — **이 규칙의 유일한 소스**.
+
+    `{YYMMDD} {제목}` 이되 두 가지를 지킨다:
+
+    1. **제목이 이미 날짜로 시작하면 접두를 붙이지 않는다.** 제목은 오디오 파일명에서
+       오는 경우가 많아(`260627_5`, `2026-06-29 14.10_남우진교수`) 그대로 붙이면
+       `260627 260627_5` 처럼 날짜가 두 번 들어간다.
+    2. **날짜가 없으면 접두 없이 제목만 쓴다.** 예전에는 '오늘'로 폴백했는데, 그러면
+       같은 오디오를 다른 날 재처리할 때 파일명이 달라져 같은 회의의 노트가 하나 더
+       생겼다(put_note 는 덮어쓰기라 경로만 안정되면 중복이 안 생긴다).
+
+    같은 조립이 obsidian.write_meeting_note / update_planned_note /
+    ingestion_pipeline._expected_recording_note_paths 세 곳에 복제돼 있었다. 한쪽만
+    고치면 '이미 처리됐나' 사전 검사와 실제 저장 경로가 어긋난다."""
+    try:
+        from meeting_minutes_app.meeting_pipeline.date_utils import leading_date_iso
+    except ImportError:      # 부분 설치 방어 — 접두 중복만 놓치고 동작은 유지
+        def leading_date_iso(_t: str) -> str:  # type: ignore[misc]
+            return ""
+
+    title = (title or "").strip()
+    if not title:
+        return safe_filename(f"{file_date} {fallback_label}".strip())
+    if file_date and not leading_date_iso(title):
+        return safe_filename(f"{file_date} {title}")
+    return safe_filename(title)
+
+
 def wikilink(basename: str, alias: Optional[str] = None) -> str:
     """[[노트]] 또는 [[노트|별칭]] 형식 위키링크."""
     base = safe_filename(basename)

@@ -136,6 +136,8 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
   // 이 PC 소리 캡처가 기대대로 안 됐을 때의 안내(취소·오디오 미공유·도중 중단).
   // 조용히 마이크만 녹음되면 나중에야 상대 발언이 통째로 빈 걸 알게 된다.
   const [captureNote, setCaptureNote] = useState("");
+  // 이 PC 소리가 '지금 실제로' 들어오고 있는지 — 고른 값이 아니라 성사된 상태다.
+  const [systemAudioOn, setSystemAudioOn] = useState(false);
   const backendModeRef = useRef(false);
   const provisionalIdxRef = useRef<Record<string, number>>({});
   const completionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -325,6 +327,7 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
     displayStreamRef.current = null;
     analyserRef.current = null;
     setVolume(0);
+    setSystemAudioOn(false);
   }, []);
 
   useEffect(() => {
@@ -864,8 +867,10 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
       }
       // 사용자가 Chrome의 [공유 중지]를 누르면 트랙이 끝난다 — 이후로는 마이크만 들어오므로
       // 그 사실을 화면에 남긴다.
-      audioTracks[0].onended = () =>
+      audioTracks[0].onended = () => {
+        setSystemAudioOn(false);
         setCaptureNote("이 PC 소리 공유가 중지됐습니다 — 이후로는 마이크만 녹음됩니다.");
+      };
       return ds;
     } catch {
       setCaptureNote("이 PC 소리 공유가 취소됐습니다 — 마이크만 녹음합니다.");
@@ -921,6 +926,7 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
         if (sysStream) {
           displayStreamRef.current = sysStream;
           audioContext.createMediaStreamSource(sysStream).connect(mixed);
+          setSystemAudioOn(true);
         }
       }
 
@@ -1493,6 +1499,22 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
                             }`}>
                               {isPaused ? "일시정지" : soundDetected ? "🎤 소리 감지 중" : "무음 — 소리 없음"}
                             </span>
+                            {/* 기본이 아닌 캡처 방식은 녹음 중에도 여기 남긴다 — 세션 설정은
+                                시작과 함께 접히므로, 상대 목소리가 실제로 들어오는 방식으로
+                                녹음 중인지 확인할 자리가 사라진다. 'PC 소리'는 고른 값이
+                                아니라 성사된 상태(systemAudioOn)를 표시한다. */}
+                            {systemAudioOn && (
+                              <span title="이 PC에서 나는 소리(온라인 회의 상대방 목소리)가 함께 녹음되고 있습니다."
+                                className="text-[10px] font-bold text-sky-600 border-l border-zinc-200 pl-2">
+                                🖥 PC 소리 포함
+                              </span>
+                            )}
+                            {captureMode === "room" && (
+                              <span title="에코 취소를 끄고 마이크 감도를 올린 상태입니다(멀리서 나는 소리용)."
+                                className="text-[10px] font-bold text-sky-600 border-l border-zinc-200 pl-2">
+                                🏢 회의실 마이크
+                              </span>
+                            )}
                           </>
                         ) : (
                           <>

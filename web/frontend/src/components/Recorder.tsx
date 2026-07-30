@@ -1695,6 +1695,10 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
                     <p className="text-sm text-zinc-500 mt-1">
                       말하면 실시간으로 전사돼요 — 표시까지 몇 초 걸릴 수 있어요
                     </p>
+                    {/* 녹음 전 화면에만 둔다 — 녹음 중 상시 배너는 곧 안 읽힌다. */}
+                    <p className="text-xs text-zinc-400 mt-3">
+                      녹음 전 참석자에게 <b>녹음·자동 전사</b> 사실을 알려 주세요.
+                    </p>
                   </div>
                 </motion.div>
               )}

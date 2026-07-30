@@ -191,6 +191,64 @@ class TestRunUiLauncher:
         assert ei.value.code == 1
 
 
+class TestBindHostRule:
+    """바인딩 host 규칙도 두 런처가 하나를 쓴다.
+
+    과거 소스 런처만 `--host` 기본값이 0.0.0.0 이라 **설정과 무관하게 사내망에 웹 UI 가
+    노출**됐다(회의록·전사 열람, 업로드=과금 트리거가 인증 없이 가능). 포터블만
+    server.lan_access 를 보던 비대칭이다."""
+
+    def test_default_is_this_pc_only(self, monkeypatch):
+        monkeypatch.setattr(sl, "lan_access_enabled", lambda: False)
+        assert sl.resolve_bind_host() == "127.0.0.1"
+
+    def test_lan_access_opens_wildcard(self, monkeypatch):
+        monkeypatch.setattr(sl, "lan_access_enabled", lambda: True)
+        assert sl.resolve_bind_host() == "0.0.0.0"
+
+    def test_explicit_host_wins(self, monkeypatch):
+        monkeypatch.setattr(sl, "lan_access_enabled", lambda: True)
+        assert sl.resolve_bind_host("127.0.0.1") == "127.0.0.1"
+
+    def test_lan_access_reads_config(self, monkeypatch):
+        from meeting_minutes_app.common import config_loader
+        monkeypatch.setattr(config_loader, "get",
+                            lambda k, d=None: True if k == "server.lan_access" else d)
+        assert sl.lan_access_enabled() is True
+
+    def test_source_launcher_uses_the_rule(self, monkeypatch):
+        """[회귀] run_ui.py 가 args.host 를 그대로 넘기지 않는지 — 넘기면 노출이 돌아온다."""
+        from meeting_minutes_app.meeting_pipeline import run_ui
+        monkeypatch.setattr(run_ui, "check_python_deps", lambda: None)
+        monkeypatch.setattr(run_ui, "build_frontend", lambda: None)
+        monkeypatch.setattr(sl, "lan_access_enabled", lambda: False)
+        monkeypatch.setattr(sl, "open_browser_when_ready", lambda *a, **k: None)
+        calls = {}
+        fake = types.ModuleType("uvicorn")
+        fake.run = lambda app, **kw: calls.update(kw)
+        monkeypatch.setitem(sys.modules, "uvicorn", fake)
+        monkeypatch.setattr(sys, "argv", ["run_ui", "--no-browser"])
+        run_ui.main()
+        assert calls["host"] == "127.0.0.1"
+
+
+class TestWsRequirementIsOneRule:
+    def test_predicate_shared(self, monkeypatch):
+        """판정식은 한 곳 — 반응만 런처별로 다르다(소스=pip 설치, 포터블=즉시 실패)."""
+        monkeypatch.setattr(sl, "ws_decode_supported", lambda: False)
+        with pytest.raises(RuntimeError) as ei:
+            sl.require_ws_decode_support()
+        assert sl.WS_REQUIREMENT in str(ei.value)
+
+    def test_ok_when_supported(self, monkeypatch):
+        monkeypatch.setattr(sl, "ws_decode_supported", lambda: True)
+        sl.require_ws_decode_support()      # 예외 없음
+
+    def test_real_environment_supports_it(self):
+        """이 리포의 설치 환경은 실제로 지원해야 한다(아니면 녹음이 조용히 깨진다)."""
+        assert sl.ws_decode_supported() is True
+
+
 class TestSystemInfoEndpoint:
     def _client(self):
         from fastapi import FastAPI

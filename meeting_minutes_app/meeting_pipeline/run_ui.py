@@ -54,14 +54,11 @@ def check_python_deps():
         except ImportError:
             missing.append(pkg)
 
-    websocket_spec = "websockets>=14,<16"
-    try:
-        import inspect
-        from websockets.sync.connection import Connection
-        if "decode" not in inspect.signature(Connection.recv).parameters:
-            missing.append(websocket_spec)
-    except (ImportError, AttributeError):
-        missing.append(websocket_spec)
+    # 판정은 공용 함수 하나(server_launch.ws_decode_supported) — 포터블 런처도 같은 식을
+    # 쓴다. 다만 여기서는 실패시키지 않고 pip 로 고쳐 준다(개발 편의).
+    from meeting_minutes_app.common import server_launch
+    if not server_launch.ws_decode_supported():
+        missing.append(server_launch.WS_REQUIREMENT)
 
     if missing:
         print(f"\n  필요한 패키지 설치: {', '.join(missing)}")
@@ -105,7 +102,8 @@ def main():
     parser = argparse.ArgumentParser(description="Meeting Minutes Web UI")
     parser.add_argument("--dev", action="store_true", help="개발 모드 (Vite dev + FastAPI)")
     parser.add_argument("--port", type=int, default=8501, help="서버 포트 (기본: 8501)")
-    parser.add_argument("--host", default="0.0.0.0", help="바인드 호스트 (기본: 0.0.0.0)")
+    parser.add_argument("--host", default=None,
+                        help="바인드 호스트 (기본: 127.0.0.1, server.lan_access=true 면 0.0.0.0)")
     parser.add_argument("--no-browser", action="store_true", help="브라우저 자동 열기 안 함")
     args = parser.parse_args()
 
@@ -118,6 +116,12 @@ def main():
             sys.path.insert(0, str(path))
 
     from meeting_minutes_app.common import app_paths, server_launch
+
+    # 바인딩 host 는 포터블 런처와 같은 규칙을 쓴다 — 기본은 이 PC 전용(127.0.0.1)이고
+    # config server.lan_access=true 일 때만 0.0.0.0. 과거 이 런처만 기본값이 0.0.0.0 이라
+    # 설정과 무관하게 사내망에 웹 UI 가 노출됐다(회의록·전사 열람, 업로드=과금 트리거가
+    # 인증 없이 가능). --host 를 명시하면 그 값이 우선.
+    host = server_launch.resolve_bind_host(args.host)
 
     if args.dev:
         # 개발 모드: Vite dev server + FastAPI 동시 실행
@@ -153,7 +157,7 @@ def main():
             import uvicorn
             uvicorn.run(
                 "web.backend.app:app",
-                host=args.host,
+                host=host,
                 port=args.port,
                 reload=True,
                 reload_dirs=[str(WEB_DIR / "backend")],
@@ -182,6 +186,8 @@ def main():
         print(f"  {'─'*56}")
         print(f"  URL: http://localhost:{port}")
         print(f"  데이터 폴더: {app_paths.get_base_dir()}")
+        if host == "0.0.0.0":
+            print(f"  LAN 접속 허용됨 (server.lan_access=true) — 같은 WiFi에서 접속 가능")
         print(f"{'='*60}\n")
 
         if not args.no_browser:
@@ -193,7 +199,7 @@ def main():
         import uvicorn
         uvicorn.run(
             "web.backend.app:app",
-            host=args.host,
+            host=host,
             port=port,
             # auto는 구현 패키지가 빠졌을 때 HTTP-only로 조용히 기동한다.
             # 녹음 필수 기능이므로 명시적으로 선택해 누락을 즉시 드러낸다.

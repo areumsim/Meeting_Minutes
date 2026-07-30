@@ -82,7 +82,8 @@ def _lan_ipv4_addrs() -> list:
 def main():
     parser = argparse.ArgumentParser(description="Meeting Minutes Web UI")
     parser.add_argument("--port", type=int, default=8501, help="서버 포트 (기본: 8501)")
-    parser.add_argument("--host", default="127.0.0.1", help="바인드 호스트 (기본: 127.0.0.1)")
+    parser.add_argument("--host", default=None,
+                        help="바인드 호스트 (기본: 127.0.0.1, server.lan_access=true 면 0.0.0.0)")
     parser.add_argument("--no-browser", action="store_true", help="브라우저 자동 열기 안 함")
     args = parser.parse_args()
 
@@ -108,17 +109,11 @@ def main():
     from meeting_minutes_app.common import server_launch
     port = server_launch.find_free_port(args.port)
 
-    # LAN 접속 허용(config server.lan_access=true) 시 0.0.0.0 으로 바인딩해
-    # 같은 WiFi의 아이폰·태블릿 앱이 접속할 수 있게 한다. 기본은 localhost 전용(안전).
-    host = args.host
-    lan_access = False
-    try:
-        from meeting_minutes_app.common import config_loader as _cfg
-        lan_access = bool(_cfg.get("server.lan_access", False))
-    except Exception:
-        lan_access = False
-    if lan_access and host in ("127.0.0.1", "localhost"):
-        host = "0.0.0.0"
+    # LAN 접속 허용(config server.lan_access=true) 시 0.0.0.0 으로 바인딩해 같은 WiFi의
+    # 아이폰·태블릿 앱이 접속할 수 있게 한다. 기본은 localhost 전용(안전).
+    # 판정은 소스 런처와 공용 규칙 하나를 쓴다(server_launch.resolve_bind_host).
+    lan_access = server_launch.lan_access_enabled()
+    host = server_launch.resolve_bind_host(args.host)
 
     lan_ips = _lan_ipv4_addrs() if lan_access else []
 
@@ -147,16 +142,9 @@ def main():
         server_launch.open_browser_when_ready(
             port, expect_config_path=str(_ap.get_config_path()))
 
-    # OpenAI SDK 2.x Realtime은 sync Connection.recv(decode=False)를 사용한다.
-    # websockets 13.x로 잘못 빌드된 실행본이 잠깐 ready를 보낸 뒤 폴백하는
-    # 반쪽 동작을 허용하지 않고 시작 단계에서 명확히 실패시킨다.
-    import inspect
-    from websockets.sync.connection import Connection
-    if "decode" not in inspect.signature(Connection.recv).parameters:
-        raise RuntimeError(
-            "호환되지 않는 websockets 버전입니다. "
-            "실시간 녹음에는 websockets>=14,<16이 필요합니다."
-        )
+    # websockets 13.x로 잘못 빌드된 실행본이 잠깐 ready를 보낸 뒤 폴백하는 반쪽 동작을
+    # 허용하지 않고 시작 단계에서 명확히 실패시킨다(판정은 소스 런처와 공용 함수 하나).
+    server_launch.require_ws_decode_support()
 
     import uvicorn
     uvicorn.run(

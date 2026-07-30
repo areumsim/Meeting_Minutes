@@ -38,6 +38,56 @@ LOOPBACK = "127.0.0.1"
 _PROBE_HOSTS = ("0.0.0.0", LOOPBACK)
 
 
+def lan_access_enabled() -> bool:
+    """config `server.lan_access` — 같은 WiFi의 모바일 앱 접속을 허용하는지."""
+    try:
+        from meeting_minutes_app.common import config_loader as _cfg
+        return bool(_cfg.get("server.lan_access", False))
+    except Exception:
+        return False
+
+
+def resolve_bind_host(explicit: Optional[str] = None) -> str:
+    """바인딩 host — 기본은 이 PC 전용(127.0.0.1), `server.lan_access` 일 때만 0.0.0.0.
+
+    두 런처가 같은 규칙을 쓰게 하려고 여기 둔다. 과거 소스 런처는 `--host` 기본값이
+    무조건 `0.0.0.0` 이라 **설정과 무관하게 사내망에 웹 UI 가 노출**됐다(회의록·전사 열람,
+    업로드=과금 트리거가 인증 없이 가능). 포터블만 lan_access 를 보고 있던 비대칭이다.
+    `--host` 를 명시하면 그 값이 우선(디버깅·특수 배치용).
+    """
+    if explicit:
+        return explicit
+    return "0.0.0.0" if lan_access_enabled() else LOOPBACK
+
+
+#: 실시간 녹음에 필요한 websockets 범위(설치 안내·의존성 명세에 같은 문자열을 쓴다).
+WS_REQUIREMENT = "websockets>=14,<16"
+
+
+def ws_decode_supported() -> bool:
+    """OpenAI SDK 2.x Realtime 이 쓰는 sync `Connection.recv(decode=False)` 지원 여부.
+
+    websockets 13.x 는 서버가 뜨긴 하지만 녹음 시작 직후 전사가 깨진다. **판정**은 여기
+    하나만 두고, 그 뒤 처리는 런처마다 다르다 — 소스 실행은 pip 로 고쳐 주고(개발 편의),
+    포터블은 고칠 수 없으니 즉시 실패한다. 판정식이 두 곳에 복사돼 갈라지는 것만 막는다.
+    """
+    try:
+        import inspect
+        from websockets.sync.connection import Connection
+        return "decode" in inspect.signature(Connection.recv).parameters
+    except (ImportError, AttributeError):
+        return False
+
+
+def require_ws_decode_support() -> None:
+    """지원되지 않으면 명확한 한국어 메시지로 실패(포터블 런처용 — pip 로 고칠 수 없다)."""
+    if not ws_decode_supported():
+        raise RuntimeError(
+            f"호환되지 않는 websockets 버전입니다. 실시간 녹음에는 {WS_REQUIREMENT} 가 "
+            f"필요합니다(13.x 는 녹음 경로가 조용히 깨집니다)."
+        )
+
+
 def _can_bind(host: str, port: int) -> bool:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         try:

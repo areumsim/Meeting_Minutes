@@ -118,7 +118,17 @@ python run_meeting.py web --dev              # 개발 모드 (Vite + FastAPI)
 python run_meeting.py web --port 9000        # 포트 변경
 ```
 
-> 포터블 배포판(`MeetingMinutes.bat`)은 8501이 사용 중이면 자동으로 다른 빈 포트를 선택하므로, 주소가 8501이 아닐 수 있습니다(브라우저는 자동으로 열립니다).
+> **포트·바인딩** (소스 실행·포터블 배포판 공통 규칙 — `common/server_launch.py`):
+> 8501이 사용 중이면 자동으로 다른 빈 포트를 선택하므로 주소가 8501이 아닐 수 있습니다
+> (콘솔에 주소가 표시되고, 브라우저는 서버가 응답한 뒤 자동으로 열립니다). 기본 바인딩은
+> **이 PC 전용(127.0.0.1)** 이고, `server.lan_access=true` 일 때만 `0.0.0.0`으로 열어 같은
+> WiFi의 모바일 앱이 접속할 수 있습니다. `--dev` 모드는 Vite 프록시가 8501을 가리키므로
+> 포트를 바꾸지 않고 실패합니다.
+>
+> **데이터 폴더가 실행 방식마다 다릅니다**: 소스 실행(`webUI_실행.bat`·`run_meeting.py web`)은
+> 저장소 루트를, 포터블 배포판(`MeetingMinutes.bat`)은 자기 폴더의 `MeetingMinutesData/`를
+> 씁니다 — 설정·회의록이 서로 별개입니다(현재 화면이 어느 쪽인지는 [설정] → Obsidian 전체
+> 진단의 "데이터 폴더" 항목에서 확인).
 
 > 최초 실행 시 `fastapi`, `uvicorn`, `python-multipart` 및 프론트엔드 의존성이 자동 설치됩니다.
 

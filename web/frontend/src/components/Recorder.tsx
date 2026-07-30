@@ -56,6 +56,54 @@ const STT_OPTIONS: { value: string; label: string }[] = [
   { value: "whisper-1", label: "whisper-1 — 구형·안정" },
 ];
 
+// ── 소리를 어떻게 잡을지 ─────────────────────────────────────────────
+// 상황에 따라 마이크 제약 조건이 **정반대**로 필요하다. 근접 발화(헤드셋)에는 에코 취소가
+// 이롭지만, 회의실 TV·스피커폰에서 나오는 상대 목소리에는 그 에코 취소가 바로 그 소리를
+// 지워버린다. 그래서 체크박스 조합(모순 조합이 생긴다)이 아니라 **상황 이름 3택**으로 고르게
+// 하고, 제약 조건은 아래 두 기준값 중 하나를 그대로 쓴다.
+type CaptureMode = "mic" | "mic+system" | "room";
+
+/** 근접 발화용 — 에코 취소 on, 원본 레벨 유지(자동 게인 off). 기존 기본값. */
+const NEAR_FIELD_AUDIO: MediaTrackConstraints = {
+  echoCancellation: { ideal: true },
+  autoGainControl: { ideal: false },
+};
+/** 원거리(스피커·TV)용 — 근접 기준값 둘을 뒤집는다. 에코 취소는 스피커에서 나는 소리를
+ *  '되돌아온 내 소리'로 보고 지우고, 자동 게인을 끈 탓에 작은 소리가 올라오지도 않는다. */
+const FAR_FIELD_AUDIO: MediaTrackConstraints = {
+  echoCancellation: { ideal: false },
+  autoGainControl: { ideal: true },
+};
+
+const CAPTURE_MODES: {
+  value: CaptureMode; label: string; desc: string;
+  audio: MediaTrackConstraints; system: boolean;
+}[] = [
+  { value: "mic", label: "내 마이크만",
+    desc: "대면 회의·헤드셋 발화",
+    audio: NEAR_FIELD_AUDIO, system: false },
+  { value: "mic+system", label: "내 마이크 + 이 PC 소리",
+    desc: "Teams 등 온라인 회의 — 헤드셋을 써도 상대방 목소리가 함께 녹음됩니다",
+    audio: NEAR_FIELD_AUDIO, system: true },
+  { value: "room", label: "회의실 마이크 (멀리 있는 소리)",
+    desc: "TV·스피커폰으로 상대 목소리가 나오는 회의실",
+    audio: FAR_FIELD_AUDIO, system: false },
+];
+
+// 이 PC 소리 캡처는 브라우저 화면공유 API를 쓴다 — iOS(Capacitor) WebView엔 없다.
+const HAS_DISPLAY_MEDIA = typeof navigator !== "undefined"
+  && typeof (navigator.mediaDevices as any)?.getDisplayMedia === "function";
+
+function loadCaptureMode(): CaptureMode {
+  try {
+    const saved = localStorage.getItem("CAPTURE_MODE") as CaptureMode | null;
+    const def = CAPTURE_MODES.find((m) => m.value === saved);
+    // 저장된 선택이 이 기기에서 불가능하면(예: iOS에서 'mic+system') 기본으로 되돌린다.
+    if (def && (!def.system || HAS_DISPLAY_MEDIA)) return def.value;
+  } catch { /* ignore */ }
+  return "mic";
+}
+
 export default function Recorder({ onComplete, onExit }: { onComplete: (id: string) => void; onExit?: () => void }) {
   const [isRecording, setIsRecording] = useState(false);
   const [isPaused, setIsPaused] = useState(false);
@@ -84,6 +132,10 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
   const [costRates, setCostRates] = useState<CostRates | null>(null);
   // 이번 녹음에 쓸 STT 모델(설정 기본값이 자동 채워지며, 이 값만 바꿔도 설정은 안 바뀜)
   const [sttModel, setSttModel] = useState<string>("");
+  const [captureMode, setCaptureMode] = useState<CaptureMode>(loadCaptureMode);
+  // 이 PC 소리 캡처가 기대대로 안 됐을 때의 안내(취소·오디오 미공유·도중 중단).
+  // 조용히 마이크만 녹음되면 나중에야 상대 발언이 통째로 빈 걸 알게 된다.
+  const [captureNote, setCaptureNote] = useState("");
   const backendModeRef = useRef(false);
   const provisionalIdxRef = useRef<Record<string, number>>({});
   const completionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -98,6 +150,7 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
   const processorRef = useRef<ScriptProcessorNode | null>(null);
   const silentOscRef = useRef<OscillatorNode | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const displayStreamRef = useRef<MediaStream | null>(null);  // 이 PC 소리(화면공유 오디오)
   const analyserRef = useRef<AnalyserNode | null>(null);
   const animFrameRef = useRef<number | null>(null);
   const isPausedRef = useRef(false);
@@ -264,10 +317,12 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
     }
     if (audioContextRef.current) audioContextRef.current.close().catch(() => {});
     if (streamRef.current) streamRef.current.getTracks().forEach(t => t.stop());
+    if (displayStreamRef.current) displayStreamRef.current.getTracks().forEach(t => t.stop());
     audioContextRef.current = null;
     processorRef.current = null;
     silentOscRef.current = null;
     streamRef.current = null;
+    displayStreamRef.current = null;
     analyserRef.current = null;
     setVolume(0);
   }, []);
@@ -624,6 +679,7 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
       setBackendMode(false);
       setDuration(0);
       setHttpFallback(false);
+      setCaptureNote("");
       try {
         await KeepAwake.keepAwake();
         await Haptics.impact({ style: ImpactStyle.Heavy });
@@ -783,6 +839,40 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
     }
   };
 
+  /** 이 PC에서 나는 소리(온라인 회의 상대방 목소리)를 캡처한다.
+   *  Chrome은 시스템 오디오를 video 요청과 함께만 내주므로 video:true 로 받고 영상 트랙은
+   *  즉시 버린다(영상은 쓰지도, 보내지도 않는다). 사용자가 공유 창에서 '시스템 오디오도
+   *  공유'를 켜지 않으면 오디오 트랙이 없는데, 그때 조용히 넘어가면 상대 발언이 통째로 빈
+   *  기록이 남는다 → 알린 뒤 마이크만으로 계속한다(녹음 자체를 실패시키지는 않는다). */
+  const captureSystemAudio = async (): Promise<MediaStream | null> => {
+    if (!HAS_DISPLAY_MEDIA) {
+      setCaptureNote("이 브라우저는 PC 소리 캡처를 지원하지 않습니다 — 마이크만 녹음합니다.");
+      return null;
+    }
+    try {
+      const ds: MediaStream = await (navigator.mediaDevices as any).getDisplayMedia({
+        video: true,
+        audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+      });
+      ds.getVideoTracks().forEach((t) => t.stop());
+      const audioTracks = ds.getAudioTracks();
+      if (audioTracks.length === 0) {
+        ds.getTracks().forEach((t) => t.stop());
+        setCaptureNote("이 PC 소리를 받지 못했습니다 — 공유 창에서 [시스템 오디오도 공유]를 "
+          + "켜고 다시 시작하세요. 지금은 마이크만 녹음합니다.");
+        return null;
+      }
+      // 사용자가 Chrome의 [공유 중지]를 누르면 트랙이 끝난다 — 이후로는 마이크만 들어오므로
+      // 그 사실을 화면에 남긴다.
+      audioTracks[0].onended = () =>
+        setCaptureNote("이 PC 소리 공유가 중지됐습니다 — 이후로는 마이크만 녹음됩니다.");
+      return ds;
+    } catch {
+      setCaptureNote("이 PC 소리 공유가 취소됐습니다 — 마이크만 녹음합니다.");
+      return null;
+    }
+  };
+
   const startAudioCapture = async () => {
     // 재연결 등으로 onopen이 다시 실행돼도 캡처 파이프라인을 중복 생성하지 않는다.
     // (과거엔 재연결마다 stream/AudioContext/타이머가 하나씩 늘어 타이머가 2배속으로
@@ -794,13 +884,14 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
       return;
     }
     try {
+      // 에코 취소·자동 게인은 상황별 기준값(NEAR_FIELD/FAR_FIELD)에서 온다. 나머지는 공통.
+      const modeDef = CAPTURE_MODES.find((m) => m.value === captureMode) || CAPTURE_MODES[0];
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           sampleRate: { ideal: 24000 },
           channelCount: 1,
-          echoCancellation: { ideal: true },
           noiseSuppression: { ideal: false }, // 원본 음질 유지 (노이즈 억제로 음질 손상 방지)
-          autoGainControl: { ideal: false },  // 자동 게인 제어 비활성 (원본 레벨 유지)
+          ...modeDef.audio,
         },
       });
       streamRef.current = stream;
@@ -819,14 +910,28 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
 
       const source = audioContext.createMediaStreamSource(stream);
 
+      // 믹싱 지점 — 마이크와(선택 시) 이 PC 소리를 여기 한 노드로 합류시킨다. 아래
+      // analyser·processor 는 예전과 똑같이 이 노드 하나만 보므로 다운스트림(PCM16 전송·
+      // 백엔드·2-pass 보정)은 전혀 바뀌지 않는다.
+      const mixed = audioContext.createGain();
+      source.connect(mixed);
+
+      if (modeDef.system) {
+        const sysStream = await captureSystemAudio();
+        if (sysStream) {
+          displayStreamRef.current = sysStream;
+          audioContext.createMediaStreamSource(sysStream).connect(mixed);
+        }
+      }
+
       const analyser = audioContext.createAnalyser();
       analyser.fftSize = 256;
-      source.connect(analyser);
+      mixed.connect(analyser);
       analyserRef.current = analyser;
 
       const bufferSize = 4096;
       const processor = audioContext.createScriptProcessor(bufferSize, 1, 1);
-      source.connect(processor);
+      mixed.connect(processor);
       processor.connect(audioContext.destination);
       processorRef.current = processor;
 
@@ -1101,6 +1206,15 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
           </div>
         )}
 
+        {/* 이 PC 소리 캡처가 기대와 다르게 끝났을 때 — 같은 얇은 한 줄 규격 */}
+        {captureNote && (
+          <div className="bg-amber-50 border-b border-amber-100 text-amber-700 text-[11px] px-4 md:px-5 py-1.5 shrink-0 flex items-start gap-2">
+            <span className="flex-1">{captureNote}</span>
+            <button type="button" onClick={() => setCaptureNote("")}
+              className="shrink-0 font-bold text-amber-600 hover:text-amber-800">닫기</button>
+          </div>
+        )}
+
         {/* 관련 노트 바 (wiki.realtime_vault_search) — 비방해 표시 규칙(FR-10):
             · 녹음 중에는 높이가 고정된 얇은 바를 항상 띄워 둔다 → 검색 결과가 새로
               들어와도 전사 본문이 밀리지 않는다(자동 리플로우 0).
@@ -1277,6 +1391,52 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
                       </select>
                       <p className="text-[11px] text-zinc-400 leading-relaxed">
                         설정의 기본 모델이 자동 선택됩니다. 이번 녹음에만 다른 모델을 쓰려면 바꾸세요 — <b>설정 기본값은 그대로 유지</b>됩니다.
+                      </p>
+                    </div>
+
+                    <div className="space-y-2">
+                      <label className="text-xs font-bold text-zinc-400 uppercase tracking-widest flex items-center gap-2">
+                        <Mic className="w-3 h-3" /> 소리 잡는 방법
+                      </label>
+                      <div className="space-y-2">
+                        {CAPTURE_MODES
+                          .filter((m) => !m.system || HAS_DISPLAY_MEDIA)
+                          .map((m) => (
+                            <label
+                              key={m.value}
+                              className={`flex items-start gap-3 px-4 py-3 rounded-xl border cursor-pointer transition-all ${
+                                captureMode === m.value
+                                  ? "bg-zinc-900 border-zinc-900 text-white"
+                                  : "bg-zinc-50 border-zinc-200 hover:border-zinc-300"
+                              } ${isRecording ? "opacity-50 cursor-not-allowed" : ""}`}
+                            >
+                              <input
+                                type="radio"
+                                name="captureMode"
+                                value={m.value}
+                                checked={captureMode === m.value}
+                                disabled={isRecording}
+                                onChange={() => {
+                                  setCaptureMode(m.value);
+                                  try { localStorage.setItem("CAPTURE_MODE", m.value); } catch { /* ignore */ }
+                                }}
+                                className="mt-1 accent-zinc-900 shrink-0"
+                              />
+                              <span className="min-w-0">
+                                <span className="block text-sm font-bold leading-tight">{m.label}</span>
+                                <span className={`block text-[11px] mt-0.5 leading-relaxed ${
+                                  captureMode === m.value ? "text-zinc-300" : "text-zinc-500"
+                                }`}>{m.desc}</span>
+                              </span>
+                            </label>
+                          ))}
+                      </div>
+                      <p className="text-[11px] text-zinc-400 leading-relaxed">
+                        {captureMode === "mic+system"
+                          ? "시작하면 공유 창이 뜹니다 — [전체 화면]을 고르고 아래 [시스템 오디오도 공유]를 꼭 켜세요. 화면은 녹화되지 않고 소리만 씁니다."
+                          : captureMode === "room"
+                          ? "멀리서 나는 소리가 지워지지 않도록 에코 취소를 끄고 마이크 감도를 올립니다."
+                          : "헤드셋·근접 발화 기준입니다. 온라인 회의 상대 목소리나 회의실 TV 소리가 안 잡히면 위에서 상황을 바꿔보세요."}
                       </p>
                     </div>
                   </div>

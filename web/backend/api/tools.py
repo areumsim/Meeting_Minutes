@@ -145,15 +145,29 @@ def _rebuild_graph_from_vault() -> str:
     graph_sync 백필은 멱등(upsert)이며 wiki_graph.db에만 쓰고 원본 .md/registry는
     건드리지 않는다. graph_enabled가 꺼져 있으면 아무것도 하지 않는다. 실패는 호출부에서
     삼켜 인덱스 재빌드 자체를 실패시키지 않는다(폴더-only 위키의 부가 단계).
+
+    백필 **전에** prune_shadow_note_nodes()를 돌린다. 과거 백필이 인덱서보다 넓게 긁어
+    넣은 노드(그림자 사본·제외 폴더)는 재백필로는 사라지지 않고, 포터블 배포본에는
+    scripts/ 가 들어가지 않아 이 버튼 말고는 정리할 경로가 없다. 이 순서가 안전성의
+    핵심이다 — 판정이 잘못돼 지운 노드가 있어도 바로 뒤 백필이 같은 노트에서 다시 만든다
+    (지우는 대상은 정의상 엣지 0건이라 잃을 관계도 없다). 깨끗한 DB에서는 0건 = no-op.
     """
     from meeting_minutes_app.common import config_loader as _cfg
     if not bool(_cfg.get("wiki_knowledge.graph_enabled", True)):
         return ""
     from meeting_minutes_app.wiki_core import graph_sync
+    pruned = 0
+    try:
+        pruned = graph_sync.prune_shadow_note_nodes().get("pruned", 0)
+    except Exception as _pe:      # 정리 실패가 재빌드를 막지는 않는다
+        print(f"[graph] 그림자 노드 정리 건너뜀: {_pe}")
     graph_sync.backfill_from_registries()
     vc = graph_sync.backfill_from_vault()
-    return (f", 그래프 노드 {vc.get('nodes_would_add', 0)}·엣지 "
-            f"{vc.get('edges_would_add', 0)} 반영")
+    msg = (f", 그래프 노드 {vc.get('nodes_would_add', 0)}·엣지 "
+           f"{vc.get('edges_would_add', 0)} 반영")
+    if pruned:
+        msg += f" (노트가 아닌 노드 {pruned}개 정리)"
+    return msg
 
 
 @router.post("/reindex")

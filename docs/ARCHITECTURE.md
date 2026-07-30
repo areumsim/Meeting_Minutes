@@ -780,7 +780,7 @@ python run_meeting.py obsidian --project PhysicalAI --where
 | `meeting_pipeline/ingestion_pipeline.py` | 오디오→STT→문서유형 판별→`finalize.run_post_session()` 위임(watcher 자동처리 경로. 배치/웹/CLI실시간과 동일한 enrichment/재인덱싱/그래프동기화를 탐) | `IngestionPipeline.ingest()`, `_detect_type_from_filename()`, `_detect_meeting_scope()`, `_expected_recording_note_paths()` | `finalize.py`, `stt.py` |
 | `wiki_core/wiki_knowledge.py` | Wiki 지식 순환 — 준비 브리프 + Registry + Context Package. `extract_decisions_from_minutes()`는 결정 항목 아래 "배경:" 서브라인을 rationale로 함께 파싱해 `{"summary","rationale"}` dict로 반환(하위호환 문자열 입력도 허용) | `build_prep_brief()`, `load_action_registry()`, `load_decision_registry()`, `extract_decisions_from_minutes()`, `build_wiki_update_proposal()`, `build_wiki_context_package()`, `save_wiki_context_package()` | VaultIndexer, Obsidian REST (LLM 호출 없음) |
 | `wiki_core/graph_db.py` | Wiki Knowledge Graph SQLite 저장소 | `upsert_node()`, `upsert_edge()`, `get_node_by_key()`(진행 중인 트랜잭션 재사용 가능), `get_neighbors()`, `find_path()`, `get_session_subgraph()` | `data/wiki_graph.db` |
-| `wiki_core/graph_sync.py` | registry/vault/세션 산출물 → 그래프 동기화, 엔티티 정규화. `backfill_from_vault()`는 노트 자신이 참조 노트(인물/기업/용어 설명)면 `note` 타입 대신 그 엔티티 타입으로 직접 upsert해 다른 글의 위키링크가 만드는 노드와 하나로 합쳐진다(과거 note/entity 이중 정체성 해소). `merge_note_duplicates_into_entities()`는 이 수정 이전에 만들어진 기존 중복을 정리하는 1회성 마이그레이션 | `backfill_from_registries()`, `backfill_from_vault()`, `sync_session_graph()`, `resolve_canonical_key()`, `_resolve_or_create_note_node()`, `merge_note_duplicates_into_entities()` | graph_db, wiki_knowledge |
+| `wiki_core/graph_sync.py` | registry/vault/세션 산출물 → 그래프 동기화, 엔티티 정규화. `backfill_from_vault()`는 노트 자신이 참조 노트(인물/기업/용어 설명)면 `note` 타입 대신 그 엔티티 타입으로 직접 upsert해 다른 글의 위키링크가 만드는 노드와 하나로 합쳐진다(과거 note/entity 이중 정체성 해소). `merge_note_duplicates_into_entities()`는 이 수정 이전에 만들어진 기존 중복을 정리하는 1회성 마이그레이션. 볼트 스캔은 `vault_indexer.iter_note_files()`를 써 인덱서와 같은 노트 판정을 공유하고, 그 필터 이전에 들어온 노드는 `prune_shadow_note_nodes()`가 정리한다(재빌드가 백필 직전에 자동 실행) | `backfill_from_registries()`, `backfill_from_vault()`, `sync_session_graph()`, `resolve_canonical_key()`, `_resolve_or_create_note_node()`, `merge_note_duplicates_into_entities()`, `prune_shadow_note_nodes()` | graph_db, wiki_knowledge, vault_indexer |
 | `wiki_core/vault_indexer.py` (~770줄) | TF-IDF/하이브리드 오프라인 인덱서. `search()`/`find_related()`/`search_sections()`는 `path_prefixes` 인자로 도메인 스코프 검색(위 "도메인 스코프 검색" 절)을 지원 | `VaultIndexer.build()` (한국어 바이그램+영어), `.load()`, `.search()` (RRF 융합, path_prefixes), `.find_related()` | 파일시스템, OpenAI 임베딩(선택) |
 | `wiki_core/obsidian.py` (~1070줄) | Obsidian REST API 클라이언트 (노트 포맷팅은 `note_builder.py`로 분리). `create_reference_note()`는 동일 이름 노트가 이미 있으면 스킵 대신 "추가 언급 기록" 섹션으로 보강한다 — "참조 노트 자동 보강" 절 참고. `write_meeting_note()`는 `output_folder` 인자로 자동분류 라우팅 결과를 받는다(2026-07: 녹음 전용이던 `write_recording_note()`는 watcher가 이 함수로 통합되며 삭제됨) | `ping()`, `ensure_running()`, `search_simple()`, `get_note()`, `put_note()`, `write_meeting_note()`, `create_reference_note()`, `parse_frontmatter()` | https://127.0.0.1:27124 |
 | `wiki_core/note_builder.py` | Obsidian 노트 마크다운/frontmatter 조립 (순수 함수, HTTP 의존성 없음) | `build_frontmatter()`, `build_meeting_note_content()`, `build_reference_note_update()` | — |
@@ -1157,6 +1157,19 @@ person 노드의 흔한 직함/존칭 접미사 제거("홍길동 팀장" vs "�
 적용하려면 1회성 마이그레이션 `graph_sync.merge_note_duplicates_into_entities()`
 (`python scripts/graph_backfill.py --merge-duplicates`)를 실행해 중복 note 행을 살아있는
 엔티티 노드로 병합(엣지 재연결 + attrs 병합 + note 행 삭제)해야 한다.
+
+**그래프 스캔 필터가 인덱서와 갈라져 있던 문제**(같은 계열, 2026-07-30): `_iter_vault_notes()`가
+`_` 접두만 걸러 805개를 스캔하는 동안 인덱서는 그림자 사본·`indexing.exclude_dirs`를 제외해
+473개만 인덱싱했다 — 그 차이만큼 **위키 검색에는 없는 노트가 그래프 노드로** 들어갔다(실측 note
+577개 중 257개가 그림자 사본). 지금은 두 경로가 `vault_indexer.iter_note_files()` 한 곳에서 파일
+목록을 받는다. 기존 그래프의 잔여 노드는 `graph_sync.prune_shadow_note_nodes()`가 정리하며,
+**웹 [검색 인덱스·그래프 재빌드]가 백필 직전에 자동 실행**한다(`tools._rebuild_graph_from_vault()`
+— 포터블 배포본에는 `scripts/`가 없어 이 버튼이 유일한 도달 경로다). CLI로는
+`python scripts/graph_backfill.py --prune-shadow-notes [--dry-run]`.
+판정은 **노드 `attributes.path`에 인덱서 술어를 적용**한다 — 라벨(`frontmatter.title or 파일 stem`)로
+판정하면 `title: config.json` 같은 정상 노트가 삭제된다. 경로를 모르는 노드(세션 관련노트)와 엣지가
+붙은 노드는 보존한다. 정리를 백필보다 **먼저** 돌리는 것이 안전장치다 — 판정이 틀려 지운 노드도
+바로 뒤 백필이 다시 만든다.
 
 또한 실제 그래프 위상에서는 엔티티끼리 직접 연결되지 않고 항상 `note -[:MENTIONED]->
 entity`로만 연결된다 — 참조 노트 제목(엔티티 노드) 자신에서 확장을 시작하면 1-hop 이웃은

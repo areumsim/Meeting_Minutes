@@ -279,7 +279,7 @@ class TestBackfillFromVault:
         assert len(edges) == 2
 
     def test_prune_shadow_note_nodes_removes_only_orphans(self, tmp_path, monkeypatch):
-        """1회성 마이그레이션: 그림자 사본 필터 이전에 들어온 note 노드 정리.
+        """인덱서가 노트로 보지 않는 note 노드 정리(그림자 사본 + 제외 폴더).
 
         재백필만으로는 사라지지 않는다(백필은 새 upsert 에만 작용하고 기존 행을 지우지
         않는다). 단 엣지가 붙은 노드는 그래프에 실질적으로 참여하고 있으므로 건너뛴다."""
@@ -287,26 +287,84 @@ class TestBackfillFromVault:
         monkeypatch.setattr(graph_db, "DB_PATH", db)
         graph_db.init_graph_db(db)
 
-        keep = graph_db.upsert_node("note", "진짜 회의록", db_path=db)
-        orphan = graph_db.upsert_node("note", "발표자료.pptx", db_path=db)
-        orphan2 = graph_db.upsert_node("note", "data_loader.py", db_path=db)
-        linked = graph_db.upsert_node("note", "README.md", db_path=db)
+        def _note(label, path):
+            return graph_db.upsert_node("note", label, {"path": path}, db_path=db)
+
+        keep = _note("진짜 회의록", "00_Meetings/진짜 회의록.md")
+        orphan = _note("발표자료.pptx", "00_Meetings/발표자료.pptx.md")
+        orphan2 = _note("data_loader.py", "src/data_loader.py.md")
+        excluded = _note("원본", "99_원본파일/원본.md")     # exclude_dirs 폴더
+        linked = _note("README.md", "docs/README.md.md")
         topic = graph_db.upsert_node("topic", "양자", db_path=db)
         graph_db.upsert_edge(linked, topic, "MENTIONED", db_path=db)
 
         # dry-run 은 세지만 지우지 않는다
         pre = graph_sync.prune_shadow_note_nodes(dry_run=True, db_path=db)
-        assert pre["pruned"] == 2 and pre["skipped_with_edges"] == 1
-        assert len(graph_db.list_nodes(type="note", db_path=db)) == 4
+        assert pre["pruned"] == 3 and pre["skipped_with_edges"] == 1
+        assert len(graph_db.list_nodes(type="note", db_path=db)) == 5
 
         out = graph_sync.prune_shadow_note_nodes(db_path=db)
-        assert out["pruned"] == 2
-        assert out["skipped_with_edges"] == 1      # README.md 는 엣지가 있어 보존
+        assert out["pruned"] == 3
+        assert out["skipped_with_edges"] == 1      # README.md.md 는 엣지가 있어 보존
         labels = {n["label"] for n in graph_db.list_nodes(type="note", db_path=db)}
         assert labels == {"진짜 회의록", "README.md"}
-        assert keep and orphan and orphan2         # id 발급 자체는 정상이었다
+        assert keep and orphan and orphan2 and excluded   # id 발급 자체는 정상이었다
         # 엣지는 그대로
         assert len(graph_db.list_edges(relation_type="MENTIONED", db_path=db)) == 1
+
+    def test_reindex_prunes_before_backfill(self, tmp_path, monkeypatch):
+        """웹 [검색 인덱스·그래프 재빌드]가 정리를 함께 한다.
+
+        포터블 배포본에는 scripts/ 가 들어가지 않아(build_portable.ps1) 이 버튼 말고는
+        비개발자가 이 마이그레이션에 도달할 방법이 없다. 순서(정리 → 백필)도 고정한다 —
+        백필이 뒤에 와야 판정이 잘못돼 지운 노드가 곧바로 복구된다."""
+        from web.backend.api import tools
+
+        order: list = []
+        monkeypatch.setattr(graph_sync, "prune_shadow_note_nodes",
+                            lambda *a, **k: (order.append("prune"), {"pruned": 7})[1])
+        monkeypatch.setattr(graph_sync, "backfill_from_registries",
+                            lambda *a, **k: order.append("registries"))
+        monkeypatch.setattr(graph_sync, "backfill_from_vault",
+                            lambda *a, **k: (order.append("vault"),
+                                             {"nodes_would_add": 1, "edges_would_add": 2})[1])
+        msg = tools._rebuild_graph_from_vault()
+        assert order == ["prune", "registries", "vault"]
+        assert "7개 정리" in msg
+
+    def test_reindex_survives_prune_failure(self, monkeypatch):
+        """정리가 실패해도 백필·재빌드는 계속된다(부가 단계)."""
+        from web.backend.api import tools
+
+        def _boom(*a, **k):
+            raise RuntimeError("locked")
+
+        monkeypatch.setattr(graph_sync, "prune_shadow_note_nodes", _boom)
+        monkeypatch.setattr(graph_sync, "backfill_from_registries", lambda *a, **k: None)
+        monkeypatch.setattr(graph_sync, "backfill_from_vault",
+                            lambda *a, **k: {"nodes_would_add": 1, "edges_would_add": 0})
+        assert "그래프 노드 1" in tools._rebuild_graph_from_vault()
+
+    def test_prune_judges_by_path_not_label(self, tmp_path, monkeypatch):
+        """[회귀] 판정 기준은 라벨이 아니라 출처 경로다.
+
+        라벨은 `frontmatter.title or 파일 stem` 이라, 인덱서가 정상 인덱싱하는 노트가
+        `title: config.json` 같은 값을 가질 수 있다. 라벨로 판정하면 그 노트가 삭제된다 —
+        재빌드마다 조용히 반복되므로 특히 위험하다. 반대로 경로를 모르는 노드(세션
+        관련노트에서 만들어진 것)는 판정하지 않고 보존한다."""
+        db = tmp_path / "g.db"
+        monkeypatch.setattr(graph_db, "DB_PATH", db)
+        graph_db.init_graph_db(db)
+
+        # 라벨만 보면 그림자 사본처럼 보이지만 실제 파일은 정상 노트다
+        graph_db.upsert_node("note", "config.json",
+                             {"path": "10_Docs/config_json_스키마.md"}, db_path=db)
+        # 경로 정보가 없는 노드(sync_session_graph 의 관련노트) — 판정 불가 → 보존
+        graph_db.upsert_node("note", "발표자료.pptx", db_path=db)
+
+        out = graph_sync.prune_shadow_note_nodes(db_path=db)
+        assert out == {"pruned": 0, "skipped_with_edges": 0}
+        assert len(graph_db.list_nodes(type="note", db_path=db)) == 2
 
     def test_shadow_copies_and_excluded_dirs_are_skipped(self, tmp_path, monkeypatch):
         """그래프 스캔은 인덱서와 **같은 노트 판정**을 써야 한다.

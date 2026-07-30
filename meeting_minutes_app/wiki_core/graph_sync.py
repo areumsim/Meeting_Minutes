@@ -163,33 +163,52 @@ def merge_note_duplicates_into_entities(
 def prune_shadow_note_nodes(
     dry_run: bool = False, *, db_path: Optional[Path] = None,
 ) -> Dict[str, int]:
-    """일회성 마이그레이션: `_iter_vault_notes()`가 그림자 사본을 걸러내기 전에 만들어진
-    note 노드를 지운다.
+    """`_iter_vault_notes()`가 인덱서와 같은 필터를 쓰기 전에 만들어진 note 노드를 지운다.
 
     그 수정 이전의 스캔은 `_` 접두만 걸러서, 텍스트추출 부산물(`발표자료.pptx.md`,
-    `data_loader.py.md`, `README.md.md` 등)까지 회의 노트와 같은 `note` 타입으로
-    그래프에 넣었다. 실제 볼트에서 note 노드 577개 중 257개(45%)가 이것이었다 —
-    지식그래프 탐색 화면에서 노이즈로만 보인다.
+    `data_loader.py.md`, `README.md.md` 등)과 `indexing.exclude_dirs` 폴더의 파일까지
+    회의 노트와 같은 `note` 타입으로 그래프에 넣었다. 실제 볼트에서 note 노드 577개 중
+    257개(45%)가 그림자 사본이었다 — 지식그래프 탐색 화면에서 노이즈로만 보인다.
 
     재백필만으로는 사라지지 않는다(`merge_note_duplicates_into_entities`와 같은 이유 —
-    백필은 새로 upsert되는 노드에만 작용하고 기존 행을 지우지 않는다).
+    백필은 새로 upsert되는 노드에만 작용하고 기존 행을 지우지 않는다). 그래서
+    `tools._rebuild_graph_from_vault()`(웹 [검색 인덱스·그래프 재빌드])가 백필 **전에**
+    이 함수를 호출한다 — 포터블 배포본에는 `scripts/`가 들어가지 않아 그 경로가 아니면
+    비개발자에게 도달할 방법이 없다.
 
-    판정은 인덱서와 같은 단일 소스(`vault_indexer._SHADOW_EXTS`)를 쓴다. 라벨의 확장자가
-    거기 있으면 그림자 사본이다. 엣지가 붙어 있으면 **지우지 않는다** — 실제 볼트에서는
-    전부 엣지 0건인 고아였지만, 엣지가 있다면 그래프에 실질적으로 참여하고 있다는
-    뜻이므로 사용자 확인 없이 관계를 끊지 않는다(그 수는 `skipped_with_edges`로 돌려준다).
+    **판정은 노드 `attributes.path`에 인덱서 술어(`_is_indexable_note`)를 그대로 적용한다.**
+    라벨로 판정하면 안 된다 — 라벨은 `frontmatter.title or 파일 stem`이라, 인덱서가 정상
+    인덱싱하는 노트가 `title: config.json` 같은 값을 갖고 있으면 삭제 대상이 된다.
+    (path 가 없는 노드는 판정 불가 → 보존. 세션 관련노트에서 만들어진 노드가 그렇다.)
+
+    엣지가 붙어 있으면 **지우지 않는다** — 실제 볼트에서는 전부 엣지 0건인 고아였지만,
+    엣지가 있다면 그래프에 실질적으로 참여하고 있다는 뜻이므로 사용자 확인 없이 관계를
+    끊지 않는다(그 수는 `skipped_with_edges`로 돌려준다).
     """
-    from meeting_minutes_app.wiki_core.vault_indexer import _SHADOW_EXTS
+    from meeting_minutes_app.wiki_core.vault_indexer import (
+        _is_indexable_note, default_exclude_dirs,
+    )
 
     graph_db.init_graph_db(db_path)
+    exclude_dirs = default_exclude_dirs()
     pruned = 0
     skipped = 0
     with graph_db._conn(db_path) as conn:
-        rows = conn.execute("SELECT id, label FROM nodes WHERE type='note'").fetchall()
+        rows = conn.execute(
+            "SELECT id, attributes FROM nodes WHERE type='note'").fetchall()
         for row in rows:
-            label = str(row["label"] or "")
-            if Path(label).suffix.lower() not in _SHADOW_EXTS:
-                continue
+            try:
+                path = str((json.loads(row["attributes"] or "{}") or {}).get("path") or "")
+            except Exception:
+                path = ""
+            if not path:
+                continue      # 출처 경로를 모르는 노드는 판정하지 않는다(보존)
+            rel = path.replace("\\", "/")
+            # iter_note_files() 와 같은 두 조건(`_` 접두 + _is_indexable_note)을 본다 →
+            # "인덱서가 인덱싱하지 않는 노트"가 정확히 삭제 대상이 된다.
+            if not os.path.basename(rel).startswith("_") \
+                    and _is_indexable_note(rel, exclude_dirs):
+                continue      # 인덱서가 노트로 보는 파일 → 정상 노드
             n_edges = conn.execute(
                 "SELECT COUNT(*) FROM edges WHERE from_node_id = ? OR to_node_id = ?",
                 (row["id"], row["id"]),

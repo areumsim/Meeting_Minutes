@@ -26,9 +26,11 @@ def main():
                     help="note/entity 이중 정체성 수정 이전에 만들어진 중복 note 노드를 "
                          "person/organization/topic으로 병합(1회성 마이그레이션)")
     ap.add_argument("--prune-shadow-notes", action="store_true",
-                    help="그림자 사본 필터가 적용되기 전에 들어온 note 노드(발표자료.pptx.md·"
-                         "data_loader.py.md 등 텍스트추출 부산물)를 삭제(1회성 마이그레이션). "
-                         "엣지가 붙어 있는 노드는 건너뛴다")
+                    help="인덱서가 노트로 보지 않는 note 노드를 삭제한다 — 그림자 사본"
+                         "(발표자료.pptx.md 등 텍스트추출 부산물)과 indexing.exclude_dirs "
+                         "폴더의 파일. 엣지가 붙어 있거나 출처 경로를 모르는 노드는 건너뛴다. "
+                         "웹 [검색 인덱스·그래프 재빌드]가 같은 정리를 자동으로 하므로 "
+                         "이 플래그는 CLI/자동화용이다")
     args = ap.parse_args()
 
     if args.prune_shadow_notes:

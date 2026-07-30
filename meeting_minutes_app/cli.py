@@ -186,11 +186,10 @@ def dispatch(argv: list[str]) -> int:
 
 
 def _version() -> str:
-    try:
-        from importlib.metadata import version
-        return f"meeting-minutes {version('meeting-minutes')}"
-    except Exception:
-        return "meeting-minutes (버전 정보 없음 — 개발 모드/미설치 실행)"
+    # importlib.metadata 는 정본 배포본(포터블 = 소스 복사, dist-info 없음)에서 항상
+    # 실패해 "버전 정보 없음"만 찍혔다 — 정작 버전을 알아야 하는 쪽이 배포본이다.
+    from meeting_minutes_app.common.version import version_label
+    return version_label()
 
 
 def _run_and_wait(argv: list[str]) -> None:

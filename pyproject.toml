@@ -4,7 +4,10 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "meeting-minutes"
-version = "0.1.0"
+# 버전 리터럴은 meeting_minutes_app/__init__.py 한 곳 — 여기 하드코딩하면 두 값이
+# 갈라진다. 정본 배포본(포터블)에는 pyproject.toml 이 없어 코드가 여기를 읽을 수 없으므로
+# 방향은 반드시 코드 → pyproject 다. 읽을 때는 common/version.py 의 app_version().
+dynamic = ["version"]
 description = "Obsidian 기반 회의록 자동화 + LLM Wiki 지식 순환 시스템 (사내 배포용)"
 readme = "Readme.md"
 requires-python = ">=3.10"
@@ -40,6 +43,9 @@ vad = [
 
 [project.scripts]
 meeting-minutes = "meeting_minutes_app.cli:main"
+
+[tool.setuptools.dynamic]
+version = {attr = "meeting_minutes_app.__version__"}
 
 [tool.setuptools.packages.find]
 include = ["meeting_minutes_app*", "web*"]

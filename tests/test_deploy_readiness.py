@@ -175,3 +175,60 @@ class TestAutostart:
         monkeypatch.setattr(config_loader, "get", fake_get)
         w.autostart_from_config()  # 폴더 미설정 → 시작 실패 메시지, 예외는 없어야
         assert not w._manager.is_running()
+
+
+# ━━━━━━━━ 앱 버전 — 배포본에서 읽히지 않던 문제 ━━━━━━━━
+
+class TestAppVersion:
+    """importlib.metadata 는 정본 배포본에서 항상 실패한다.
+
+    포터블 빌드는 앱을 pip install 하지 않고 소스를 복사하므로 dist-info 가 없다.
+    정작 버전을 알아야 하는 쪽(문제 신고를 받는 배포본)에서 "버전 정보 없음"만
+    찍히던 상태였다. 이제 리터럴은 meeting_minutes_app.__version__ 한 곳이고
+    pyproject 가 그것을 읽어간다."""
+
+    def test_app_version_is_never_empty(self):
+        from meeting_minutes_app.common.version import app_version
+        v = app_version()
+        assert v and v != "0", "설치 여부와 무관하게 버전이 나와야 한다"
+
+    def test_pyproject_derives_version_from_code(self):
+        """pyproject 에 버전을 하드코딩하면 두 값이 갈라진다 — dynamic 이어야 한다."""
+        import re
+        root = Path(__file__).resolve().parents[1]
+        text = (root / "pyproject.toml").read_text(encoding="utf-8")
+        assert re.search(r'^\s*dynamic\s*=\s*\[\s*"version"\s*\]', text, re.MULTILINE), \
+            "[project] dynamic = [\"version\"] 이 없다"
+        assert 'attr = "meeting_minutes_app.__version__"' in text
+        assert not re.search(r'^\s*version\s*=\s*"[\d.]+"', text, re.MULTILINE), \
+            "pyproject 에 버전 리터럴이 다시 하드코딩됐다"
+
+    def test_build_commit_absent_without_build_info(self, tmp_path, monkeypatch):
+        from meeting_minutes_app.common import app_paths, version as ver
+        monkeypatch.setattr(app_paths, "get_resource_dir", lambda: tmp_path)
+        assert ver.build_commit() == ""
+        assert ver.version_label() == f"meeting-minutes {ver.app_version()}"
+
+    def test_build_commit_parses_build_info(self, tmp_path, monkeypatch):
+        from meeting_minutes_app.common import app_paths, version as ver
+        (tmp_path / "BUILD_INFO.txt").write_text(
+            "Meeting Minutes portable build\nbuilt_at : 2026-07-30 11:14:25\n"
+            "commit   : 9dbf5f8\ndirty    : no\npython   : 3.13.1\n", encoding="utf-8")
+        monkeypatch.setattr(app_paths, "get_resource_dir", lambda: tmp_path)
+        assert ver.build_commit() == "9dbf5f8"
+        assert "(build 9dbf5f8)" in ver.version_label()
+
+    def test_dirty_build_is_marked(self, tmp_path, monkeypatch):
+        """미커밋 변경이 섞인 빌드를 회의록 메타만 보고 구분할 수 있어야 한다."""
+        from meeting_minutes_app.common import app_paths, version as ver
+        (tmp_path / "BUILD_INFO.txt").write_text(
+            "commit   : abc1234\ndirty    : YES — 미커밋 변경이 포함된 빌드\n", encoding="utf-8")
+        monkeypatch.setattr(app_paths, "get_resource_dir", lambda: tmp_path)
+        assert ver.build_commit() == "abc1234-dirty"
+
+    def test_unknown_commit_is_treated_as_absent(self, tmp_path, monkeypatch):
+        from meeting_minutes_app.common import app_paths, version as ver
+        (tmp_path / "BUILD_INFO.txt").write_text(
+            "commit   : unknown (git 없음)\ndirty    : no\n", encoding="utf-8")
+        monkeypatch.setattr(app_paths, "get_resource_dir", lambda: tmp_path)
+        assert ver.build_commit() == ""

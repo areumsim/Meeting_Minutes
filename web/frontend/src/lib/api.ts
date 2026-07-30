@@ -261,6 +261,29 @@ export const getCostRates = async (): Promise<CostRates | null> => {
   return null;
 };
 
+export interface CostSummary {
+  ok: boolean;
+  monthToDateUsd: number;
+  monthlyCapUsd: number;
+  perFileCapUsd: number;
+  months: { month: string; usd: number; count: number }[];
+  byType: { type: string; usd: number; count: number }[];
+  top: { id: string; title: string; type: string; date: string; durationSec: number; usd: number }[];
+  otherUsd: number;
+  otherByKind: Record<string, number>;
+}
+
+export const getCostSummary = async (months = 6): Promise<CostSummary | null> => {
+  try {
+    const res = await apiFetch(`/api/cost/summary?months=${months}`);
+    if (res.ok) {
+      const data = await res.json();
+      if (data?.ok) return data;
+    }
+  } catch { /* 백엔드 없음 */ }
+  return null;
+};
+
 // 앱(서버) 종료 — 콘솔 창 없는 배포에서 웹으로 깔끔히 끄기.
 export const shutdownApp = async (): Promise<boolean> => {
   try {

@@ -5,6 +5,7 @@ import {
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { getSessions, deleteSession, clearSessions } from "../lib/api";
+import CostSummary from "./CostSummary";
 import { formatDate, formatDuration, typeColor, typeLabel, statusLabel } from "../lib/format";
 import type { Session } from "../lib/types";
 
@@ -99,6 +100,9 @@ export default function Dashboard({ onSelectSession, onNewUpload, onNewRecord }:
           </button>
         </div>
       </div>
+
+      {/* 비용 요약 — 조회 실패 시 스스로 렌더하지 않는다(세션 목록에 영향 없음) */}
+      <CostSummary />
 
       {/* Search & Filter */}
       <div className="flex flex-col gap-2 mb-4">

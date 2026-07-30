@@ -196,6 +196,65 @@ def month_to_date_spend(now: Optional[datetime] = None) -> float:
     return usage_log.month_to_date_spend(now, db_path=DB_PATH)
 
 
+def cost_by_month(months: int = 6, now: Optional[datetime] = None) -> List[Dict]:
+    """최근 N개월 세션 비용 합계 — [{"month": "2026-07", "usd": 0.42, "count": 3}, ...].
+
+    `date` 는 로컬 ISO 문자열이라 substr(1,7) 로 월을 뽑는다. 빈/NULL date 행이
+    실제로 존재할 수 있어(과거 임포트분) 반드시 걸러야 '' 월 버킷이 생기지 않는다.
+    """
+    now = now or datetime.now()
+    y, m = now.year, now.month - (max(1, int(months)) - 1)
+    while m <= 0:
+        y, m = y - 1, m + 12
+    start = f"{y:04d}-{m:02d}"
+    with _conn() as c:
+        rows = c.execute(
+            "SELECT substr(date, 1, 7) AS month, "
+            "       COALESCE(SUM(cost_estimate), 0) AS usd, COUNT(*) AS cnt "
+            "FROM sessions "
+            "WHERE date IS NOT NULL AND date != '' AND substr(date, 1, 7) >= ? "
+            "  AND status != 'error' "
+            "GROUP BY month ORDER BY month",
+            (start,),
+        ).fetchall()
+    return [{"month": r["month"], "usd": round(float(r["usd"] or 0), 4),
+             "count": int(r["cnt"])} for r in rows]
+
+
+def cost_by_type(month: str = "", now: Optional[datetime] = None) -> List[Dict]:
+    """유형(meeting/seminar/…)별 비용 합계. month 미지정이면 이번 달."""
+    month = month or (now or datetime.now()).strftime("%Y-%m")
+    with _conn() as c:
+        rows = c.execute(
+            "SELECT COALESCE(NULLIF(type, ''), '기타') AS t, "
+            "       COALESCE(SUM(cost_estimate), 0) AS usd, COUNT(*) AS cnt "
+            "FROM sessions "
+            "WHERE date IS NOT NULL AND date != '' AND substr(date, 1, 7) = ? "
+            "  AND status != 'error' "
+            "GROUP BY t ORDER BY usd DESC",
+            (month,),
+        ).fetchall()
+    return [{"type": r["t"], "usd": round(float(r["usd"] or 0), 4),
+             "count": int(r["cnt"])} for r in rows]
+
+
+def top_cost_sessions(limit: int = 5, month: str = "",
+                      now: Optional[datetime] = None) -> List[Dict]:
+    """이번 달(또는 지정 월) 비용 상위 세션."""
+    month = month or (now or datetime.now()).strftime("%Y-%m")
+    with _conn() as c:
+        rows = c.execute(
+            "SELECT id, title, type, date, duration_sec, cost_estimate FROM sessions "
+            "WHERE date IS NOT NULL AND date != '' AND substr(date, 1, 7) = ? "
+            "  AND status != 'error' AND cost_estimate > 0 "
+            "ORDER BY cost_estimate DESC LIMIT ?",
+            (month, max(1, int(limit))),
+        ).fetchall()
+    return [{"id": r["id"], "title": r["title"] or "(제목 없음)", "type": r["type"],
+             "date": r["date"], "durationSec": float(r["duration_sec"] or 0),
+             "usd": round(float(r["cost_estimate"] or 0), 4)} for r in rows]
+
+
 def delete_session(sid: str):
     with _conn() as c:
         c.execute("DELETE FROM segments WHERE session_id = ?", (sid,))

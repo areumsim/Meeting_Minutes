@@ -292,3 +292,49 @@ class TestEmbeddingBudgetGate:
             raise RuntimeError("config 없음")
         monkeypatch.setattr(vi, "_c", boom)
         assert vi._embedding_budget_blocked(5.0) == ""
+
+
+class TestCostSummaryAggregates:
+    """비용 대시보드 집계 — 화면만 없었고 백엔드는 거의 다 있었다."""
+
+    def test_by_month_groups_and_excludes_errors(self, fresh_db):
+        now = datetime.now()
+        _insert("a", now.replace(day=1, hour=1).isoformat(), 0.30)
+        _insert("b", now.replace(day=2, hour=1).isoformat(), 0.20)
+        _insert("c", now.replace(day=3, hour=1).isoformat(), 9.99, status="error")
+        rows = db.cost_by_month(6)
+        this_month = [r for r in rows if r["month"] == now.strftime("%Y-%m")]
+        assert this_month and this_month[0]["usd"] == pytest.approx(0.50)
+        assert this_month[0]["count"] == 2
+
+    def test_by_month_ignores_blank_dates(self, fresh_db):
+        """과거 임포트분에 date 가 빈 행이 실제로 있다 — '' 월 버킷이 생기면 안 된다."""
+        _insert("a", "", 1.00)
+        assert all(r["month"] for r in db.cost_by_month(6))
+
+    def test_by_month_empty_db(self, fresh_db):
+        assert db.cost_by_month(6) == []
+
+    def test_by_type_and_top(self, fresh_db):
+        now = datetime.now()
+        with db._conn() as c:
+            for sid, typ, cost in (("a", "meeting", 0.40), ("b", "seminar", 0.10)):
+                c.execute(
+                    "INSERT INTO sessions (id, title, date, status, type, cost_estimate) "
+                    "VALUES (?, ?, ?, 'completed', ?, ?)",
+                    (sid, f"제목{sid}", now.replace(day=1, hour=1).isoformat(), typ, cost))
+            c.commit()
+        types = {r["type"]: r["usd"] for r in db.cost_by_type()}
+        assert types == {"meeting": pytest.approx(0.40), "seminar": pytest.approx(0.10)}
+        top = db.top_cost_sessions(5)
+        assert [t["id"] for t in top] == ["a", "b"]
+
+    def test_summary_endpoint_ok_on_empty_db(self, fresh_db, monkeypatch):
+        from fastapi.testclient import TestClient
+        from web.backend.app import app
+        r = TestClient(app).get("/api/cost/summary")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["ok"] is True
+        for key in ("monthToDateUsd", "monthlyCapUsd", "months", "byType", "top"):
+            assert key in body

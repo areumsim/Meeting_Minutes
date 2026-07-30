@@ -241,6 +241,36 @@ def local_stt_prepare():
         return {"ok": False, "message": f"준비 실패: {e}"}
 
 
+@router.get("/cost/summary")
+def cost_summary(months: int = 6):
+    """비용 대시보드용 집계 — 월별 · 유형별 · 상위 세션 + 이번 달 한도 대비.
+
+    **모델별 집계는 넣지 않는다.** sessions.model 이 웹 업로드 경로에서 항상 빈
+    값이고(batch.py 가 model=None 으로 만든다), cost_estimate 는 STT/번역/회의록이
+    합쳐진 단일 숫자라 분해할 수 없다. 없는 축을 있는 척 보여주느니 뺀다.
+    """
+    from web.backend import database as db
+    from meeting_minutes_app.common import config_loader as cfg
+    from meeting_minutes_app.common import usage_log
+    try:
+        by_kind = usage_log.month_to_date_by_kind()
+        return {
+            "ok": True,
+            "monthToDateUsd": round(db.month_to_date_spend(), 4),
+            "monthlyCapUsd": float(cfg.get("cost.monthly_cap_usd", 0) or 0),
+            "perFileCapUsd": float(cfg.get("cost.per_file_cap_usd", 0) or 0),
+            "months": db.cost_by_month(months),
+            "byType": db.cost_by_type(),
+            "top": db.top_cost_sessions(5),
+            # 세션에 속하지 않는 지출(위키 임베딩 등) — 월 합계에 포함돼 있다
+            "otherUsd": round(sum(by_kind.values()), 4),
+            "otherByKind": {k: round(v, 4) for k, v in by_kind.items()},
+        }
+    except Exception as e:
+        traceback.print_exc()
+        return {"ok": False, "message": f"비용 집계 실패: {e}"}
+
+
 # ── 4) 회의 준비 브리핑 ───────────────────────────
 @router.get("/cost/rates")
 def cost_rates():

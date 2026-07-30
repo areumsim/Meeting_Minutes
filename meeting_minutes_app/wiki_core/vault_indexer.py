@@ -91,6 +91,35 @@ _SHADOW_EXTS: set = {
 _DEFAULT_EXCLUDE_DIRS = ["99_원본파일", "바이너리", "/.trash/"]
 
 
+#: 회의 자료(Reference Files)로 인정하는 **원본 문서** 확장자.
+#: `indexing.reference_dirs` 경로 안에서 이 확장자의 그림자 사본만 인덱싱에 편입한다.
+#: 코드·데이터(.py/.ipynb/.json/.yaml/.sh/.txt/.md)는 경로와 무관하게 계속 제외한다 —
+#: 실볼트 실측(2026-07-30)에서 `원문추출` 폴더 안에 문서 160건과 함께 비문서 그림자
+#: 사본이 **170건**(.py 76·.ipynb 44·.md.md 27·.txt 14·.json 4·.yaml 3·.sh 2) 있었다.
+#: 경로만으로 예외를 열면 인덱스가 474 → 약 780 으로 부풀어, 이 리포가 이미 한 번
+#: 겪은 사고(인덱서 473 vs 그래프 805)를 그대로 재현한다.
+_REFERENCE_DOC_EXTS: set = {
+    ".pdf", ".pptx", ".ppt", ".docx", ".doc", ".xlsx", ".xls", ".hwp", ".hwpx",
+}
+
+
+def default_reference_dirs() -> List[str]:
+    """`indexing.reference_dirs` — 회의 자료 추출본을 인덱싱에 편입할 폴더 이름들.
+
+    기본 빈 목록 = **옵트인**. 켜기 전까지 동작이 전혀 바뀌지 않는다(다른 볼트에
+    예측 못 할 편입이 생기지 않게).
+
+    이름은 경로 **세그먼트 정확 일치**로 본다(`path_matcher(..., "segment")` 규칙).
+    부분 문자열이면 `원문추출` 이 `원문추출_보완` 까지 잡는데, 실볼트에서 그 폴더는
+    스캔본 빈 껍데기와 실명 개인정보 문서가 모인 곳이라 절대 편입하면 안 된다.
+
+    config_schema 에는 노출하지 않는다 — exclude_dirs·meeting_dirs 와 같은 취급.
+    볼트 구조를 아는 사람만 건드리는 고급 키이고, 화면에서 임의 경로를 넣으면
+    인덱스를 오염시키기 쉽다(문서는 config.example.json 주석).
+    """
+    return list(_c("indexing.reference_dirs", []) or [])
+
+
 def default_exclude_dirs() -> List[str]:
     """현재 설정의 제외 폴더 목록(미설정이면 기본값).
 
@@ -122,23 +151,52 @@ def iter_note_files(vault_path: str,
     return out
 
 
-def _is_indexable_note(rel_path: str, exclude_dirs: Sequence[str] = ()) -> bool:
+def is_reference_note(rel_path: str,
+                      reference_dirs: Optional[Sequence[str]] = None) -> bool:
+    """회의 자료(Reference Files) 추출본으로 편입할 그림자 사본인가.
+
+    조건은 **경로 ∩ 확장자** 교집합이다:
+      - 경로에 `indexing.reference_dirs` 폴더가 세그먼트로 **정확히** 들어 있고,
+      - 원본 확장자가 문서형(`_REFERENCE_DOC_EXTS`)일 것.
+    둘 중 하나만 보면 안 된다(§_REFERENCE_DOC_EXTS 주석의 실측 참고).
+    """
+    dirs = default_reference_dirs() if reference_dirs is None else list(reference_dirs)
+    if not dirs:
+        return False
+    base = os.path.basename(rel_path)
+    stem = base[:-3] if base.lower().endswith(".md") else base
+    if Path(stem).suffix.lower() not in _REFERENCE_DOC_EXTS:
+        return False
+    matcher = path_matcher(dirs, "segment")
+    return bool(matcher and matcher(str(rel_path or "").replace("\\", "/")))
+
+
+def _is_indexable_note(rel_path: str, exclude_dirs: Sequence[str] = (),
+                       reference_dirs: Optional[Sequence[str]] = None) -> bool:
     """볼트의 .md 파일을 '노트'로 인덱싱할지 판정한다.
 
     제외 대상:
       (1) 텍스트추출 그림자 사본 — .md를 떼어낸 stem이 또 다른 알려진 확장자로 끝남
           (requirements.txt.md → stem 'requirements.txt' → 제외).
+          **예외**: `indexing.reference_dirs` 안의 문서형 추출본(회의 자료)은 편입한다
+          — `is_reference_note()` 참고. 기본값이 빈 목록이라 켜기 전엔 동작 불변.
       (2) exclude_dirs 경로 substring에 걸리는 파일(바이너리 원본 아카이브 등).
-    회의가 아닌 파일이 회의로 인용되던 문제(P: 최근회의 오인용)의 1차 방어선."""
-    base = os.path.basename(rel_path)
-    stem = base[:-3] if base.lower().endswith(".md") else base
-    if Path(stem).suffix.lower() in _SHADOW_EXTS:
-        return False
+          이 규칙이 (1)의 예외보다 **우선**한다 — 바이너리 아카이브 안의 추출본까지
+          끌어오지 않는다.
+    회의가 아닌 파일이 회의로 인용되던 문제(P: 최근회의 오인용)의 1차 방어선.
+
+    순수 **경로** 판정으로 유지한다(파일을 읽지 않는다) — graph_sync·wiki_ask REST
+    필터가 경로 문자열만 넘겨 호출하므로 여기서 I/O 를 하면 그 호출부가 느려지거나
+    깨진다."""
     rel_norm = rel_path.replace("\\", "/")
     for pat in exclude_dirs or ():
         p = str(pat or "").replace("\\", "/")
         if p and p in rel_norm:
             return False
+    base = os.path.basename(rel_path)
+    stem = base[:-3] if base.lower().endswith(".md") else base
+    if Path(stem).suffix.lower() in _SHADOW_EXTS:
+        return is_reference_note(rel_path, reference_dirs)
     return True
 
 
@@ -404,6 +462,13 @@ class VaultIndexer:
                 "snippet": snippet,
                 "tf": {},
             }
+            # 회의 자료 추출본 표시 — '인덱싱 대상인가'와 '회의인가'는 다른 축이라
+            # 판정 복제가 아니다(플래그의 출처는 여전히 위 iter_note_files 하나).
+            # recent_notes 의 회의 구제에서 제외하는 데 쓴다: 01_회의_세미나 가
+            # meeting_dirs 의 "회의"에 substring 으로 걸려 발표자료가 '최근 회의'로
+            # 승격되던 자리다(실측 30건 해당).
+            if is_reference_note(rel):
+                notes[rel]["source"] = "reference"
             if _c("wiki_knowledge.section_index_enabled", True):
                 raw_sections = _parse_sections(body)
                 parsed_sections = []
@@ -882,6 +947,11 @@ class VaultIndexer:
                 continue
             if tset is not None:
                 ntype = str(note.get("type") or "").lower()
+                # 회의 자료 추출본은 폴더 기반 구제에서 뺀다 — `01_회의_세미나/원문추출/`
+                # 아래 발표자료가 meeting_dirs 의 "회의"에 substring 으로 걸려 '최근
+                # 회의'로 승격되던 자리다. type 이 명시된 노트는 종전대로 tset 로 판단.
+                if note.get("source") == "reference" and ntype not in tset:
+                    continue
                 if ntype not in tset and not (
                         meeting_family and not ntype and _in_meeting_dir(rel)):
                     continue

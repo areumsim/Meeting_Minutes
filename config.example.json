@@ -283,7 +283,9 @@
     "_exclude_dirs_comment": "인덱싱에서 제외할 경로 조각(부분 문자열). 바이너리/코드 원본 아카이브를 노트로 오인용하는 것 방지. 그림자 사본(requirements.txt.md 등)은 자동 제외되므로 폴더만 지정. 예: [\"99_원본파일\", \"바이너리\", \"/.trash/\"].",
     "exclude_dirs": ["99_원본파일", "바이너리", "/.trash/"],
     "_meeting_dirs_comment": "'회의' 노트로 인정할 폴더 조각(부분 문자열). frontmatter type이 비어 있어도 이 폴더 아래 노트는 '가장 최근 회의' 시점질의에서 회의로 취급. 예: [\"00_Meetings\", \"회의\", \"Meetings\", \"회의별\"].",
-    "meeting_dirs": ["00_Meetings", "회의", "Meetings", "회의별"]
+    "meeting_dirs": ["00_Meetings", "회의", "Meetings", "회의별"],
+    "_reference_dirs_comment": "회의 자료(PDF/PPTX/DOCX/HWP 등) 텍스트추출본을 위키 검색에 편입할 폴더 이름. 빈 목록이면 편입하지 않음(기본). 그림자 사본(발표자료.pdf.md)은 원래 인덱싱에서 제외되는데, 여기 적은 폴더 안의 문서형 확장자만 예외로 편입한다. 폴더 이름은 경로 세그먼트 정확 일치(부분 문자열 아님) — '원문추출'은 '원문추출_보완'을 잡지 않는다. 코드·데이터(.py/.ipynb/.json/.txt/.md/.sh)는 이 폴더 안에 있어도 계속 제외된다(그것까지 넣으면 인덱스가 부풀어 검색 품질이 떨어진다). 품질이 낮은 폴더(스캔본·빈 껍데기·개인정보 문서)는 애초에 적지 말 것. 적용에는 재빌드 필요: python run_meeting.py reindex + scripts/graph_backfill.py. 예: [\"원문추출\"]",
+    "reference_dirs": []
   },
   "wiki": {
     "_comment": "LLM Wiki Q&A 및 실시간 사실 검증 설정.",

@@ -772,6 +772,137 @@ class TestIndexableNoteFilter:
         assert vi.iter_note_files("") == []
 
 
+class TestReferenceFilesIndexing:
+    """[PRD_Natively 트랙 B] 회의 자료(PDF/PPTX/DOCX) 추출본을 통제된 경로로만 편입.
+
+    그림자 사본 규칙 자체는 정당하다 — 이진 원본의 텍스트덤프가 검색 인덱스를
+    오염시키던 장치다. 그래서 규칙을 없애지 않고 **경로 ∩ 문서형 확장자** 교집합으로
+    예외를 연다. 경로만으로 열면 실볼트 기준 비문서 그림자 사본 170건이 함께 들어와
+    인덱스가 474 → 약 780 이 된다(과거 '인덱서 473 vs 그래프 805' 사고의 재현).
+    """
+
+    REF = ["원문추출"]
+
+    def test_off_by_default(self):
+        """옵트인 — 켜기 전에는 동작이 전혀 바뀌지 않는다."""
+        assert not vi._is_indexable_note("A/원문추출/발표자료.pdf.md", (), [])
+        assert not vi.is_reference_note("A/원문추출/발표자료.pdf.md", [])
+
+    def test_includes_document_extensions(self):
+        for ext in ("pdf", "pptx", "docx", "xlsx", "hwp", "hwpx"):
+            rel = f"A/원문추출/자료.{ext}.md"
+            assert vi._is_indexable_note(rel, (), self.REF), ext
+
+    def test_excludes_code_and_data_in_the_same_folder(self):
+        """[핵심] 확장자 교집합이 없으면 여기서 인덱스가 부푼다."""
+        for name in ("main.py.md", "run.sh.md", "notes.md.md", "config.yaml.md",
+                     "data.json.md", "requirements.txt.md", "nb.ipynb.md"):
+            rel = f"A/원문추출/{name}"
+            assert not vi._is_indexable_note(rel, (), self.REF), name
+
+    def test_segment_match_is_exact_not_substring(self):
+        """`원문추출_보완`은 스캔본 빈 껍데기와 실명 개인정보 문서가 모인 곳이다."""
+        assert not vi._is_indexable_note("A/원문추출_보완/신청서.pdf.md", (), self.REF)
+        assert not vi._is_indexable_note("A/추출/x.pdf.md", (), self.REF)
+        assert vi._is_indexable_note("A/B/원문추출/C/x.pdf.md", (), self.REF)
+
+    def test_exclude_dirs_win_over_reference_dirs(self):
+        """바이너리 원본 아카이브 안의 추출본까지 끌어오지 않는다."""
+        assert not vi._is_indexable_note(
+            "99_원본파일/원문추출/x.pdf.md", ["99_원본파일"], self.REF)
+
+    def test_outside_reference_dirs_still_excluded(self):
+        assert not vi._is_indexable_note("B/발표자료.pdf.md", (), self.REF)
+
+    def test_underscore_prefix_still_excluded(self, tmp_path, monkeypatch):
+        vault = tmp_path / "v"
+        (vault / "원문추출").mkdir(parents=True)
+        (vault / "원문추출" / "_index.pdf.md").write_text("x", encoding="utf-8")
+        monkeypatch.setattr(vi, "_c", lambda k, d=None:
+                            self.REF if k == "indexing.reference_dirs" else d)
+        assert vi.iter_note_files(str(vault)) == []
+
+    def test_iter_note_files_diff_is_exactly_the_intended_files(self, tmp_path, monkeypatch):
+        """[PRD §3.3] 편입 전/후 반환 집합 diff 가 의도한 파일만 늘었는지."""
+        vault = tmp_path / "v"
+        (vault / "회의" / "원문추출").mkdir(parents=True)
+        (vault / "회의" / "원문추출_보완").mkdir(parents=True)
+        files = {
+            "회의/진짜회의.md": True,
+            "회의/원문추출/발표자료.pdf.md": True,       # 편입 대상
+            "회의/원문추출/슬라이드.pptx.md": True,      # 편입 대상
+            "회의/원문추출/script.py.md": False,
+            "회의/원문추출_보완/신청서.pdf.md": False,
+            "회의/바깥자료.pdf.md": False,
+        }
+        for rel in files:
+            (vault / rel).write_text("x", encoding="utf-8")
+
+        def cfg(ref):
+            return lambda k, d=None: (ref if k == "indexing.reference_dirs" else d)
+
+        monkeypatch.setattr(vi, "_c", cfg([]))
+        before = {os.path.relpath(f, vault).replace("\\", "/")
+                  for f in vi.iter_note_files(str(vault))}
+        monkeypatch.setattr(vi, "_c", cfg(self.REF))
+        after = {os.path.relpath(f, vault).replace("\\", "/")
+                 for f in vi.iter_note_files(str(vault))}
+
+        assert before == {"회의/진짜회의.md"}
+        assert after - before == {"회의/원문추출/발표자료.pdf.md",
+                                  "회의/원문추출/슬라이드.pptx.md"}
+        assert before - after == set()
+
+    def test_graph_sync_sees_the_same_set(self, tmp_path, monkeypatch):
+        """판정이 갈라지면 위키엔 있는데 그래프엔 없는 노트가 생긴다(과거 사고의 거울상)."""
+        from meeting_minutes_app.common import config_loader
+        from meeting_minutes_app.wiki_core import graph_sync as gs
+
+        vault = tmp_path / "v"
+        (vault / "원문추출").mkdir(parents=True)
+        (vault / "원문추출" / "자료.pdf.md").write_text("x", encoding="utf-8")
+        (vault / "원문추출" / "code.py.md").write_text("x", encoding="utf-8")
+
+        def cfg(k, d=None):
+            if k == "indexing.reference_dirs":
+                return self.REF
+            if k in ("indexing.vault_path", "obsidian.vault_path"):
+                return str(vault)
+            return d
+
+        monkeypatch.setattr(vi, "_c", cfg)
+        monkeypatch.setattr(config_loader, "get", cfg)
+        idx = {os.path.relpath(f, vault).replace("\\", "/")
+               for f in vi.iter_note_files(str(vault))}
+        graph = {os.path.relpath(f, v).replace("\\", "/")
+                 for f, v, _ in gs._iter_vault_notes()}
+        assert idx == graph == {"원문추출/자료.pdf.md"}
+
+    def test_reference_notes_are_not_recent_meetings(self, tmp_path, monkeypatch):
+        """[실전 버그 방지] `01_회의_세미나`가 meeting_dirs 의 "회의"에 substring 으로
+        걸려 발표자료가 '가장 최근 회의'로 승격되던 자리(실측 30건 해당)."""
+        vault = tmp_path / "v"
+        (vault / "01_회의_세미나" / "원문추출").mkdir(parents=True)
+        (vault / "01_회의_세미나" / "원문추출" / "250807_발표자료.pdf.md").write_text(
+            '---\ndate: "2026-07-30"\n---\n발표 내용', encoding="utf-8")
+        (vault / "01_회의_세미나" / "260101 진짜 회의.md").write_text(
+            '---\ndate: "2026-01-01"\ntype: "meeting"\n---\n회의 내용', encoding="utf-8")
+
+        def cfg(k, d=None):
+            if k == "indexing.reference_dirs":
+                return self.REF
+            if k == "wiki_knowledge.embedding_enabled":
+                return False
+            return d
+
+        monkeypatch.setattr(vi, "_c", cfg)
+        ix = vi.VaultIndexer(str(vault), str(tmp_path / "idx.json"))
+        assert ix.build() == 2                      # 둘 다 인덱싱된다(검색은 가능)
+        titles = [n["path"] for n in
+                  ix.recent_notes(limit=10, types=("meeting", "seminar", "lecture"))]
+        assert titles == ["01_회의_세미나/260101 진짜 회의.md"]
+
+
 class TestIndexSaveReplaceRetry:
     """[실전 버그] reindex 가 WinError 32(웹 서버가 인덱스 점유)로 조용히 실패해
     낡은 인덱스가 그대로 남고, 사용자는 '재빌드했다'고 믿는 문제."""

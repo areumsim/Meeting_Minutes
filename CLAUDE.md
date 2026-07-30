@@ -61,3 +61,11 @@ python run_meeting.py reindex          # 위키/그래프 인덱스 재빌드
   이전 필터로 들어온 그래프 노드는 `graph_sync.prune_shadow_note_nodes()`가 정리하며
   웹 [검색 인덱스·그래프 재빌드]가 백필 직전에 자동 실행한다.
   볼트 내용이 바뀌면 `reindex`로 재빌드해야 위키 검색에 반영된다.
+  - **그림자 사본 규칙의 유일한 예외**: `indexing.reference_dirs`(기본 `[]`, 옵트인)에 적은
+    폴더 **안의 문서형 확장자**(`.pdf/.pptx/.docx/.xlsx/.hwp` 등) 추출본은 회의 자료로 편입한다
+    (`is_reference_note()`). 폴더는 **경로 세그먼트 정확 일치**이고, 코드·데이터
+    (`.py/.ipynb/.json/.txt/.md/.sh`)는 그 폴더 안에 있어도 계속 제외된다 — 경로만으로 열면
+    실볼트에서 비문서 170건이 함께 들어와 인덱스가 474→약 780으로 부푼다.
+    편입분은 노트 메타에 `source: "reference"`가 붙어 `recent_notes()`의 '회의' 구제에서 빠진다
+    (`01_회의_세미나`가 `meeting_dirs`의 `"회의"`에 substring으로 걸려 발표자료가 '최근 회의'로
+    승격되던 자리).

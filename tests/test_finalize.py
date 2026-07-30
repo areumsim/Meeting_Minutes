@@ -494,3 +494,61 @@ class TestProvenance:
         assert meta["stt_segment_count"] == 42
         assert meta["stt_source"] == "new_stt"
         assert meta["capture_method"] == "file_upload"
+
+
+class TestProvenanceComment:
+    """로컬 산출물(minutes.md·summary.md) 헤더 — frontmatter 와 같은 dict 에서 렌더한다.
+
+    예전엔 pipeline.py 와 realtime_transcription.py 가 각자 리터럴을 갖고 있어 필드도
+    형식도 달랐고(Source/Type/STT/LLM vs Mode/Type/STT/Lang/Topic), 둘 다 폴백 전
+    **설정값**을 적어 폴백이 일어난 회의에 틀린 값이 남았다.
+    """
+
+    def test_renders_html_comment_not_yaml(self):
+        """YAML 이면 안 된다 — database.import_output_files 가 이 파일을 그대로
+        웹 뷰어에 넣어서 `---` 블록이 화면에 노출된다."""
+        from meeting_minutes_app.wiki_core.note_builder import render_provenance_comment
+        out = render_provenance_comment({"capture_method": "file_upload",
+                                         "tool_version": "0.1.0"},
+                                        generated_at="2026-07-30T10:00:00")
+        assert out.startswith("<!--") and out.rstrip().endswith("-->")
+        assert not out.lstrip().startswith("---")
+        assert "생성: 2026-07-30T10:00:00" in out
+        assert "녹취: file_upload" in out
+
+    def test_omits_empty_fields(self):
+        from meeting_minutes_app.wiki_core.note_builder import render_provenance_comment
+        out = render_provenance_comment({"capture_method": "realtime",
+                                         "tool_build": "", "llm_model": ""})
+        assert "빌드" not in out and "LLM" not in out
+
+    def test_includes_measured_models_and_fallback(self):
+        from meeting_minutes_app.wiki_core.note_builder import render_provenance_comment
+        out = render_provenance_comment({
+            "capture_method": "realtime", "stt_model": "gpt-4o-transcribe, whisper-large-v3-turbo",
+            "stt_fallback_used": True, "llm_model": "gpt-4o-mini",
+        })
+        assert "STT: gpt-4o-transcribe, whisper-large-v3-turbo" in out
+        assert "STT폴백: 사용됨" in out
+        assert "LLM: gpt-4o-mini" in out
+
+    def test_empty_provenance_renders_nothing(self):
+        from meeting_minutes_app.wiki_core.note_builder import render_provenance_comment
+        assert render_provenance_comment({}) == ""
+
+    def test_same_dict_feeds_frontmatter_and_comment(self):
+        """[계약] 두 산출물이 같은 소스에서 나온다 — 리터럴이 갈라지면 여기서 깨진다."""
+        from meeting_minutes_app.wiki_core.note_builder import (
+            build_frontmatter, render_provenance_comment,
+        )
+        inputs = fz.SessionInputs(segments=[], title="t", source="web_realtime",
+                                  stt_models=["gpt-4o-transcribe"])
+
+        class _LLM:
+            models_used = ["gpt-4o-mini"]
+
+        prov = fz._build_provenance(inputs, None, _LLM())
+        fm = build_frontmatter(prov)
+        comment = render_provenance_comment(prov)
+        for value in ("realtime", "gpt-4o-transcribe", "gpt-4o-mini"):
+            assert value in fm and value in comment

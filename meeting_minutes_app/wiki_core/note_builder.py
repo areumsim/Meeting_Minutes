@@ -51,6 +51,50 @@ def safe_filename(name: str, max_len: int = 80) -> str:
     return name[:max_len].strip()
 
 
+#: 로컬 산출물 헤더에 실을 녹취 출처 항목 — (frontmatter 키, 사람이 읽는 라벨).
+#: frontmatter 와 **같은 dict** 에서 렌더한다. 예전엔 pipeline.py 와
+#: realtime_transcription.py 가 각자 리터럴을 갖고 있어 필드도 형식도 달랐고
+#: (Source/Type/STT/LLM vs Mode/Type/STT/Lang/Topic), 둘 다 폴백 전 **설정값**을 적었다.
+_PROVENANCE_COMMENT_FIELDS = (
+    ("capture_method", "녹취"),
+    ("capture_entry", "실행"),
+    ("capture_note", "비고"),      # 예: recovered(크래시 백업에서 복구한 세션)
+    ("stt_model", "STT"),
+    ("llm_model", "LLM"),
+    ("tool_version", "버전"),
+    ("tool_build", "빌드"),
+)
+
+
+def render_provenance_comment(provenance: Dict[str, Any],
+                              generated_at: str = "",
+                              extra: Optional[Dict[str, Any]] = None) -> str:
+    """녹취 출처 메타 → 마크다운 본문 맨 위의 HTML 주석 블록.
+
+    YAML frontmatter 가 아니라 **HTML 주석**인 이유: 이 파일(output 폴더의
+    minutes.md·summary.md)은 web/backend/database.py 의 import_output_files 가 그대로
+    읽어 웹 뷰어에 넣는다. `---` 블록을 넣으면 화면에 그대로 노출된다. 주석은 렌더 시
+    보이지 않으면서 파일을 열면 확인할 수 있다.
+
+    extra: 산출물별 부가 항목(예: {"원본": "회의.m4a"}). 라벨 그대로 출력한다.
+    """
+    prov = provenance or {}
+    rows = [f"생성: {generated_at}"] if generated_at else []
+    for key, label in _PROVENANCE_COMMENT_FIELDS:
+        v = prov.get(key)
+        if v in (None, "", [], False):
+            continue
+        rows.append(f"{label}: {v}")
+    if prov.get("stt_fallback_used"):
+        rows.append("STT폴백: 사용됨")
+    for label, v in (extra or {}).items():
+        if v not in (None, "", []):
+            rows.append(f"{label}: {v}")
+    if not rows:
+        return ""
+    return "<!-- " + " | ".join(rows) + " -->\n\n"
+
+
 def meeting_note_basename(title: str, file_date: str = "",
                           fallback_label: str = "회의록") -> str:
     """회의록/전사 노트의 파일명(확장자 제외)을 만든다 — **이 규칙의 유일한 소스**.

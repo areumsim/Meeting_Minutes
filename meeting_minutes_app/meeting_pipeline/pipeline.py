@@ -253,11 +253,33 @@ def process_single(
 
     from meeting_minutes_app.meeting_pipeline import finalize as fz
 
-    header = (
-        f"<!-- Generated: {datetime.now().isoformat()} -->\n"
-        f"<!-- Source: {Path(input_path).name} | Type: {args.type} | "
-        f"STT: {args.model} | LLM: {args.llm} -->\n\n"
+    _session_inputs = fz.SessionInputs(
+        segments=segments_for_doc,
+        title=title,
+        topic=topic_str,
+        doc_type=args.type,
+        session_dt=session_dt,
+        base_memo=full_memo or None,
+        source="batch",
+        attendees=_attendee_candidates(segments_for_doc, _plan_match),
+        language=getattr(args, "language", "") or "",
+        stt_models=stt_used.get("stt_models", []),
+        stt_providers=stt_used.get("stt_providers", []),
+        stt_fallback_used=bool(stt_used.get("stt_fallback_used")),
     )
+
+    def header() -> str:
+        """로컬 산출물 맨 위 주석 — 볼트 노트 frontmatter 와 **같은 dict** 에서 렌더한다.
+
+        저장 시점에 평가해야 한다: llm.models_used 는 회의록 생성 중에 채워지므로
+        미리 만들어 두면 LLM 항목이 비어 버린다(예전 리터럴은 폴백 전 **설정값**을 적어
+        폴백이 일어난 회의에 틀린 값이 남았다)."""
+        from meeting_minutes_app.wiki_core.note_builder import render_provenance_comment
+        return render_provenance_comment(
+            fz._build_provenance(_session_inputs, None, llm),
+            generated_at=datetime.now().isoformat(timespec="seconds"),
+            extra={"원본": Path(input_path).name},
+        )
 
     class _BatchEvents(fz.FinalizeEvents):
         """finalize 산출물 → output 폴더 파일 저장 (batch 파일명 규칙)."""
@@ -268,10 +290,13 @@ def process_single(
         def on_document(self, dtype, content, fmt="markdown"):
             try:
                 if dtype == "minutes":
-                    save(header + content,
+                    save(header() + content,
                          os.path.join(output_dir, f"{pfx}minutes.md"), labels["title"])
                 elif dtype == "summary":
-                    save(content, os.path.join(output_dir, f"{pfx}summary.md"), "요약본")
+                    # 요약본에도 붙인다 — 메일 첨부로 이것만 받아 보는 경우가 있는데
+                    # 예전엔 minutes.md 에만 있어 출처를 확인할 수 없었다.
+                    save(header() + content,
+                         os.path.join(output_dir, f"{pfx}summary.md"), "요약본")
                 elif dtype == "actions":
                     save(content, os.path.join(output_dir, f"{pfx}actions.json"),
                          "액션 아이템 (JSON)")
@@ -297,20 +322,7 @@ def process_single(
     _root_out = Path(__file__).resolve().parent.parent.parent / str(_c("output_dir", "output"))
 
     res = fz.run_post_session(
-        fz.SessionInputs(
-            segments=segments_for_doc,
-            title=title,
-            topic=topic_str,
-            doc_type=args.type,
-            session_dt=session_dt,
-            base_memo=full_memo or None,
-            source="batch",
-            attendees=_attendee_candidates(segments_for_doc, _plan_match),
-            language=getattr(args, "language", "") or "",
-            stt_models=stt_used.get("stt_models", []),
-            stt_providers=stt_used.get("stt_providers", []),
-            stt_fallback_used=bool(stt_used.get("stt_fallback_used")),
-        ),
+        _session_inputs,
         fz.FinalizeOptions(
             llm=llm,
             do_refine=False,

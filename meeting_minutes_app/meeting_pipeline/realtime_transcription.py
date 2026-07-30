@@ -96,14 +96,20 @@ from meeting_minutes_app.common.realtime_ws_session import (
 
 
 def _make_cli_finalize_events(output_dir: str, stem: str, labels: Dict[str, str],
-                              header: str):
+                              header):
     """finalize.run_post_session 산출물 → output 폴더 파일 저장.
 
     _generate_output(실시간 종료)과 cmd_recover(세션 복구)가 공용으로 사용.
     (과거 두 함수 + _apply_wiki_quality_loop에 복사돼 있던 저장/후처리 로직을
     meeting_pipeline/finalize.py 오케스트레이터로 통합하면서 도입.)
+
+    header: 문자열 또는 **무인자 함수**. 녹취 출처 주석은 저장 시점에 평가해야
+    실제 사용 모델(llm.models_used)이 담긴다 — 미리 만들면 비어 있다.
     """
     from meeting_minutes_app.meeting_pipeline.finalize import FinalizeEvents
+
+    def _hdr() -> str:
+        return header() if callable(header) else (header or "")
 
     class _CliEvents(FinalizeEvents):
         def on_status(self, stage, message):
@@ -115,7 +121,7 @@ def _make_cli_finalize_events(output_dir: str, stem: str, labels: Dict[str, str]
                     save(content, os.path.join(output_dir, f"{stem}_refined_script.txt"),
                          "교정 스크립트")
                 elif dtype == "minutes":
-                    save(header + content, os.path.join(output_dir, f"{stem}_minutes.md"),
+                    save(_hdr() + content, os.path.join(output_dir, f"{stem}_minutes.md"),
                          labels["title"])
                 elif dtype == "actions":
                     save(content, os.path.join(output_dir, f"{stem}_actions.json"),
@@ -124,7 +130,10 @@ def _make_cli_finalize_events(output_dir: str, stem: str, labels: Dict[str, str]
                     save(content, os.path.join(output_dir, f"{stem}_fact_check.md"),
                          "사실 검증")
                 elif dtype == "summary":
-                    save(content, os.path.join(output_dir, f"{stem}_summary.md"), "요약본(md)")
+                    # 요약본에도 붙인다 — 메일 첨부로 이것만 받아 보는 경우가 있는데
+                    # 예전엔 minutes.md 에만 있어 출처를 확인할 수 없었다.
+                    save(_hdr() + content,
+                         os.path.join(output_dir, f"{stem}_summary.md"), "요약본(md)")
                     save(content, os.path.join(output_dir, f"{stem}_summary.txt"), "요약본(txt)")
                 # script/transcript는 호출자가 직접 저장 (회의록 실패 시에도 보존),
                 # wiki_context/wiki_proposal은 finalize가 artifacts_dir에 직접 저장
@@ -658,20 +667,32 @@ def cmd_recover(log_path: str, output_dir: str, llm_preferred: str,
     # (컨텍스트 주입 → 교정 → 회의록 → 액션 → 사실검증 → 요약 → 발행 → wiki 산출물/registry)
     from meeting_minutes_app.meeting_pipeline import finalize as fz
 
-    header = (f"<!-- Recovered: {datetime.now().isoformat()} -->\n"
-              f"<!-- Source: {log_path} | Type: {doc_type} -->\n\n")
+    _session_inputs = fz.SessionInputs(
+        segments=segments,
+        title=(topic or f"복구 {session_dt}"),
+        topic=topic,
+        doc_type=doc_type,
+        session_dt=session_dt,
+        base_memo=memo,
+        source="recover",
+        language=language or "",
+    )
+
+    def header() -> str:
+        """복구 산출물 헤더 — 다른 경로와 같은 렌더러를 쓴다.
+
+        capture_note: recovered 가 provenance 에 들어가므로 '복구본'임이 저절로 드러난다
+        (예전에는 이 경로만 `<!-- Recovered: -->` 라는 별도 문구를 썼다)."""
+        from meeting_minutes_app.wiki_core.note_builder import render_provenance_comment
+        return render_provenance_comment(
+            fz._build_provenance(_session_inputs, None, llm),
+            generated_at=datetime.now().isoformat(timespec="seconds"),
+            extra={"복구원본": log_path},
+        )
+
     events = _make_cli_finalize_events(output_dir, stem, labels, header)
     res = fz.run_post_session(
-        fz.SessionInputs(
-            segments=segments,
-            title=(topic or f"복구 {session_dt}"),
-            topic=topic,
-            doc_type=doc_type,
-            session_dt=session_dt,
-            base_memo=memo,
-            source="recover",
-            language=language or "",
-        ),
+        _session_inputs,
         fz.FinalizeOptions(
             llm=llm,
             do_refine=False,   # recover는 기존에도 교정 없이 원본 세그먼트로 생성
@@ -2196,11 +2217,33 @@ class RealtimeSession:
         # 과거 이 자리에 복사돼 있던 개별 스테이지들은 meeting_pipeline/finalize.py로 통합됐다.
         from meeting_minutes_app.meeting_pipeline import finalize as fz
 
-        header = (f"<!-- Generated: {datetime.now().isoformat()} -->\n"
-                  f"<!-- Mode: realtime | Type: {self.doc_type} | "
-                  f"STT: {self.stt_model} | Lang: {self.language}"
-                  + (f" | Topic: {self.topic}" if self.topic else "")
-                  + " -->\n\n")
+        _session_inputs = fz.SessionInputs(
+            segments=segments,
+            title=(self.topic or f"실시간 {session_dt}"),
+            topic=self.topic,
+            doc_type=self.doc_type,
+            session_dt=session_dt,
+            base_memo=self.memo,
+            source="realtime",
+            language=self.language or "",
+            # WS 모드는 WebSocketTranscriber 라 stt_usage() 가 없다 — 그 경우
+            # 빈 값으로 두어 '모르는 것을 적지 않는다'.
+            **(self.transcriber.stt_usage()
+               if hasattr(self.transcriber, "stt_usage") else {}),
+        )
+
+        def header() -> str:
+            """볼트 노트 frontmatter 와 **같은 dict** 에서 렌더한다(리터럴 중복 제거).
+
+            저장 시점 평가 — llm.models_used 는 회의록 생성 중에 채워진다."""
+            from meeting_minutes_app.wiki_core.note_builder import render_provenance_comment
+            extra = {"주제": self.topic} if self.topic else None
+            return render_provenance_comment(
+                fz._build_provenance(_session_inputs, None, self.llm),
+                generated_at=datetime.now().isoformat(timespec="seconds"),
+                extra=extra,
+            )
+
         events = _make_cli_finalize_events(self.output_dir, stem, self.labels, header)
 
         # 실시간 vault 검색 수집분 — 회의록 컨텍스트 + "🔗 관련 노트" 섹션에 병합.
@@ -2215,20 +2258,7 @@ class RealtimeSession:
                   f" (근거 {len(_rt_evidence)}건)")
 
         res = fz.run_post_session(
-            fz.SessionInputs(
-                segments=segments,
-                title=(self.topic or f"실시간 {session_dt}"),
-                topic=self.topic,
-                doc_type=self.doc_type,
-                session_dt=session_dt,
-                base_memo=self.memo,
-                source="realtime",
-                language=self.language or "",
-                # WS 모드는 WebSocketTranscriber 라 stt_usage() 가 없다 — 그 경우
-                # 빈 값으로 두어 '모르는 것을 적지 않는다'.
-                **(self.transcriber.stt_usage()
-                   if hasattr(self.transcriber, "stt_usage") else {}),
-            ),
+            _session_inputs,
             fz.FinalizeOptions(
                 llm=self.llm,
                 plan_match=_plan_match,   # 화자추론 단계에서 1회 탐색한 결과 재사용

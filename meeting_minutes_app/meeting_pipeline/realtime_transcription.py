@@ -198,13 +198,11 @@ if _cfg_ok:
 
 # 비용 단가 — common/pricing.py 단일 소스 사용 (과거 이 파일에만 2벌 복사돼 있었음)
 from meeting_minutes_app.common.pricing import (
-    STT_PRICE_PER_MIN as _STT_PRICE_TABLE,
     LLM_TOKEN_PRICE as _LLM_TOKEN_PRICE,
     stt_rate_per_min as _stt_rate_per_min,
     MINUTES_COST_PER_SESSION as _MINUTES_COST_PER_SESSION,
     TRANSLATE_COST_PER_MIN as _TRANSLATE_COST_PER_MIN,
 )
-_PRICING = {**_STT_PRICE_TABLE, **_LLM_TOKEN_PRICE}
 
 C_CYAN   = "\033[36m"
 C_YELLOW = "\033[33m"
@@ -261,16 +259,32 @@ atexit.register(_atexit_handler)
 #  비용 추정
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 def estimate_cost(stt_model: str, translate: bool, translate_model: str) -> Dict[str, float]:
-    # STT 단가 조회는 pricing.stt_rate_per_min 하나로 수렴한다 — _PRICING 은 STT($/분)와
-    # LLM($/1M토큰)을 합친 dict 라 STT 조회에 쓰면 미등록 기본값이 갈릴 수 있다.
+    """시간당 대략 비용($) — 세션 헤더·인디케이터 표시 전용(한도 판정에는 쓰지 않는다).
+
+    단가 조회는 common/pricing 로 수렴한다. 과거엔 STT($/분)와 LLM($/1M토큰) 표를 하나로
+    합친 dict 를 써서, 단위가 다른 두 공간이 섞여 있었다(모델명이 양쪽에 다 있으면 float 를
+    구독하려다 터진다). 회의록 단가도 gpt-4o 를 하드코딩해 Claude 설정 사용자에게는 늘
+    gpt-4o 값을 보여줬다 — 웹(batch/realtime API)은 이미 실제 모델 단가를 쓰므로 같은
+    세션에서 CLI 와 웹이 다른 값을 표시했다.
+    """
+    from meeting_minutes_app.common import pricing as _pricing
     stt_cost = _stt_rate_per_min(stt_model) * 60
     translate_cost = 0.0
-    if translate and translate_model in _PRICING:
-        tpm = _PRICING[translate_model]
+    if translate and translate_model in _LLM_TOKEN_PRICE:
+        tpm = _LLM_TOKEN_PRICE[translate_model]
         tokens_hr = int(130 * 60 * 1.33)
+        # 주의: 이 토큰 기반 계산과 파일 내 _TRANS_PRICE_PER_MIN($/분, 세션 메타 기록용)은
+        # 서로 다른 두 벌이다. 어느 쪽이 실제 청구액에 가까운지 실측 근거가 없어
+        # 통일하지 않는다(근거 없이 상수·계산식을 바꾸지 않는다는 기존 원칙).
         translate_cost = (tokens_hr / 1_000_000) * (tpm["in"] + tpm["out"])
-    gpt4o = _PRICING["gpt-4o"]
-    minutes_cost = (20_000 / 1_000_000) * gpt4o["in"] + (3_000 / 1_000_000) * gpt4o["out"]
+    # 회의록 생성 단가는 실제 설정 모델(gpt/claude)을 반영 — pricing 이 단일 소스다.
+    # 어떤 모델이 회의록을 쓰는지 해석하는 규칙도 pricing.current_models 하나만 쓴다
+    # (그 해석이 이 파일에 또 복사되면 웹과 다시 갈라진다).
+    if _cfg_ok:
+        _m = _pricing.current_models(_cfg_mod)
+        minutes_cost = _pricing.minutes_cost(_m["llm"], _m["minutes_model"])
+    else:
+        minutes_cost = _MINUTES_COST_PER_SESSION
     return {
         "stt":       round(stt_cost, 4),
         "translate": round(translate_cost, 4),

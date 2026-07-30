@@ -157,3 +157,42 @@ class TestEstimate:
         short = pricing.estimate_session_cost(60, "gpt-4o-transcribe", include_minutes=True)
         long = pricing.estimate_session_cost(3600, "gpt-4o-transcribe", include_minutes=True)
         assert long["total"] > short["total"] > 0
+
+
+class TestCliRunningCostEstimate:
+    """CLI 실시간의 시간당 비용 표시(realtime_transcription.estimate_cost).
+
+    표시 전용이다 — 월 지출 한도는 pricing.estimate_session_cost(웹)가 판정한다."""
+
+    def _rt(self, monkeypatch, values):
+        # 마이크 의존 모듈 스텁은 test_stt_fallback 의 헬퍼를 재사용한다(같은 스텁을
+        # 두 파일에 복사하지 않는다).
+        from test_stt_fallback import _import_rt
+        rt = _import_rt(monkeypatch)
+
+        class _Cfg:
+            def get(self, k, d=None):
+                return values.get(k, d)
+        monkeypatch.setattr(rt, "_cfg_mod", _Cfg())
+        monkeypatch.setattr(rt, "_cfg_ok", True)
+        return rt
+
+    def test_minutes_cost_follows_configured_llm(self, monkeypatch):
+        """Claude 설정이면 Claude 단가로 계산한다 — 과거엔 항상 gpt-4o 하드코딩이라
+        같은 세션에서 CLI 와 웹이 다른 값을 보여줬다."""
+        rt = self._rt(monkeypatch, {"models.llm": "claude",
+                                    "models.claude_model": "claude-opus-4-8"})
+        got = rt.estimate_cost("gpt-4o-mini-transcribe", False, "gpt-4o-mini")
+        assert got["minutes"] == pytest.approx(
+            round(pricing.minutes_cost("claude", "claude-opus-4-8"), 4))
+        gpt = self._rt(monkeypatch, {"models.llm": "gpt",
+                                     "models.minutes_model": "gpt-4o"}).estimate_cost(
+            "gpt-4o-mini-transcribe", False, "gpt-4o-mini")
+        assert got["minutes"] > gpt["minutes"]      # Claude 가 더 비싸다
+
+    def test_stt_named_translate_model_does_not_crash(self, monkeypatch):
+        """단위가 다른 두 단가표를 합쳐 쓰던 흔적 — STT 표의 키(whisper-1)가 번역 모델로
+        들어오면 float 를 dict 처럼 구독하려다 터졌다. 이제 LLM 표만 본다."""
+        rt = self._rt(monkeypatch, {"models.llm": "gpt"})
+        got = rt.estimate_cost("gpt-4o-mini-transcribe", True, "whisper-1")
+        assert got["translate"] == 0.0 and got["total"] > 0

@@ -741,7 +741,12 @@ def _transcribe_chunk_via_chain(
     제공자를 순회하면 헛돈·헛시간이므로 `_chunk_is_silent()`로 한 번 갈라낸다.
 
     `state`(_ChainState)를 주면 청크 간에 제공자 건강 상태를 공유해, 이미 죽은 것으로
-    판정된 제공자를 건너뛴다(같은 파일의 남은 청크에서 헛시간 반복 방지)."""
+    판정된 제공자를 건너뛴다(같은 파일의 남은 청크에서 헛시간 반복 방지).
+
+    무음 판정은 여기와 `_transcribe_chunk_checked`(분할 재시도 생략)에서 청크당 각각
+    1회 돈다 — 의도적으로 합치지 않았다. 발동 조건이 '빈 전사'로 좁고 절약분은 ffmpeg
+    디코드 한 번(배치 백그라운드)인데, 두 판정을 엮으면 전사 유실과 직결된 복구 경로를
+    건드리게 된다."""
     last_err: Optional[Exception] = None
     empty_result: Optional[List[Dict]] = None   # 예외 없이 받은 빈 결과(있으면 성공으로 취급)
     silence_checked = False

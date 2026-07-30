@@ -640,6 +640,11 @@ class _ChainState:
 
     def __init__(self) -> None:
         self._fails: Dict[int, int] = {}
+        #: 실제로 전사를 만들어 낸 (제공자, 모델) — 등장 순서 유지, 중복 없음.
+        #: 청크마다 다른 제공자로 폴백될 수 있어 단일 값이 아니라 **집합**이다.
+        #: 회의록 frontmatter 의 녹취 출처 메타가 이 값을 쓴다 — 설정값 모델을 적으면
+        #: 폴백이 일어난 회의에 '틀린 감사 기록'이 남는다.
+        self.used: List[Tuple[str, str]] = []
 
     def is_down(self, idx: int) -> bool:
         return self._fails.get(idx, 0) >= self.DOWN_AFTER_CONSECUTIVE_FAILURES
@@ -647,8 +652,10 @@ class _ChainState:
     def record_failure(self, idx: int) -> None:
         self._fails[idx] = self._fails.get(idx, 0) + 1
 
-    def record_success(self, idx: int) -> None:
+    def record_success(self, idx: int, provider: str = "", model: str = "") -> None:
         self._fails.pop(idx, None)
+        if provider and (provider, model) not in self.used:
+            self.used.append((provider, model))
 
 
 def _local_stage_ready() -> bool:
@@ -793,7 +800,7 @@ def _transcribe_chunk_via_chain(
 
         if _segments_have_text(segs):
             if state:
-                state.record_success(idx)
+                state.record_success(idx, provider, pmodel)
             return segs
 
         if empty_result is None:
@@ -828,7 +835,13 @@ def run_stt(
     speaker_names: Optional[List[str]] = None,
     work_dir: Optional[str] = None,
     debug_dir: Optional[str] = None,
+    meta_out: Optional[Dict[str, Any]] = None,
 ) -> List[Dict]:
+    """meta_out 을 주면 **실제로 전사를 만든** 제공자·모델을 채워 준다.
+
+    {"stt_models": [...], "stt_providers": [...], "stt_fallback_used": bool}.
+    설정값이 아니라 실측이라 폴백이 일어난 회의도 기록이 사실과 맞는다. 기존
+    호출자는 인자를 안 넘기면 동작이 그대로다(반환값 변경 없음)."""
     # 기본값을 인자 기본식으로 두면 import 시점 값이 고정돼 설정 reload 가 반영되지
     # 않는다(웹 [설정]에서 STT 모델을 바꿔도 예전 모델로 돈다) → 호출 시점에 읽는다.
     model = model or DEFAULT_STT_MODEL
@@ -899,6 +912,13 @@ def run_stt(
                 warn(f"  전사 정화: {_line}")
         except Exception as e:
             warn(f"  전사 정화 건너뜀: {e}")
+    if meta_out is not None:
+        used = list(chain_state.used)
+        # 체인의 1순위(설정값 모델)가 아닌 것이 하나라도 쓰였으면 폴백이 일어난 것이다.
+        primary = (chain[0][0], chain[0][1]) if chain else None
+        meta_out["stt_providers"] = [p for p, _ in used]
+        meta_out["stt_models"] = [m for _, m in used]
+        meta_out["stt_fallback_used"] = bool(used) and any(u != primary for u in used)
     ok(f"STT 완료: {len(filtered)}개 세그먼트 ({total_time:.1f}초)")
     return filtered
 

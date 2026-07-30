@@ -411,3 +411,86 @@ class TestLLMRequired:
                 fz.SessionInputs(segments=SEGMENTS, title="t"),
                 fz.FinalizeOptions(llm=None),
             )
+
+
+class TestProvenance:
+    """[PRD_Natively FR-A1] 회의록에 '언제·어떤 방식·어떤 모델로 녹취했나'가 남는다.
+
+    스텔스 도구의 반대편에 서려면 안내가 아니라 **기록**이 필요하다. 사용자 입력은
+    0개이고, 조립은 finalize 한 곳이다 — publish_extra 를 채우는 건 배치·폴더감시
+    뿐이라 호출자 쪽에 두면 실시간(CLI·웹) 경로가 통째로 빠진다.
+    """
+
+    def _meta(self, calls):
+        return calls["publish"][0][1]["note_meta"]
+
+    @pytest.mark.parametrize("source,method,entry", [
+        ("batch", "file_upload", "cli"),
+        ("ingest", "folder_watch", "cli"),
+        ("realtime", "realtime", "cli"),
+        ("web_realtime", "realtime", "web"),
+        ("recover", "realtime", "cli"),
+    ])
+    def test_capture_method_mapping(self, patched, tmp_path, monkeypatch, source, method, entry):
+        ev = RecordingEvents()
+        inputs = fz.SessionInputs(
+            segments=SEGMENTS, title="주간회의", topic="양자", doc_type="meeting",
+            session_dt="2026년 07월 07일 10:00", source=source, session_id="s",
+        )
+        fz.run_post_session(inputs, fz.FinalizeOptions(llm=object(),
+                                                       artifacts_dir=tmp_path), ev)
+        meta = self._meta(patched)
+        assert meta["capture_method"] == method
+        assert meta["capture_entry"] == entry
+        assert meta["provenance_schema"] == fz.PROVENANCE_SCHEMA
+        assert meta["tool_version"]
+
+    def test_recover_is_marked(self, patched, tmp_path):
+        ev = RecordingEvents()
+        inputs = fz.SessionInputs(segments=SEGMENTS, title="t", source="recover")
+        fz.run_post_session(inputs, fz.FinalizeOptions(llm=object(),
+                                                       artifacts_dir=tmp_path), ev)
+        assert self._meta(patched)["capture_note"] == "recovered"
+
+    def test_records_measured_models_not_configured_ones(self, patched, tmp_path):
+        """폴백이 일어난 회의에 설정값 모델을 적으면 '틀린 감사 기록'이 된다."""
+        class _LLM:
+            models_used = ["gpt-4o-mini", "claude-opus-4-7"]
+
+        ev = RecordingEvents()
+        inputs = fz.SessionInputs(
+            segments=SEGMENTS, title="t", source="batch",
+            stt_models=["gpt-4o-transcribe", "whisper-large-v3-turbo"],
+            stt_providers=["OpenAI", "Groq"], stt_fallback_used=True,
+        )
+        fz.run_post_session(inputs, fz.FinalizeOptions(llm=_LLM(),
+                                                       artifacts_dir=tmp_path), ev)
+        meta = self._meta(patched)
+        assert meta["stt_model"] == "gpt-4o-transcribe, whisper-large-v3-turbo"
+        assert meta["stt_provider"] == "OpenAI, Groq"
+        assert meta["stt_fallback_used"] is True
+        assert meta["llm_model"] == "gpt-4o-mini, claude-opus-4-7"
+
+    def test_omits_unknown_models(self, patched, tmp_path):
+        """--resume 로 기존 전사를 재사용하면 어느 모델이 만들었는지 모른다.
+        모르는 것은 **적지 않는다** — 틀린 값보다 없는 편이 낫다."""
+        res, _ = run(patched, tmp_path)
+        meta = self._meta(patched)
+        assert "stt_model" not in meta
+        assert "llm_model" not in meta
+        assert meta["capture_method"] == "test"   # 미지의 source 는 그대로 남긴다
+
+    def test_caller_quality_meta_is_preserved(self, patched, tmp_path):
+        """호출자가 넘긴 품질 메타(stt_segment_count 등)를 덮어쓰지 않는다."""
+        ev = RecordingEvents()
+        inputs = fz.SessionInputs(segments=SEGMENTS, title="t", source="batch")
+        fz.run_post_session(
+            inputs,
+            fz.FinalizeOptions(llm=object(), artifacts_dir=tmp_path,
+                               publish_extra={"note_meta": {"stt_segment_count": 42,
+                                                            "stt_source": "new_stt"}}),
+            ev)
+        meta = self._meta(patched)
+        assert meta["stt_segment_count"] == 42
+        assert meta["stt_source"] == "new_stt"
+        assert meta["capture_method"] == "file_upload"

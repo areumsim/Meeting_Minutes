@@ -186,7 +186,16 @@ class LLMClient:
         self.anthropic     = None
         self._call_count   = 0
         self._total_tokens = 0
+        #: 실제로 응답을 만든 모델 — 등장 순서 유지, 중복 없음.
+        #: chat()은 GPT↔Claude 상호 폴백을 하므로 preferred 가 실제 모델이라는 보장이
+        #: 없다. 회의록 frontmatter 의 녹취 출처 메타가 이 값을 쓴다.
+        #: **인스턴스 속성이어야 한다** — 웹은 세션이 동시에 돌아 전역이면 섞인다.
+        self.models_used: List[str] = []
         self._init()
+
+    def _record_model(self, model: str) -> None:
+        if model and model not in self.models_used:
+            self.models_used.append(model)
 
     def _init(self):
         try:
@@ -237,6 +246,7 @@ class LLMClient:
                 logger.debug(f"[GPT USAGE] {r.usage.prompt_tokens}+{r.usage.completion_tokens} "
                              f"time={elapsed:.1f}s")
             self._call_count += 1
+            self._record_model(_model)
             return result
         except Exception as e:
             logger.error(f"[GPT ERROR] {type(e).__name__}: {e}")
@@ -263,6 +273,7 @@ class LLMClient:
             logger.debug(f"[CLAUDE USAGE] in={r.usage.input_tokens} "
                          f"out={r.usage.output_tokens} time={elapsed:.1f}s")
             self._call_count += 1
+            self._record_model(CLAUDE_MODEL)
             return result
         except Exception as e:
             logger.error(f"[CLAUDE ERROR] {type(e).__name__}: {e}")

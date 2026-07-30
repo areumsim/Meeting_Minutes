@@ -342,7 +342,7 @@ def enrich_and_publish(
     planned_match: Any = _PLAN_UNSET,
     source_audio: str = "",
     source_file_date: str = "",
-    stt_meta: Optional[Dict[str, Any]] = None,
+    note_meta: Optional[Dict[str, Any]] = None,
     transcript_md: str = "",
     evidence: Optional[List[str]] = None,
     force_republish: bool = False,
@@ -460,7 +460,7 @@ def enrich_and_publish(
                     source_audio=source_audio,
                     source_file_date=source_file_date,
                     processed_at=datetime.now().isoformat(timespec="seconds"),
-                    stt_meta=stt_meta,
+                    note_meta=note_meta,
                     transcript_md=transcript_md,
                 )
                 result["obsidian_path"] = path
@@ -481,7 +481,7 @@ def enrich_and_publish(
                     source_audio=source_audio,
                     source_file_date=source_file_date,
                     processed_at=datetime.now().isoformat(timespec="seconds"),
-                    stt_meta=stt_meta,
+                    note_meta=note_meta,
                     transcript_md=transcript_md,
                     evidence=evidence,
                     output_folder=output_folder,

@@ -256,6 +256,7 @@ class IngestionPipeline:
             from meeting_minutes_app.meeting_pipeline import stt
             from meeting_minutes_app.meeting_pipeline import minutes_generation as mg
             work_dir = tempfile.mkdtemp(prefix="ingest_audio_")
+            stt_used: dict = {}   # 실제로 전사를 만든 STT 제공자·모델(실측)
             try:
                 audio2 = stt.prepare_audio(audio_path, work_dir)
                 segments = stt.run_stt(
@@ -264,6 +265,7 @@ class IngestionPipeline:
                     language=mm._c("realtime.language", None),
                     speaker_names=None,
                     work_dir=work_dir,
+                    meta_out=stt_used,
                 )
             finally:
                 shutil.rmtree(work_dir, ignore_errors=True)
@@ -367,6 +369,9 @@ class IngestionPipeline:
                 session_dt=session_dt, base_memo=base_memo, source="ingest",
                 attendees=speakers,
                 language=str(mm._c("realtime.language", "") or ""),
+                stt_models=stt_used.get("stt_models", []),
+                stt_providers=stt_used.get("stt_providers", []),
+                stt_fallback_used=bool(stt_used.get("stt_fallback_used")),
             )
             options = fz.FinalizeOptions(
                 llm=self._llm, indexer=self._indexer, obs=self._obs,
@@ -377,7 +382,7 @@ class IngestionPipeline:
                 publish_extra={
                     "source_audio": audio_path,
                     "source_file_date": _extract_date_from_path(audio_path),
-                    "stt_meta": stt_meta,
+                    "note_meta": stt_meta,
                     "transcript_md": transcript_md,
                     # --force 는 여기서도 같은 뜻이다 — 위(:235)의 '이미 처리된 녹음 노트'
                     # 검사는 예상 경로만 보므로 폴더 라우팅이 갈리면 못 잡는다.

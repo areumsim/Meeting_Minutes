@@ -65,6 +65,9 @@ def process_single(
     transcript_path = os.path.join(output_dir, f"{pfx}transcript.md")
     force_stt = bool(getattr(args, "force_stt", False))
     stt_source = "new_stt"
+    # 이번 실행에서 실제로 STT 를 돌렸을 때만 채워진다(--resume 재사용 경로는 빈 채로
+    # 남는다 — 그 경우 어느 모델이 만든 전사인지 지금 알 수 없으므로 기록하지 않는다).
+    stt_used: dict = {}
 
     # ── 기존 STT 결과 재사용 ──
     if not force_stt and os.path.isfile(seg_path):
@@ -99,6 +102,7 @@ def process_single(
             language=getattr(args, "language", None),
             speaker_names=speaker_names,
             work_dir=work_dir, debug_dir=debug_dir,
+            meta_out=stt_used,
         )
         if not segments:
             raise RuntimeError(f"STT 결과 비어있음: {input_path}")
@@ -303,6 +307,9 @@ def process_single(
             source="batch",
             attendees=_attendee_candidates(segments_for_doc, _plan_match),
             language=getattr(args, "language", "") or "",
+            stt_models=stt_used.get("stt_models", []),
+            stt_providers=stt_used.get("stt_providers", []),
+            stt_fallback_used=bool(stt_used.get("stt_fallback_used")),
         ),
         fz.FinalizeOptions(
             llm=llm,
@@ -322,7 +329,7 @@ def process_single(
             publish_extra={
                 "source_audio": input_path,
                 "source_file_date": source_file_date,
-                "stt_meta": stt_meta,
+                "note_meta": stt_meta,
                 "transcript_md": transcript_for_publish,
                 "force_republish": bool(getattr(args, "force_republish", False)),
             },

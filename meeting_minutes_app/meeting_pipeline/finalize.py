@@ -161,6 +161,12 @@ class SessionInputs:
     attendees: List[str] = field(default_factory=list)
     session_id: str = ""                    # graph_sync용 (웹 세션 ID 등)
     language: str = ""                       # ko|en (빈값이면 전사 내용으로 추정)
+    #: 이번 세션에서 **실제로** 전사를 만든 STT 모델·제공자(stt.run_stt(meta_out=)의 결과).
+    #: 설정값이 아니라 실측이라 폴백이 일어난 회의도 기록이 사실과 맞는다. 비워 두면
+    #: 녹취 출처 메타에서 STT 항목이 생략된다(틀린 값을 적는 것보다 없는 편이 낫다).
+    stt_models: List[str] = field(default_factory=list)
+    stt_providers: List[str] = field(default_factory=list)
+    stt_fallback_used: bool = False
 
 
 @dataclass
@@ -227,6 +233,72 @@ class FinalizeResult:
     source_note: str = ""
     decisions: Optional[List[str]] = None
     errors: List[Tuple[str, str]] = field(default_factory=list)   # (stage, message)
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#  녹취 출처 메타 (provenance)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+#: 이 메타의 스키마 버전. 필드가 아예 없는 노트 = 이 기능 도입 이전 산출물이다.
+#: (과거 회의의 실제 출처는 지금 알 수 없으므로 백필하지 않는다 — 없는 게 정직하다.)
+PROVENANCE_SCHEMA = 1
+
+#: SessionInputs.source → 사람이 읽는 녹취 방식.
+#: recover 는 크래시 백업(PCM/JSONL) 복구라 원래 녹취는 실시간이었다.
+_CAPTURE_METHOD = {
+    "batch": "file_upload",
+    "ingest": "folder_watch",
+    "realtime": "realtime",
+    "realtime_cli": "realtime",
+    "web_realtime": "realtime",
+    "recover": "realtime",
+}
+
+#: 웹 UI에서 돌았는지 터미널에서 돌았는지 — 같은 녹취 방식이라도 진입점이 다르다.
+_CAPTURE_ENTRY = {
+    "batch": "cli", "ingest": "cli", "realtime": "cli", "realtime_cli": "cli",
+    "recover": "cli", "web_realtime": "web",
+}
+
+
+def _build_provenance(inputs: "SessionInputs", options: "FinalizeOptions",
+                      llm: Any = None) -> Dict[str, Any]:
+    """회의록 frontmatter 에 넣을 녹취 출처 메타.
+
+    "이 회의록이 언제·어떤 방식·어떤 모델로 만들어졌나"를 산출물 자체에 남긴다.
+    사용자 입력은 0개 — 파이프라인이 이미 아는 값만 쓴다.
+
+    **모르는 것은 적지 않는다.** 모델명은 설정값이 아니라 실측(stt.run_stt(meta_out=) ·
+    LLMClient.models_used)이라, 폴백이 일어난 회의도 기록이 사실과 맞는다. 실측이 없으면
+    (--resume 로 기존 전사를 재사용한 경우 등) 해당 키를 비워 둔다 — 빈 값은
+    build_frontmatter 가 알아서 생략한다.
+    """
+    from meeting_minutes_app.common.version import app_version, build_commit
+
+    src = str(getattr(inputs, "source", "") or "")
+    meta: Dict[str, Any] = {
+        "provenance_schema": PROVENANCE_SCHEMA,
+        "capture_method": _CAPTURE_METHOD.get(src, src or "unknown"),
+        "capture_entry": _CAPTURE_ENTRY.get(src, ""),
+        "tool_version": app_version(),
+        "tool_build": build_commit(),
+    }
+    if src == "recover":
+        meta["capture_note"] = "recovered"      # 크래시 백업에서 복구한 세션
+
+    stt_models = [m for m in (getattr(inputs, "stt_models", None) or []) if m]
+    if stt_models:
+        meta["stt_model"] = ", ".join(dict.fromkeys(stt_models))
+        providers = [p for p in (getattr(inputs, "stt_providers", None) or []) if p]
+        if providers:
+            meta["stt_provider"] = ", ".join(dict.fromkeys(providers))
+        if getattr(inputs, "stt_fallback_used", False):
+            meta["stt_fallback_used"] = True
+
+    llm_models = [m for m in (getattr(llm, "models_used", None) or []) if m]
+    if llm_models:
+        meta["llm_model"] = ", ".join(dict.fromkeys(llm_models))
+    return meta
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
@@ -532,6 +604,15 @@ def run_post_session(
             plan_for_publish = (res.plan_match
                                 if res.plan_match is not None or options.plan_match is PLAN_UNSET
                                 else options.plan_match)
+            publish_kwargs = dict(options.publish_extra or {})
+            # 호출자가 넘긴 품질 메타(stt_segment_count 등)와 녹취 출처 메타를 한 dict 로
+            # 합쳐 넘긴다. 이 조립을 **여기 한 곳**에 두는 것이 중요하다 — publish_extra 를
+            # 채우는 건 배치·폴더감시뿐이라 호출자 쪽에 두면 실시간(CLI·웹) 경로가
+            # 통째로 빠진다(실제로 그 두 경로는 지금까지 stt_meta 자체가 없었다).
+            publish_kwargs["note_meta"] = {
+                **(publish_kwargs.pop("note_meta", None) or {}),
+                **_build_provenance(inputs, options, llm),
+            }
             result = enrich_and_publish(
                 title=title,
                 doc_type=inputs.doc_type,
@@ -546,7 +627,7 @@ def run_post_session(
                 notify=options.notify,
                 planned_match=plan_for_publish,
                 evidence=evidence_links,
-                **(options.publish_extra or {}),
+                **publish_kwargs,
             ) or {}
             res.publish_result = result
             res.source_note = result.get("obsidian_path") or ""

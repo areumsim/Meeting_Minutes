@@ -220,6 +220,15 @@ def yymmdd_key(s: str) -> str:
     return d[2:4] + d[5:7] + d[8:10] if d else ""
 
 
+#: 녹취 출처 메타 키(finalize._build_provenance 가 만든다). 노트 간 이월 대상 판정용 —
+#: 값 생성은 finalize 한 곳이고 여기서는 "어떤 키가 그것인지"만 안다.
+_PROVENANCE_KEYS = frozenset({
+    "provenance_schema", "capture_method", "capture_entry", "capture_note",
+    "stt_model", "stt_provider", "stt_fallback_used", "llm_model",
+    "tool_version", "tool_build",
+})
+
+
 def _norm_title(s: str) -> str:
     """제목 매칭용 정규화: 소문자 + 공백/구분기호 제거."""
     return re.sub(r"[\s_\-·:/().,]", "", (s or "").lower())
@@ -642,7 +651,7 @@ class ObsidianClient:
         source_audio: str = "",
         processed_at: str = "",
         source_file_date: str = "",
-        stt_meta: Optional[Dict[str, Any]] = None,
+        note_meta: Optional[Dict[str, Any]] = None,
         transcript_md: str = "",
         review_status: str = "pending",
         confidence: str = "medium",
@@ -691,8 +700,8 @@ class ObsidianClient:
             "source_type": source_type,
             "evidence": evidence or [],
         }
-        if stt_meta:
-            meta.update({k: v for k, v in stt_meta.items() if v not in ("", None, [])})
+        if note_meta:
+            meta.update({k: v for k, v in note_meta.items() if v not in ("", None, [])})
         if extra_meta:
             meta.update(extra_meta)
 
@@ -807,7 +816,7 @@ class ObsidianClient:
         source_audio: str = "",
         processed_at: str = "",
         source_file_date: str = "",
-        stt_meta: Optional[Dict[str, Any]] = None,
+        note_meta: Optional[Dict[str, Any]] = None,
         transcript_md: str = "",
     ) -> Optional[str]:
         """매칭된 계획 노트(match)에 회의록을 '병합'한다.
@@ -855,8 +864,8 @@ class ObsidianClient:
             "recorded": now_iso,
             "processed_at": now_iso,
         }
-        if stt_meta:
-            meta.update({k: v for k, v in stt_meta.items() if v not in ("", None, [])})
+        if note_meta:
+            meta.update({k: v for k, v in note_meta.items() if v not in ("", None, [])})
 
         transcript_mode = str(_c("obsidian.transcript_mode", "separate") or "separate").lower()
         if transcript_md.strip() and transcript_mode in ("separate", "note", "file"):
@@ -917,6 +926,13 @@ class ObsidianClient:
         pmeta["attendees"] = merged_att
         pmeta["recorded"] = now.isoformat(timespec="seconds")
         pmeta["merged_from"] = recording_path
+        # 녹음 노트의 녹취 출처 메타를 계획 노트로 이월한다. pmeta 만 쓰면 방금 심은
+        # "언제·어떤 방식·어떤 모델로 녹취했나"가 병합과 함께 사라진다 — 병합 후에도
+        # 남는 노트는 이쪽이므로 흔적이 여기 있어야 의미가 있다.
+        if rmeta.get("provenance_schema"):
+            for k, v in rmeta.items():
+                if k in _PROVENANCE_KEYS and v not in ("", None, []):
+                    pmeta[k] = v
         content = build_recording_into_plan_content(
             pmeta, pbody, rbody, now.strftime('%Y-%m-%d %H:%M'),
         )

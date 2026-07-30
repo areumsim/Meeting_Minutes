@@ -54,7 +54,7 @@ from email.mime.base import MIMEBase
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from pathlib import Path
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Tuple
 
 # ── 의존성 체크 ──────────────────────────────
 try:
@@ -998,8 +998,27 @@ class RealtimeTranscriber:
         # (AudioRecorder._process_frame) VAD도 잡음을 발화로 볼 수 있어, 이 수만으로
         # 원인을 단정하지 않는다 — 세그먼트 0으로 끝난 세션의 안내에만 쓴다.
         self._stt_empty_chunks = 0
+        # 실제로 전사를 만든 (제공자, 모델) — 등장 순서 유지. 청크마다 다른 제공자로
+        # 폴백될 수 있어 단일 값이 아니다. 회의록의 녹취 출처 메타가 이 값을 쓴다:
+        # 설정값 모델을 적으면 폴백이 일어난 회의에 틀린 감사 기록이 남는다.
+        # **인스턴스 속성** — 전역이면 동시 세션에서 섞인다.
+        self._stt_models_used: List[Tuple[str, str]] = []
         # 번역을 STT와 병렬 실행하기 위한 스레드 풀
         self._translator_pool = ThreadPoolExecutor(max_workers=2)
+
+    def _note_stt_model(self, provider: str, model: str) -> None:
+        if provider and (provider, model) not in self._stt_models_used:
+            self._stt_models_used.append((provider, model))
+
+    def stt_usage(self) -> Dict[str, Any]:
+        """finalize.SessionInputs 에 넣을 실측 STT 메타."""
+        used = list(self._stt_models_used)
+        primary = ("OpenAI", self.stt_model)
+        return {
+            "stt_providers": [p for p, _ in used],
+            "stt_models": [m for _, m in used],
+            "stt_fallback_used": bool(used) and any(u != primary for u in used),
+        }
 
     def _run_stt(self, wav_bytes: bytes):
         """STT API 호출. diarize 모델이면 List[Dict] (화자+텍스트), 아니면 str 반환.
@@ -1017,8 +1036,10 @@ class RealtimeTranscriber:
         last_err: Optional[Exception] = None
         for attempt in range(3):
             try:
-                return self._call_stt(self._stt_client(), params, wav_bytes,
-                                      parse_diarized=(kind == "diarized"))
+                out = self._call_stt(self._stt_client(), params, wav_bytes,
+                                     parse_diarized=(kind == "diarized"))
+                self._note_stt_model("OpenAI", self.stt_model)
+                return out
             except Exception as e:
                 last_err = e
                 if attempt < 2:
@@ -1036,8 +1057,10 @@ class RealtimeTranscriber:
                   file=sys.stderr)
             try:
                 fparams, fkind = _stt.stt_request_params("OpenAI", fb, self.language)
-                return self._call_stt(self._stt_client(), fparams, wav_bytes,
-                                      parse_diarized=(fkind == "diarized"))
+                out = self._call_stt(self._stt_client(), fparams, wav_bytes,
+                                     parse_diarized=(fkind == "diarized"))
+                self._note_stt_model("OpenAI", fb)
+                return out
             except Exception as fe:
                 print(f"\n  {C_RED}[STT 폴백 실패]{C_RESET} OpenAI/{fb}: {fe}",
                       file=sys.stderr)
@@ -1056,8 +1079,10 @@ class RealtimeTranscriber:
                 # 옵션·prompt 는 거기서 자동으로 빠진다. 화자분리가 없으니 평문만
                 # 돌아오고, process() 가 일반 경로로 처리한다.
                 gparams, gkind = _stt.stt_request_params("Groq", gmodel, self.language)
-                return self._call_stt(gclient, gparams, wav_bytes,
-                                      parse_diarized=(gkind == "diarized"))
+                out = self._call_stt(gclient, gparams, wav_bytes,
+                                     parse_diarized=(gkind == "diarized"))
+                self._note_stt_model("Groq", gmodel)
+                return out
             except Exception as ge:
                 print(f"\n  {C_RED}[STT 폴백 실패]{C_RESET} Groq: {ge}", file=sys.stderr)
 
@@ -2199,6 +2224,10 @@ class RealtimeSession:
                 base_memo=self.memo,
                 source="realtime",
                 language=self.language or "",
+                # WS 모드는 WebSocketTranscriber 라 stt_usage() 가 없다 — 그 경우
+                # 빈 값으로 두어 '모르는 것을 적지 않는다'.
+                **(self.transcriber.stt_usage()
+                   if hasattr(self.transcriber, "stt_usage") else {}),
             ),
             fz.FinalizeOptions(
                 llm=self.llm,

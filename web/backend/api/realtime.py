@@ -204,6 +204,29 @@ class BrowserRealtimeSession:
         # 있어도 발화 판정은 RMS 임계값 한 번 넘김이라 잡음 구간이 통과한다. 그래서
         # 세그먼트가 0인 종료 분기에서 "가능한 원인 두 가지"를 함께 알리는 데만 쓴다.
         self._stt_empty_chunks = 0
+        # 실제로 전사를 만든 (제공자, 모델) — 등장 순서 유지. WS/HTTP·폴백 단계에 따라
+        # 달라지므로 단일 값이 아니다. 회의록의 녹취 출처 메타가 이 값을 쓴다:
+        # 설정값 모델을 적으면 폴백이 일어난 회의에 틀린 감사 기록이 남는다.
+        # **인스턴스 속성** — 웹은 세션이 동시에 돌아 전역이면 섞인다.
+        self._stt_models_used: List[tuple] = []
+
+    def _note_stt_model(self, provider: str, model: str) -> None:
+        if provider and (provider, model) not in self._stt_models_used:
+            self._stt_models_used.append((provider, model))
+
+    def stt_usage(self) -> Dict[str, Any]:
+        """finalize.SessionInputs 에 넣을 실측 STT 메타."""
+        used = list(self._stt_models_used)
+        configured = str(self.config.get("stt_model") or "").strip()
+        primary = ("OpenAI", configured) if configured else None
+        return {
+            "stt_providers": [p for p, _ in used],
+            "stt_models": [m for _, m in used],
+            "stt_fallback_used": bool(used) and (
+                any(p != "OpenAI" for p, _ in used)
+                or (primary is not None and any(u != primary for u in used))
+            ),
+        }
 
     async def run(self):
         """메인 실행 루프."""
@@ -352,6 +375,7 @@ class BrowserRealtimeSession:
                 conn.session.update(session=session_cfg)
 
                 await self.ws.send_json({"type": "ready", "model": stt_model})
+                self._note_stt_model("OpenAI", stt_model)
 
                 # 현재 이벤트 루프 저장 (스레드→async 브릿지용)
                 self._loop = asyncio.get_event_loop()
@@ -1019,6 +1043,7 @@ class BrowserRealtimeSession:
                         stt_language,
                         None, c_start, prompt=used_prompt or None,
                     )
+                    self._note_stt_model("OpenAI", stt_model)
                 except Exception as _e1:
                     # 폴백 모델 1회 재시도 — 과거엔 청크 예외 시 텍스트가 조용히
                     # 소실됐다(run_stt 의 폴백 로직을 우회하는 경로라서).
@@ -1033,6 +1058,7 @@ class BrowserRealtimeSession:
                             stt_language,
                             None, c_start, prompt=used_prompt or None,
                         )
+                        self._note_stt_model("OpenAI", fb)
                     except Exception as _e2:
                         # OpenAI 두 모델이 모두 실패 = 벤더 장애 가능성 → 다른 벤더(Groq).
                         # 로컬(faster-whisper)은 라이브 청크에 쓰지 않는다(CPU 전사가
@@ -1053,6 +1079,7 @@ class BrowserRealtimeSession:
                             # stt.stt_request_params 한 곳에서 걸러진다.
                             provider="Groq",
                         )
+                        self._note_stt_model("Groq", groq_model)
                         if not groq_notified:
                             groq_notified = True
                             await self.ws.send_json({
@@ -1743,6 +1770,7 @@ class BrowserRealtimeSession:
                 source="web_realtime",
                 session_id=self.session_id,
                 language=_resolve_stt_language(language, mm._c),
+                **self.stt_usage(),
             )
             options = fz.FinalizeOptions(
                 llm=llm,

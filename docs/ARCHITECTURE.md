@@ -1256,6 +1256,34 @@ PyInstaller `.exe` 배포(`scripts/build/build_exe.spec`)는 원격 MCP 서버(`
 `fastmcp`를 제외한다. 새 팀 설치 절차 전체(배포 채널 선택, Obsidian 플러그인 설정, 격리 확인,
 첫 실행 체크리스트, 업데이트 방법)는 [`docs/SETUP_NEW_TEAM.md`](SETUP_NEW_TEAM.md)에 있다.
 
+### 데이터 폴더와 런처 (소스 실행 vs 포터블)
+
+두 실행 방식은 **쓰는 데이터가 다르다**(`common/app_paths.get_base_dir()`).
+
+| | `webUI_실행.bat` (소스) | `MeetingMinutes.bat` (포터블) |
+|---|---|---|
+| 데이터 베이스 | 리포 루트 (`config.json`·`data/`·`output/`) | `MM_DATA_DIR`=런처 옆 `MeetingMinutesData/` |
+| 첫 실행 | 기존 설정 그대로 | `config.example.json` 으로 시드 → **빈 설정** |
+| 바인딩 기본 host | `0.0.0.0` | `127.0.0.1`(`server.lan_access` 시 0.0.0.0) |
+
+개인 키가 배포본에 섞이지 않게 한 의도된 격리다. 포터블을 실제 설정으로 시험하려면 리포
+`config.json` 을 그 `MeetingMinutesData/` 로 복사한다 — 배포 zip 은 8단계에서
+`MeetingMinutesData` 를 제외하므로 키가 배포본에 들어가지 않는다. 반대로 `MM_DATA_DIR` 을
+리포 루트로 돌리는 방식은 금지(두 앱이 같은 SQLite/config 를 동시에 쓴다).
+
+**런처 포트 정책은 `common/server_launch.py` 하나로 수렴한다**(과거엔 포터블에만 있어 소스
+런처가 8501 고정 + 바인딩 전 브라우저 열기로 갈라져 있었다):
+- 점유 검사는 `0.0.0.0`·`127.0.0.1` **둘 다** 시도해 하나라도 실패하면 점유로 본다.
+  Windows 는 두 바인딩이 공존하고 `localhost` 연결은 더 구체적인 쪽으로 가므로, 한 주소만
+  검사하면 반대 조합을 놓친다(실측 표는 모듈 docstring). 이 구멍 때문에 포터블과 소스가
+  8501 에 함께 떠서 브라우저가 남의 앱을 보여준 사고가 있었다(2026-07-30).
+- 프로덕션 런처는 점유 시 빈 포트로 옮기고 **상대 인스턴스의 데이터 폴더까지 안내**한다
+  (`describe_port_holder()` → `GET /api/system/info`).
+- `--dev` 는 포트를 바꾸지 않고 실패시킨다 — `web/frontend/vite.config.ts` 프록시가
+  `localhost:8501` 하드코딩이라 백엔드만 옮기면 모든 `/api` 가 조용히 깨진다.
+- 브라우저는 `/api/health` 응답 + **config 경로가 우리 것과 같을 때만** 연다.
+- 화면이 어느 인스턴스인지는 [설정] → Obsidian 전체 진단의 "데이터 폴더" 항목으로 확인한다.
+
 ---
 
 ## 향후 확장 후보 (현재 미구현)

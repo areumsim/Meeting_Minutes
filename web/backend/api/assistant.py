@@ -166,6 +166,17 @@ def obsidian_diagnose():
     def add(name, ok, detail):
         checks.append({"name": name, "ok": bool(ok), "detail": detail})
 
+    # 0) 이 화면이 어느 인스턴스인지 — 같은 PC 에 소스 실행과 포터블 배포본이 함께 뜰 수
+    # 있고 둘은 데이터 폴더(=config.json)가 다르다. 구분이 안 되면 "설정이 전부 사라졌다"로
+    # 오해한다(2026-07-30 실사고). 항상 ok=True — 상태가 아니라 식별 정보다.
+    try:
+        import os as _os
+        from meeting_minutes_app.common import app_paths as _ap
+        _kind = "포터블 배포본" if _os.environ.get("MM_DATA_DIR") else "소스 실행"
+        add("데이터 폴더", True, f"{_ap.get_base_dir()}  ({_kind})")
+    except Exception as e:
+        add("데이터 폴더", False, f"확인 실패: {e}")
+
     # 1) 볼트 경로
     vault = _vault()
     if not vault:

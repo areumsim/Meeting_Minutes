@@ -14,10 +14,6 @@ import os
 import sys
 import socket
 import argparse
-import webbrowser
-import time
-import threading
-import urllib.request
 from pathlib import Path
 
 # console=False(windowed) 빌드에서는 sys.stdout/stderr 가 None 이라 print/uvicorn 로깅이
@@ -62,23 +58,6 @@ def setup_paths():
     return data_base, resource_root
 
 
-def _find_free_port(preferred: int) -> int:
-    """preferred 포트가 비어 있으면 그대로, 아니면 OS가 주는 빈 포트를 사용."""
-    def _is_free(port: int) -> bool:
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            try:
-                s.bind(("127.0.0.1", port))
-                return True
-            except OSError:
-                return False
-    if _is_free(preferred):
-        return preferred
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(("127.0.0.1", 0))
-        return s.getsockname()[1]
-
-
 def _lan_ipv4_addrs() -> list:
     """이 PC의 LAN IPv4 주소 목록(모바일 앱 접속 안내용). loopback 제외."""
     ips = []
@@ -98,23 +77,6 @@ def _lan_ipv4_addrs() -> list:
         pass
     return ips
 
-
-def open_browser_when_ready(port: int, timeout: float = 30.0):
-    """/api/health 가 응답할 때까지 폴링한 뒤 브라우저를 연다."""
-    def _wait_and_open():
-        url = f"http://localhost:{port}"
-        health = f"{url}/api/health"
-        deadline = time.time() + timeout
-        while time.time() < deadline:
-            try:
-                with urllib.request.urlopen(health, timeout=1) as resp:
-                    if resp.status == 200:
-                        break
-            except Exception:
-                time.sleep(0.4)
-        webbrowser.open(url)
-    t = threading.Thread(target=_wait_and_open, daemon=True)
-    t.start()
 
 
 def main():
@@ -141,7 +103,10 @@ def main():
         except Exception:
             pass
 
-    port = _find_free_port(args.port)
+    # 포트 선택·브라우저 열기 규칙은 소스 런처(run_ui.py)와 공용 모듈 하나를 쓴다 —
+    # 과거엔 이 파일에만 있어 소스 런처가 8501 고정 + 바인딩 전 브라우저 열기로 갈라졌다.
+    from meeting_minutes_app.common import server_launch
+    port = server_launch.find_free_port(args.port)
 
     # LAN 접속 허용(config server.lan_access=true) 시 0.0.0.0 으로 바인딩해
     # 같은 WiFi의 아이폰·태블릿 앱이 접속할 수 있게 한다. 기본은 localhost 전용(안전).
@@ -176,7 +141,11 @@ def main():
     print(f"{'='*60}\n")
 
     if not args.no_browser:
-        open_browser_when_ready(port)
+        # expect_config_path: 그 포트가 우리 인스턴스일 때만 연다(데이터 폴더가 다른
+        # 다른 인스턴스 화면을 열어 "설정이 사라졌다"로 오해하는 것을 막는다).
+        from meeting_minutes_app.common import app_paths as _ap
+        server_launch.open_browser_when_ready(
+            port, expect_config_path=str(_ap.get_config_path()))
 
     # OpenAI SDK 2.x Realtime은 sync Connection.recv(decode=False)를 사용한다.
     # websockets 13.x로 잘못 빌드된 실행본이 잠깐 ready를 보낸 뒤 폴백하는

@@ -23,11 +23,18 @@ Obsidian 기반 **회의록 자동화 + LLM Wiki 지식순환** 시스템. 오�
 ```bash
 pip install -e .                       # 개발 설치
 python run_meeting.py <cmd> [args]     # CLI (run_meeting.bat 도 동일)
-webUI_실행.bat                          # 웹 UI 로컬 실행
-python -m pytest                       # 테스트 (2026-07-30: 534 passed, 1 skipped)
+webUI_실행.bat                          # 웹 UI 로컬 실행 (데이터 = 리포 루트)
+python -m pytest                       # 테스트 (2026-07-30: 552 passed, 1 skipped)
 python run_meeting.py reindex          # 위키/그래프 인덱스 재빌드
 ```
 
+- **두 실행 방식은 데이터 폴더가 다르다**(`common/app_paths.get_base_dir`) — 개발 중 가장
+  자주 걸리는 함정: `webUI_실행.bat`(소스)은 **리포 루트**의 `config.json`·`data/`·`output/`을
+  쓰고, `MeetingMinutes.bat`(포터블)은 `MM_DATA_DIR`로 지정된 **자기 폴더의
+  `MeetingMinutesData/`**를 쓴다(개인 키가 배포본에 섞이지 않게 한 의도된 격리).
+  같은 PC 에서 둘을 동시에 켜면 8501 을 나눠 갖게 되어 브라우저가 다른 앱을 보여줄 수 있다 —
+  런처가 포트를 옮기고 안내하지만(`common/server_launch.py`), 화면이 어느 쪽인지는
+  [설정] → Obsidian 전체 진단의 "데이터 폴더" 항목으로 확인한다.
 - **배포(포터블)**: `scripts/build/build_portable.ps1` → `dist/MeetingMinutesPortable.zip`.
   사용자는 압축 해제 후 `MeetingMinutes.bat` 실행(임베디드 파이썬 + pythonw). 이것이 **정본 배포 방식**.
   구형 PyInstaller exe(`build_exe.bat`)는 원격 MCP(`/mcp`)가 필요할 때만 쓰는 대체 경로.

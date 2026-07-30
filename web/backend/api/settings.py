@@ -4,6 +4,7 @@ api/settings.py — 설정 읽기/쓰기 API
 
 import json
 import copy
+import os
 import sys
 import subprocess
 from pathlib import Path
@@ -523,6 +524,26 @@ _PICK_FOLDER_PS = (
 
 def _is_loopback(host: str | None) -> bool:
     return host in ("127.0.0.1", "::1", "localhost", "testclient")
+
+
+@router.get("/system/info")
+def system_info():
+    """이 서버 인스턴스가 어느 데이터 폴더를 쓰는지 — 경로만, 비밀값 없음.
+
+    같은 PC 에 두 인스턴스(소스 실행 / 포터블 배포본)가 뜰 수 있고 **둘은 데이터 폴더가
+    다르다**(app_paths.get_base_dir: MM_DATA_DIR 유무). 브라우저 화면만으로는 구분이 안 돼
+    "설정이 전부 사라졌다"로 오해하기 쉬웠다(2026-07-30 실사고). 런처는 포트 충돌 안내에,
+    설정 화면은 진단 항목에 이 값을 쓴다.
+    """
+    from meeting_minutes_app.common import app_paths
+    base = app_paths.get_base_dir()
+    return {
+        "mode": "portable" if os.environ.get("MM_DATA_DIR") else "source",
+        "frozen": app_paths.is_frozen(),
+        "base_dir": str(base),
+        "config_path": str(app_paths.get_config_path()),
+        "data_dir": str(app_paths.get_data_dir()),
+    }
 
 
 @router.post("/system/pick-folder")

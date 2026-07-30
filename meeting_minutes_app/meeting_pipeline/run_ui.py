@@ -117,8 +117,20 @@ def main():
         if str(path) not in sys.path:
             sys.path.insert(0, str(path))
 
+    from meeting_minutes_app.common import app_paths, server_launch
+
     if args.dev:
         # 개발 모드: Vite dev server + FastAPI 동시 실행
+        # 여기서는 포트를 절대 바꾸지 않는다 — web/frontend/vite.config.ts 의 프록시가
+        # localhost:8501 로 하드코딩돼 있어, 백엔드만 다른 포트로 옮기면 프록시가 조용히
+        # 깨진다(화면은 뜨는데 모든 /api 요청이 실패). 점유 시엔 분명히 실패시킨다.
+        if not server_launch.is_port_free(args.port):
+            print(f"\n  [오류] 포트 {args.port} 가 이미 사용 중입니다 — "
+                  f"{server_launch.describe_port_holder(args.port)}.")
+            print("         개발 모드는 프록시 때문에 포트를 바꿀 수 없습니다. 그 인스턴스를"
+                  " 종료한 뒤 다시 실행하세요.")
+            print("         (설정 화면의 [설정] → [앱 종료] 또는 작업 관리자에서 python/pythonw 종료)")
+            sys.exit(1)
         check_node_deps()
         print(f"\n{'='*60}")
         print(f"  Meeting Minutes Web UI (Development)")
@@ -155,21 +167,34 @@ def main():
         # 프로덕션 모드
         build_frontend()
 
+        # 포트가 점유돼 있으면 빈 포트로 옮긴다. 그냥 8501 로 바인딩하면 Windows 에서는
+        # 0.0.0.0 바인딩이 남의 127.0.0.1 바인딩과 공존해 버려서, 브라우저(localhost)는
+        # 남의 앱을 보고 이 서버는 요청을 못 받는 상태가 된다 — 데이터 폴더가 다른 두
+        # 인스턴스일 때 "내 설정이 사라졌다"로 오해하게 만든 원인이다(server_launch 참고).
+        port = server_launch.find_free_port(args.port)
+        if port != args.port:
+            print(f"\n  [알림] 포트 {args.port} 는 "
+                  f"{server_launch.describe_port_holder(args.port)} —")
+            print(f"         이 창은 {port} 번 포트로 띄웁니다.")
+
         print(f"\n{'='*60}")
         print(f"  Meeting Minutes Web UI")
         print(f"  {'─'*56}")
-        print(f"  URL: http://localhost:{args.port}")
+        print(f"  URL: http://localhost:{port}")
+        print(f"  데이터 폴더: {app_paths.get_base_dir()}")
         print(f"{'='*60}\n")
 
         if not args.no_browser:
-            time.sleep(1)
-            webbrowser.open(f"http://localhost:{args.port}")
+            # 서버가 실제로 응답한 뒤에(그리고 그 응답이 이 인스턴스일 때만) 브라우저를
+            # 연다 — 과거엔 바인딩 전에 열어서 남의 앱 화면을 보여줬다.
+            server_launch.open_browser_when_ready(
+                port, expect_config_path=str(app_paths.get_config_path()))
 
         import uvicorn
         uvicorn.run(
             "web.backend.app:app",
             host=args.host,
-            port=args.port,
+            port=port,
             # auto는 구현 패키지가 빠졌을 때 HTTP-only로 조용히 기동한다.
             # 녹음 필수 기능이므로 명시적으로 선택해 누락을 즉시 드러낸다.
             ws="websockets",

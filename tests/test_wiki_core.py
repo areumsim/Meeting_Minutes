@@ -441,7 +441,9 @@ class TestHybridSearch:
             vi, "_c",
             lambda key, default=None: {
                 "wiki_knowledge.embedding_enabled": True,
-                "wiki_knowledge.embedding_min_cosine": 0.25,
+                # 후보가 _SEMANTIC_Z_MIN_SAMPLES 미만이라 z 컷은 자동으로 비활성이다
+                # (표본이 적을 때 억지로 통계를 쓰지 않는다) — 이 테스트는 융합 회수만 본다.
+                "wiki_knowledge.embedding_min_z": 1.5,
             }.get(key, default),
         )
         ix = _make_hybrid_indexer()
@@ -452,7 +454,7 @@ class TestHybridSearch:
         assert "키워드노트" in titles
         assert "의미노트" in titles
         sem = next(r for r in results if r["title"] == "의미노트")
-        assert sem["score"] == 0.0 and sem["cosine"] >= 0.25
+        assert sem["score"] == 0.0 and sem["cosine"] > 0.0
         # find_related는 임베딩 전용 노트도 유지
         related = ix.find_related("양자 검색", limit=5)
         assert "의미노트" in related

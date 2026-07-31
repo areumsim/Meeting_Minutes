@@ -363,14 +363,18 @@ class WikiQA:
                 search_question, limit=max_notes * 2, path_prefixes=path_prefixes)
             # 관련도 하한(P1-2): TF-IDF 점수도 낮고 의미유사도도 없는 '노이즈' 노트는
             # 컨텍스트에서 제외한다 — 무관 노트가 들어가면 LLM이 억지로 엮어 환각한다
-            # (예: requirements.txt를 회의로 오인). 임베딩 의미매치(cosine>0)는 점수가
-            # 0이라도 유지. min_context_score=0(기본)이면 필터 비활성(기존 동작).
+            # (예: requirements.txt를 회의로 오인). min_context_score=0(기본)이면 필터 비활성.
+            #
+            # 의미매치 판정은 **인덱서가 이미 했다**. `cosine` 필드는 vault_indexer 의
+            # z 컷(`_semantic_cut`)을 통과한 노트에만 붙으므로, 여기서 코사인을 다시
+            # 절대값으로 재판정하면 규칙이 두 곳으로 갈린다. 예전엔 여기서
+            # `embedding_min_cosine`(0.25)로 다시 봤는데, 실측에서 그 값은 무작위 노트
+            # 쌍의 78.5%를 통과시키는 값이었다(vault_indexer._SEMANTIC_MIN_Z 주석 참고).
             _min_score = float(_c("wiki.min_context_score", 0.0) or 0.0)
-            _min_cos = float(_c("wiki_knowledge.embedding_min_cosine", 0.25) or 0.25)
             _idx_max = max((r.get("score", 0) or 0) for r in idx_results) if idx_results else 0
             for r in idx_results:
                 if (_min_score > 0 and (r.get("score", 0) or 0) < _min_score
-                        and (r.get("cosine", 0.0) or 0.0) < _min_cos):
+                        and not (r.get("cosine", 0.0) or 0.0) > 0.0):
                     continue
                 title = r.get("title", "")
                 norm = _norm_title(title)

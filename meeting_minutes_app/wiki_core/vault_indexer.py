@@ -364,6 +364,71 @@ def _embedding_budget_blocked(est_cost: float) -> str:
     return ""
 
 
+#: 임베딩 유사도 컷의 기본 z 문턱. **실측으로 정한 값**이다 —
+#: `scripts/measure_retrieval_floor.py` (실볼트 457노트, text-embedding-3-small/256차원,
+#: 2026-07-31) 결과:
+#:
+#:   무작위 노트 쌍(무관 대조군)  mean 0.363  p50 0.348  p95 0.619  p99 0.726
+#:   전사↔자기 회의록(진짜 양성)  mean 0.576  p50 0.564  max 0.729
+#:
+#: 여기서 두 가지가 드러났다.
+#:  (1) 기존 `embedding_min_cosine=0.25` 는 **무작위 쌍의 78.5% 를 통과시킨다** —
+#:      필터가 아니었다. 무관한 노트가 회의록 '관련 노트'에 올라간 직접 원인.
+#:  (2) 그런데 **절대 코사인 문턱 자체가 성립하지 않는다.** 가장 확실한 양성(같은 회의의
+#:      전사↔회의록)의 평균 0.576 이 무관 분포의 p95(0.619)보다 **낮다**. 노이즈를
+#:      걷어내는 문턱은 양성도 같이 걷어낸다(cos≥0.619 → 양성 유지 42.9%,
+#:      cos≥0.726 → 7.1%). 그래서 "상수를 올린다"는 처방은 실측으로 반박됐다.
+#:
+#: 대신 **쿼리마다 다시 계산한 상대 위치**(z = (점수-평균)/표준편차)는 작동한다:
+#:   z≥1.0 → 양성 유지 92.9% · 무관 통과 상한 ~15.9%
+#:   z≥1.5 → 양성 유지 78.6% · 무관 통과 상한  ~6.7%   ← 기본값
+#:   z≥2.0 → 양성 유지 50.0% · 무관 통과 상한  ~2.3%
+#: 회의록에 실리는 목록이라 정밀도 쪽으로 한 칸 치우친 1.5 를 기본으로 둔다.
+#:
+#: **측정의 한계**(같이 읽을 것): 양성 표본이 14쌍뿐이고, 그 양성은 '같은 회의의 전사와
+#: 회의록'이라 실제 관심사인 '다른 회의의 관련 노트'보다 쉬운 문제다. 무관 통과율은
+#: 정규분포 가정 상한이라 실제와 다를 수 있다. 모델·차원을 바꾸면 다시 재야 한다
+#: (스크립트를 다시 돌리면 된다 — API 호출 없이 기존 인덱스만 읽는다).
+#:
+#: 같은 측정에서 함께 나온 사실: 이 코퍼스에서 임베딩 랭킹 자체가 약하다 — 전사의
+#: 부모 회의록이 1위인 경우가 **0%**, 중위 15위, 최악 87위. 그래서 회수 결과를
+#: '근거(evidence)'로 단정하지 않는다(finalize 의 frontmatter evidence 주석 참고).
+_SEMANTIC_MIN_Z = 1.5
+
+#: z 계산에 표본이 너무 적으면(볼트가 작거나 path_filter 가 좁으면) 표준편차가
+#: 불안정하다. 이 미만이면 컷하지 않고 상위 limit 를 그대로 돌려준다 —
+#: 작은 후보풀에서 억지로 통계를 쓰면 전멸시키거나 아무것도 못 거른다.
+_SEMANTIC_Z_MIN_SAMPLES = 30
+
+
+def _semantic_cut(sims: List[Tuple[str, float]], limit: int) -> List[Tuple[str, float]]:
+    """코사인 내림차순 목록에서 **쿼리 상대 위치**로 노이즈를 잘라낸다.
+
+    sims 는 (rel, cosine) 내림차순. 반환은 상위 limit 이내 + z≥임계 인 것만.
+    임계는 `wiki_knowledge.embedding_min_z`(기본 `_SEMANTIC_MIN_Z`) — 0 이하면 컷 없음.
+
+    절대 코사인이 아니라 z 를 쓰는 이유는 위 `_SEMANTIC_MIN_Z` 주석의 실측 참고.
+    표준편차는 **후보 전체**(limit 자르기 전)로 계산한다 — 상위 N 만으로 계산하면
+    분산이 과소평가돼 문턱이 무의미해진다.
+    """
+    if not sims:
+        return []
+    try:
+        min_z = float(_c("wiki_knowledge.embedding_min_z", _SEMANTIC_MIN_Z))
+    except (TypeError, ValueError):
+        min_z = _SEMANTIC_MIN_Z
+    if min_z <= 0 or len(sims) < _SEMANTIC_Z_MIN_SAMPLES:
+        return sims[:limit]
+    vals = [s for _, s in sims]
+    n = len(vals)
+    mean = sum(vals) / n
+    sd = math.sqrt(sum((v - mean) ** 2 for v in vals) / n)
+    if sd <= 1e-9:            # 전부 같은 점수 — 가를 근거가 없다
+        return sims[:limit]
+    cutoff = mean + min_z * sd
+    return [(rel, s) for rel, s in sims[:limit] if s >= cutoff]
+
+
 def _l2_normalize(vec: List[float]) -> List[float]:
     norm = math.sqrt(sum(x * x for x in vec)) or 1.0
     return [x / norm for x in vec]
@@ -828,7 +893,6 @@ class VaultIndexer:
             self._query_vec_cache[qkey] = qvec
         if not qvec:
             return []
-        min_cos = float(_c("wiki_knowledge.embedding_min_cosine", 0.25) or 0.25)
         sims = [
             (rel, _dot(qvec, e["v"]))
             for rel, e in self._emb.get("notes", {}).items()
@@ -836,7 +900,8 @@ class VaultIndexer:
             and (path_filter is None or path_filter(rel))
         ]
         sims.sort(key=lambda x: -x[1])
-        return [(rel, s) for rel, s in sims[:limit] if s >= min_cos]
+        keep = _semantic_cut(sims, limit)
+        return keep
 
     # ── 검색 ─────────────────────────────────────────────────
     def search(self, query: str, limit: int = 10,
@@ -978,8 +1043,10 @@ class VaultIndexer:
                      path_match: str = "prefix") -> List[str]:
         """텍스트와 관련된 노트의 [[wiki link]] 타이틀 리스트를 반환한다.
 
-        TF-IDF min_score 미달이어도 임베딩 유사도(embedding_min_cosine 이상)로
-        검색된 노트는 유지한다 — 키워드가 겹치지 않는 의미적 관련 노트 회수용.
+        TF-IDF min_score 미달이어도 **의미 컷을 통과한** 노트는 유지한다 — 키워드가
+        겹치지 않는 의미적 관련 노트 회수용. `cosine` 필드가 붙어 있다는 것 자체가
+        `_semantic_cut()`(쿼리 상대 z 문턱)을 통과했다는 뜻이므로 여기서 값을 다시
+        절대 문턱과 비교하지 않는다(`_SEMANTIC_MIN_Z` 주석의 실측 참고).
         path_prefixes/path_match: search() 참고.
         """
         results = self.search(text, limit=limit, path_prefixes=path_prefixes,

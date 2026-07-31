@@ -88,3 +88,7 @@ tmp_*.txt
 # 위 두 패턴은 `tmp.txt`(구분자 없는 이름)를 잡지 못해 매 git status 에 떴고,
 # 실수로 커밋될 수 있었다 — 개인 키·메모가 들어있는 스크래치 파일이다.
 tmp*.txt
+# 문서 검토용 대용량 파생 자료 — 456KB DOM 덤프로 재생성 가능하고 git diff 가 무의미하다.
+# 갭 분석 근거는 docs/prd/PRD_v1.0.0.md 부록 E 에서 실제 소스 file:line 으로 이전됐다.
+# (*.html 블랭킷 금지 — web/frontend/index.html 이 추적 대상이다)
+docs/prd/webui_current_snapshot.html

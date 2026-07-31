@@ -334,33 +334,52 @@ class TestUsageLogInMonthlyTotal:
 
 
 class TestEmbeddingBudgetGate:
-    """한도를 넘으면 임베딩만 건너뛰고 TF-IDF 인덱스는 정상 완료한다."""
+    """한도를 넘으면 임베딩만 건너뛰고 TF-IDF 인덱스는 정상 완료한다.
+
+    판정 본체는 `common.spend_guard.blocked()` 로 옮겼다(폴더 감시·계획 자동화가
+    같은 판정을 써야 하므로). 그래서 설정 대역도 `spend_guard._c` 를 패치한다 —
+    `vault_indexer._c` 를 패치하면 실제 호출 경로를 비켜 가 테스트가 무의미해진다.
+    위임 자체는 tests/test_spend_guard.py 가 별도로 고정한다.
+    """
 
     def test_no_cap_means_unlimited(self, monkeypatch):
         from meeting_minutes_app.wiki_core import vault_indexer as vi
-        monkeypatch.setattr(vi, "_c", lambda k, d=None: 0 if k == "cost.monthly_cap_usd" else d)
+        from meeting_minutes_app.common import spend_guard
+        monkeypatch.setattr(spend_guard, "_c",
+                            lambda k, d=None: 0 if k == "cost.monthly_cap_usd" else d)
         assert vi._embedding_budget_blocked(999.0) == ""
 
     def test_blocks_when_over_cap(self, monkeypatch):
         from meeting_minutes_app.wiki_core import vault_indexer as vi
-        from meeting_minutes_app.common import usage_log
-        monkeypatch.setattr(vi, "_c", lambda k, d=None: 1.0 if k == "cost.monthly_cap_usd" else d)
+        from meeting_minutes_app.common import spend_guard, usage_log
+        monkeypatch.setattr(spend_guard, "_c",
+                            lambda k, d=None: 1.0 if k == "cost.monthly_cap_usd" else d)
         monkeypatch.setattr(usage_log, "month_to_date_spend", lambda *a, **k: 0.99)
         assert vi._embedding_budget_blocked(0.50) != ""
 
     def test_allows_when_under_cap(self, monkeypatch):
         from meeting_minutes_app.wiki_core import vault_indexer as vi
-        from meeting_minutes_app.common import usage_log
-        monkeypatch.setattr(vi, "_c", lambda k, d=None: 1.0 if k == "cost.monthly_cap_usd" else d)
+        from meeting_minutes_app.common import spend_guard, usage_log
+        monkeypatch.setattr(spend_guard, "_c",
+                            lambda k, d=None: 1.0 if k == "cost.monthly_cap_usd" else d)
         monkeypatch.setattr(usage_log, "month_to_date_spend", lambda *a, **k: 0.10)
         assert vi._embedding_budget_blocked(0.01) == ""
+
+    def test_per_file_cap_does_not_apply_to_embedding(self, monkeypatch):
+        """1건당 한도는 '오디오 파일 한 건'을 뜻한다. 인덱싱은 볼트 전체가 한 번이다."""
+        from meeting_minutes_app.wiki_core import vault_indexer as vi
+        from meeting_minutes_app.common import spend_guard
+        monkeypatch.setattr(spend_guard, "_c",
+                            lambda k, d=None: 0.50 if k == "cost.per_file_cap_usd" else d)
+        assert vi._embedding_budget_blocked(0.83) == ""
 
     def test_gate_failure_does_not_block_indexing(self, monkeypatch):
         """판정이 터져도 인덱싱을 막지 않는다 — 비용 기록은 부수 효과다."""
         from meeting_minutes_app.wiki_core import vault_indexer as vi
+        from meeting_minutes_app.common import spend_guard
         def boom(k, d=None):
             raise RuntimeError("config 없음")
-        monkeypatch.setattr(vi, "_c", boom)
+        monkeypatch.setattr(spend_guard, "_c", boom)
         assert vi._embedding_budget_blocked(5.0) == ""
 
 

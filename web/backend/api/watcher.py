@@ -99,7 +99,11 @@ class _WatcherManager:
         from meeting_minutes_app.common import config_loader as cfg
         enabled = bool(cfg.get("vault_watcher.enabled", False))
         folders = [str(f) for f in (cfg.get("vault_watcher.watch_folders", []) or []) if f]
-        counts = {"done": 0, "failed": 0, "processing": 0, "skipped": 0, "total": 0}
+        # queued = 지출 한도를 넘어 자동 처리하지 않고 확인 대기열에 넣은 파일.
+        # 이 키가 없으면 status() 가 대기열을 조용히 세지 않아 사용자는 파일이
+        # 사라진 것처럼 본다.
+        counts = {"done": 0, "failed": 0, "processing": 0, "skipped": 0,
+                  "queued": 0, "total": 0}
         recent = []
         try:
             state_path = cfg.get("vault_watcher.processed_state_path", "data/processed_audio.json")

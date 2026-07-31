@@ -252,8 +252,14 @@ def cost_summary(months: int = 6):
     from web.backend import database as db
     from meeting_minutes_app.common import config_loader as cfg
     from meeting_minutes_app.common import usage_log
+    from meeting_minutes_app.common import spend_guard
     try:
         by_kind = usage_log.month_to_date_by_kind()
+        # "자동 실행분 비용을 별도로 조회할 수 있다"(FR-011 수용 기준).
+        # 어떤 kind 가 자동 실행인지는 spend_guard 가 정한다 — 그 목록을 프런트에
+        # 복사하면 새 자동 경로를 추가할 때 한쪽만 갱신된다.
+        automation = round(
+            sum(v for k, v in by_kind.items() if k in spend_guard.AUTOMATION_KINDS), 4)
         return {
             "ok": True,
             "monthToDateUsd": round(db.month_to_date_spend(), 4),
@@ -265,6 +271,8 @@ def cost_summary(months: int = 6):
             # 세션에 속하지 않는 지출(위키 임베딩 등) — 월 합계에 포함돼 있다
             "otherUsd": round(sum(by_kind.values()), 4),
             "otherByKind": {k: round(v, 4) for k, v in by_kind.items()},
+            # 그중 사용자가 화면을 보고 있지 않을 때 발생한 것(폴더 감시·계획 자동화)
+            "automationUsd": automation,
         }
     except Exception as e:
         traceback.print_exc()

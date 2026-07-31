@@ -350,18 +350,18 @@ def _embedding_budget_blocked(est_cost: float) -> str:
     한도는 지금까지 파일 업로드 경로에서만 강제됐는데, 위키 임베딩은 세션 없이
     (재빌드 버튼·폴더 연결·시작 시 자동·CLI reindex) 돌아서 그 검사를 통째로
     비켜 갔다. 합계 판정은 usage_log 한 곳을 쓴다 — 웹과 CLI 가 갈리지 않게.
+
+    판정 본체는 `common.spend_guard.blocked()` 로 옮겼다. 폴더 감시·계획 자동화도
+    같은 판정을 써야 하는데, 그 규칙이 이 함수 안에만 있으면 호출부마다 복사돼
+    갈라진다(이 리포에서 실제로 여러 번 일어난 일이다).
+    임베딩은 1건당 한도(`cost.per_file_cap_usd`)의 대상이 아니다 — 그 한도는
+    "오디오 파일 한 건"을 뜻하고, 인덱싱은 볼트 전체를 한 번에 처리한다.
     """
     try:
-        from meeting_minutes_app.common import usage_log
-        cap = float(_c("cost.monthly_cap_usd", 0) or 0)
-        if cap <= 0:                    # 0 = 무제한(기본값)
-            return ""
-        mtd = usage_log.month_to_date_spend()
-        if mtd + est_cost > cap:
-            return f"이번 달 ${mtd:.2f} + 예상 ${est_cost:.4f} > 한도 ${cap:.2f}"
+        from meeting_minutes_app.common import spend_guard
+        return spend_guard.blocked(est_cost, check_per_item=False)
     except Exception:
-        pass                            # 판정 실패로 인덱싱을 막지는 않는다
-    return ""
+        return ""                       # 판정 실패로 인덱싱을 막지는 않는다
 
 
 #: 임베딩 유사도 컷의 기본 z 문턱. **실측으로 정한 값**이다 —

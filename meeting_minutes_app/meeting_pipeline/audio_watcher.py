@@ -83,24 +83,56 @@ class AudioWatcher:
         except Exception as e:
             print(f"[watcher] 상태 저장 실패: {e}")
 
+    #: 더 이상 자동으로 손대지 않는 상태. `queued` 가 여기 든 것은 의도적이다 —
+    #: 한도를 넘어 대기열에 넣은 파일을 매 폴링(기본 10초)마다 다시 재보면
+    #: ffprobe 를 반복 호출하고 로그를 채우면서도 결과는 늘 같다. 사용자가
+    #: 승인(reprocess)하면 상태가 지워져 다시 후보가 된다.
+    _TERMINAL_STATUSES = ("done", "skipped", "queued")
+
     def _is_processed(self, abs_path: str) -> bool:
         with self._lock:
             state = self._load_state()
         entry = state.get(abs_path)
         if not entry:
             return False
-        return entry.get("status") in ("done", "skipped")
+        return entry.get("status") in self._TERMINAL_STATUSES
 
-    def _mark_processed(self, abs_path: str, status: str,
-                        note_path: str = "", error: str = "") -> None:
+    def pending(self) -> List[Dict[str, Any]]:
+        """확인 대기열 — 한도를 넘어 자동 처리하지 않은 파일 목록(FR-011).
+
+        사용자가 승인하면 `reprocess(path)` 로 상태를 지워 다시 후보가 되게 한다.
+        """
         with self._lock:
             state = self._load_state()
-            state[abs_path] = {
+        out: List[Dict[str, Any]] = []
+        for path, entry in (state or {}).items():
+            if not isinstance(entry, dict) or entry.get("status") != "queued":
+                continue
+            out.append({
+                "path": path,
+                "name": Path(path).name,
+                "queued_at": entry.get("processed_at", ""),
+                "reason": entry.get("error", ""),
+                "est_cost_usd": entry.get("est_cost_usd", 0.0),
+                "duration_sec": entry.get("duration_sec", 0.0),
+            })
+        out.sort(key=lambda e: e.get("queued_at") or "")
+        return out
+
+    def _mark_processed(self, abs_path: str, status: str,
+                        note_path: str = "", error: str = "",
+                        extra: Optional[Dict[str, Any]] = None) -> None:
+        with self._lock:
+            state = self._load_state()
+            entry = {
                 "processed_at": datetime.now().isoformat(timespec="seconds"),
                 "status": status,
                 "note_path": note_path,
                 "error": error,
             }
+            if extra:
+                entry.update(extra)
+            state[abs_path] = entry
             self._save_state(state)
 
     def reprocess(self, abs_path: str) -> None:
@@ -137,12 +169,61 @@ class AudioWatcher:
             prev_size = size
         return True
 
+    # ── 지출 한도 관문 ────────────────────────────────────
+    def _spend_gate(self, abs_path: str) -> bool:
+        """한도를 넘으면 확인 대기열에 넣고 True(=처리하지 않음).
+
+        워처는 지금까지 한도 검사를 전혀 받지 않았다. 업로드 경로에만 있던
+        `cost.per_file_cap_usd` / `cost.monthly_cap_usd` 를 같은 판정 함수로 적용한다.
+        길이를 못 재면(duration=0) 검사를 건너뛴다 — 업로드 경로와 같은 규칙이다.
+        """
+        try:
+            from meeting_minutes_app.common import spend_guard
+        except Exception:
+            return False                  # 판정 모듈이 없으면 막지 않는다
+        duration, est = spend_guard.estimate_audio_cost(abs_path)
+        if duration <= 0:
+            return False
+        reason = spend_guard.blocked(est)
+        if not reason:
+            return False
+        print(f"[watcher] 지출 한도로 자동 처리 보류: {Path(abs_path).name} — {reason}")
+        self._mark_processed(
+            abs_path, "queued", error=reason,
+            extra={"est_cost_usd": round(est, 4), "duration_sec": round(duration, 1)},
+        )
+        return True
+
+    def _record_spend(self, abs_path: str) -> None:
+        """처리한 파일의 과금을 usage_log 에 남긴다.
+
+        워처 경로는 DB 세션을 만들지 않는다(`ingestion_pipeline` 이 `web.backend`
+        를 import 하지 않는다). 그래서 이 기록이 없으면 워처가 태운 돈이 월 합계에서
+        **영구히 보이지 않고**, 합계가 실제보다 작게 나와 다른 경로의 한도 판정까지
+        느슨해진다. 추정치이지만 세션의 `cost_estimate` 도 추정치이므로 성질은 같다.
+        """
+        try:
+            from meeting_minutes_app.common import spend_guard
+            duration, est = spend_guard.estimate_audio_cost(abs_path)
+            if duration <= 0 or est <= 0:
+                return
+            spend_guard.record(
+                spend_guard.KIND_WATCHER, est,
+                units=round(duration / 60.0, 2), unit_kind="min",
+                note=f"폴더 자동 감시: {Path(abs_path).name}",
+            )
+        except Exception:
+            pass                          # 기록 실패가 처리 결과를 뒤집지 않는다
+
     # ── 처리 호출 ─────────────────────────────────────────
     def _handle_file(self, abs_path: str) -> None:
         if self._is_processed(abs_path):
             return
         if not self._is_stable(abs_path):
             print(f"[watcher] 파일 불안정(복사 중?), 건너뜀: {Path(abs_path).name}")
+            return
+        # 한도 검사는 안정성 확인 뒤에 한다 — 복사 중인 파일은 길이가 엉뚱하게 나온다.
+        if self._spend_gate(abs_path):
             return
         print(f"[watcher] 새 파일 처리 시작: {Path(abs_path).name}")
         self._mark_processed(abs_path, "processing")
@@ -154,10 +235,14 @@ class AudioWatcher:
                 error = str(callback_result.get("error") or "")
                 if status in ("done", "skipped"):
                     self._mark_processed(abs_path, status, note_path=note_path, error=error)
+                    # skipped 는 STT 를 부르지 않았으므로 과금이 없다.
+                    if status == "done":
+                        self._record_spend(abs_path)
                 else:
                     self._mark_processed(abs_path, "failed", note_path=note_path, error=error or status)
             else:
                 self._mark_processed(abs_path, "done")
+                self._record_spend(abs_path)
         except Exception as e:
             self._mark_processed(abs_path, "failed", error=str(e))
             print(f"[watcher] 처리 실패: {e}")

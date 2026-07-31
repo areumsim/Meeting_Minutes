@@ -68,6 +68,24 @@ def _build_clients():
     return llm, obs
 
 
+def _budget_blocked(est_cost: float = 0.0) -> str:
+    """지출 한도를 넘었으면 사유. 웹 자동화와 CLI 워처가 같은 판정을 쓰게 여기 둔다.
+
+    계획 자동화는 사용자가 화면을 보고 있지 않을 때 LLM 을 부르는데 지금까지 한도
+    검사를 전혀 받지 않았다(한도는 업로드·임베딩 경로에만 있었다).
+
+    `est_cost=0` 은 "이미 한도를 넘었는가"만 묻는 것이다. 리서치 1건의 비용을 미리
+    알 수 없기 때문이다 — `plan_research.research_planned_note()` 가 토큰 usage 를
+    돌려주지 않는다. 없는 숫자를 지어내 한도 계산에 넣는 대신, 넘긴 뒤에 멈추는
+    쪽을 택했다(정확한 사전 추정은 usage 배관이 따로 필요하다).
+    """
+    try:
+        from meeting_minutes_app.common import spend_guard
+        return spend_guard.blocked(est_cost, check_per_item=False)
+    except Exception:
+        return ""
+
+
 def _process_file(path: Path, llm, obs) -> bool:
     """단일 노트 처리. 갱신했으면 True."""
     try:
@@ -75,6 +93,10 @@ def _process_file(path: Path, llm, obs) -> bool:
     except Exception:
         return False
     if "status: planned" not in content and "status: \"planned\"" not in content:
+        return False
+    blocked = _budget_blocked()
+    if blocked:
+        print(f"[plan_watcher] 지출 한도로 사전 리서치 보류({path.name}): {blocked}")
         return False
     try:
         from meeting_minutes_app.meeting_pipeline import plan_research
@@ -117,9 +139,31 @@ def _audio_pass(vault, notes_subdir, min_age=6.0):
         key = (ap_, mt)
         if _audio_seen.get(key):
             continue
+        # 오디오는 길이로 비용을 추정할 수 있으므로 리서치와 달리 사전 판정이 가능하다.
+        est = 0.0
+        try:
+            from meeting_minutes_app.common import spend_guard
+            dur, est = spend_guard.estimate_audio_cost(ap_)
+            if dur > 0:
+                blocked = spend_guard.blocked(est)
+                if blocked:
+                    # _audio_seen 에 넣지 않는다 — 한도를 올리면 다음 폴링에 처리된다.
+                    print(f"[plan_watcher] 지출 한도로 오디오 보류"
+                          f"({os.path.basename(ap_)}): {blocked}")
+                    continue
+        except Exception:
+            est = 0.0
         _audio_seen[key] = 1
         try:
-            done += va.process_vault(str(vault), notes_subdir, only_audio=ap_)
+            n = va.process_vault(str(vault), notes_subdir, only_audio=ap_)
+            done += n
+            # 이 경로도 DB 세션을 만들지 않아 월 합계에서 보이지 않았다.
+            if n and est > 0:
+                from meeting_minutes_app.common import spend_guard
+                spend_guard.record(
+                    spend_guard.KIND_PLAN_AUTOMATION, est,
+                    note=f"계획 자동화 첨부 녹음: {os.path.basename(ap_)}",
+                )
         except Exception as e:
             print(f"[plan_watcher] 오디오 처리 실패({os.path.basename(ap_)}): {e}")
     return done

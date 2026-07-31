@@ -125,11 +125,28 @@ def stt_rate_per_min(stt_model: str) -> float:
     return STT_PRICE_PER_MIN.get(stt_model, DEFAULT_STT_PRICE_PER_MIN)
 
 
+#: 2단계 보정 전사(realtime.two_pass)가 적용되는 세션 출처(sessions.source).
+#: 실시간 경로만 조각 전사를 다시 전사해 문장으로 교체한다 — 배치/업로드 파이프라인에는
+#: 보정 패스가 없다. 이 판정을 호출부에 복사하면 웹과 CLI가 갈라진다(그 전례가 이 파일
+#: 맨 위 주석의 '단가 표 4곳 복사'다). 판정이 필요하면 is_two_pass_source() 를 쓴다.
+REALTIME_SOURCES = frozenset({"web_realtime", "realtime", "recover"})
+
+
+def is_two_pass_source(source: str | None) -> bool:
+    """이 세션 출처가 2단계 보정 전사를 거치는가(= STT 과금이 두 번 발생하는가)."""
+    return (source or "") in REALTIME_SOURCES
+
+
 def current_models(cfg) -> dict:
     """현재 config 기준으로 비용 추정에 쓸 모델을 해석한다.
 
     cfg 는 config_loader 모듈(또는 .get(path, default) 를 제공하는 객체).
     stt / llm / 회의록 생성 모델을 한 곳에서 뽑아 estimate_session_cost 에 넘긴다.
+
+    two_pass / revise_model 도 함께 돌려준다. 이 둘이 빠져 있어서 실시간 세션의
+    STT 과금이 실제의 1/3로 추정됐다(기본 설정에서 표시 모델 $0.003/분 +
+    보정 모델 $0.006/분 = $0.009/분인데 앞의 것만 계산했다). 월 지출 한도가 같은
+    추정치를 쓰기 때문에 이건 표시 문제가 아니라 지출 통제가 헐거워지는 문제였다.
     """
     stt_model = cfg.get("models.stt", "gpt-4o-mini-transcribe") or "gpt-4o-mini-transcribe"
     llm = cfg.get("models.llm", "gpt") or "gpt"
@@ -137,29 +154,56 @@ def current_models(cfg) -> dict:
         minutes_model = cfg.get("models.claude_model", None)
     else:
         minutes_model = cfg.get("models.minutes_model", None) or cfg.get("models.gpt_model", None)
-    return {"stt_model": stt_model, "llm": llm, "minutes_model": minutes_model}
+    # config_schema 기본값과 일치시킨다(realtime.two_pass=True, revise_model=gpt-4o-transcribe).
+    two_pass = bool(cfg.get("realtime.two_pass", True))
+    revise_model = cfg.get("realtime.revise_model", "gpt-4o-transcribe") or "gpt-4o-transcribe"
+    return {
+        "stt_model": stt_model,
+        "llm": llm,
+        "minutes_model": minutes_model,
+        "two_pass": two_pass,
+        "revise_model": revise_model,
+    }
 
 
 def estimate_session_cost(duration_sec: float, stt_model: str,
                           translate: bool = False,
                           include_minutes: bool = True,
                           llm: str = "gpt",
-                          minutes_model: str | None = None) -> dict:
+                          minutes_model: str | None = None,
+                          two_pass: bool = False,
+                          revise_model: str | None = None) -> dict:
     """오디오 길이(초) 기반 세션 비용 추정(USD).
 
     stt = 길이(분) × 모델 분당단가, translate = 길이(분) × 번역단가(옵션),
     minutes = 회의록 생성 대략 비용(include_minutes, 실제 LLM 모델 단가 반영).
     정확한 청구액이 아니라 대략치.
+
+    two_pass=True 면 **STT 과금이 두 번** 발생한다(빠른 조각 전사 + 확정 문장 보정).
+    보정 단가는 revise_model 기준이며, 기본 설정에서는 보정 모델이 표시 모델보다
+    비싸다(gpt-4o-transcribe $0.006 vs gpt-4o-mini-transcribe $0.003).
+    기본값을 False 로 둔 것은 의도적이다 — 배치/업로드 경로에는 보정 패스가 없으므로
+    호출부가 실시간 경로임을 명시할 때만 켜진다(is_two_pass_source 참조).
     """
     minutes_dur = max(0.0, float(duration_sec)) / 60.0
-    stt = minutes_dur * stt_rate_per_min(stt_model)
+    stt_rate = stt_rate_per_min(stt_model)
+    stt = minutes_dur * stt_rate
+    revise_rate = stt_rate_per_min(revise_model or stt_model) if two_pass else 0.0
+    stt_revise = minutes_dur * revise_rate
     tr = minutes_dur * TRANSLATE_COST_PER_MIN if translate else 0.0
     mins = minutes_cost(llm, minutes_model) if include_minutes else 0.0
     return {
         "duration_sec": round(float(duration_sec)),
         "stt": round(stt, 4),
+        # 2단계 보정 전사의 추가 STT 과금. two_pass=False 면 0.0.
+        "stt_revise": round(stt_revise, 4),
         "translate": round(tr, 4),
         "minutes": round(mins, 4),
-        "total": round(stt + tr + mins, 4),
-        "stt_rate_per_min": stt_rate_per_min(stt_model),
+        "total": round(stt + stt_revise + tr + mins, 4),
+        "stt_rate_per_min": stt_rate,
+        "revise_rate_per_min": revise_rate,
+        # 실측 분당 STT 단가(두 패스 합계) — 러닝 미터·한도 검사가 이 값을 써야 한다.
+        "stt_effective_per_min": round(stt_rate + revise_rate, 6),
+        "two_pass": bool(two_pass),
+        "revise_model": (revise_model or stt_model) if two_pass else None,
     }

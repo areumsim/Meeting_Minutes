@@ -278,18 +278,27 @@ def cost_rates():
     try:
         from meeting_minutes_app.common import config_loader as cfg
         from meeting_minutes_app.common import pricing
-        stt_model = cfg.get("models.stt", "gpt-4o-mini-transcribe") or "gpt-4o-mini-transcribe"
-        llm = cfg.get("models.llm", "gpt") or "gpt"
-        if str(llm).lower().startswith("claude"):
-            minutes_model = cfg.get("models.claude_model", None)
-        else:
-            minutes_model = cfg.get("models.minutes_model", None) or cfg.get("models.gpt_model", None)
+        # 모델 해석 규칙은 pricing.current_models 하나만 쓴다 — 여기에 복사돼 있던
+        # 같은 분기가 two_pass 를 반영하지 않아 러닝 미터가 실제의 1/3을 보여줬다.
+        _m = pricing.current_models(cfg)
+        # 실시간 녹음 화면의 러닝 미터용이므로 2단계 보정 전사를 반영한다.
+        _est = pricing.estimate_session_cost(
+            60.0, _m["stt_model"], include_minutes=False,
+            llm=_m["llm"], minutes_model=_m["minutes_model"],
+            two_pass=_m["two_pass"], revise_model=_m["revise_model"],
+        )
         return {
-            "stt_model": stt_model,
-            "stt_per_min": pricing.stt_rate_per_min(stt_model),
+            "stt_model": _m["stt_model"],
+            # 1차(표시) 전사 단가 — 기존 필드 의미를 바꾸지 않는다.
+            "stt_per_min": _est["stt_rate_per_min"],
+            # 아래 4개가 신규. 러닝 미터는 stt_effective_per_min 을 써야 한다.
+            "stt_effective_per_min": _est["stt_effective_per_min"],
+            "revise_per_min": _est["revise_rate_per_min"],
+            "revise_model": _est["revise_model"],
+            "two_pass": _est["two_pass"],
             "translate_per_min": pricing.TRANSLATE_COST_PER_MIN,
             # 회의록 생성 요율은 실제 LLM(gpt/claude) 모델 단가를 반영 (과거 항상 gpt-4o 기준이었음)
-            "minutes_flat": pricing.minutes_cost(llm, minutes_model),
+            "minutes_flat": pricing.minutes_cost(_m["llm"], _m["minutes_model"]),
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"요율 로드 실패: {e}")

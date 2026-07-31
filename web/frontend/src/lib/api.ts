@@ -252,7 +252,18 @@ export const getSessionRelatedNotes = async (
   return { notes: [], cross: [] };
 };
 
-export interface CostRates { stt_model: string; stt_per_min: number; translate_per_min: number; minutes_flat: number; }
+export interface CostRates {
+  stt_model: string;
+  /** 1차(표시) 전사 단가. 러닝 미터에는 stt_effective_per_min 을 써야 한다. */
+  stt_per_min: number;
+  translate_per_min: number;
+  minutes_flat: number;
+  /** 2단계 보정 전사를 포함한 실측 분당 STT 단가. 구버전 백엔드에는 없다. */
+  stt_effective_per_min?: number;
+  revise_per_min?: number;
+  revise_model?: string | null;
+  two_pass?: boolean;
+}
 export const getCostRates = async (): Promise<CostRates | null> => {
   try {
     const res = await apiFetch(`/api/cost/rates`);

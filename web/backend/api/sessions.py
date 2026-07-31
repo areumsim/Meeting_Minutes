@@ -41,13 +41,14 @@ def get_session_cost(session_id: str):
     try:
         from meeting_minutes_app.common import config_loader as cfg
         from meeting_minutes_app.common import pricing
-        stt_model = cfg.get("models.stt", "gpt-4o-mini-transcribe") or "gpt-4o-mini-transcribe"
-        llm = cfg.get("models.llm", "gpt") or "gpt"
-        # 회의록 생성 모델(minutes_model) 우선, 없으면 gpt_model/claude_model
-        if str(llm).lower().startswith("claude"):
-            minutes_model = cfg.get("models.claude_model", None)
-        else:
-            minutes_model = cfg.get("models.minutes_model", None) or cfg.get("models.gpt_model", None)
+        # 모델 해석 규칙은 pricing.current_models 하나만 쓴다(여기에 복사돼 있던 같은
+        # 분기가 two_pass 를 반영하지 않아 실시간 세션 비용이 과소 표시됐다).
+        _m = pricing.current_models(cfg)
+        stt_model = _m["stt_model"]
+        llm = _m["llm"]
+        minutes_model = _m["minutes_model"]
+        # 2단계 보정 전사는 실시간 경로에만 있다 — 업로드 세션에 적용하면 과대 표시된다.
+        _two_pass = _m["two_pass"] and pricing.is_two_pass_source(session.get("source"))
     except Exception as e:
         return {"ok": False, "message": f"가격 정보 로드 실패: {e}"}
     cost = pricing.estimate_session_cost(
@@ -55,6 +56,7 @@ def get_session_cost(session_id: str):
         translate=bool(session.get("translate")),
         include_minutes=bool(segs),   # 문서가 생성된(=완료된) 세션만 회의록 비용 포함
         llm=llm, minutes_model=minutes_model,
+        two_pass=_two_pass, revise_model=_m["revise_model"],
     )
     return {"ok": True, "stt_model": stt_model, "llm": llm, **cost}
 

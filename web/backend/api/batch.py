@@ -280,6 +280,9 @@ async def upload_file(
         est = pricing.estimate_session_cost(
             duration_sec, _m["stt_model"], translate=do_translate,
             include_minutes=True, llm=_m["llm"], minutes_model=_m["minutes_model"],
+            # two_pass 는 넘기지 않는다(기본 False) — 업로드/배치 파이프라인에는
+            # 보정 전사 패스가 없어 STT 과금이 한 번뿐이다. realtime.two_pass 설정이
+            # 켜져 있어도 이 경로에는 적용되지 않는다.
         )
         est_total = est["total"]
         per_file_cap = float(_cfg.get("cost.per_file_cap_usd", 0) or 0)

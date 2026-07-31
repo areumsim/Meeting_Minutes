@@ -1210,11 +1210,27 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
                 </div>
               </div>
               {costRates && (isRecording || status === "generating" || status === "completed") && (
-                <span className="text-[11px] text-zinc-400 mt-1 font-mono tabular-nums" title="STT+번역 실시간 추정 + (완료 시) 회의록 생성비. 대략치입니다.">
+                <span
+                  className="text-[11px] text-zinc-400 mt-1 font-mono tabular-nums"
+                  title={
+                    // 2단계 보정 전사가 켜져 있으면 STT 과금이 두 번 난다. 과거에는
+                    // 1차 단가만 곱해 실제의 약 1/3을 보여줬다.
+                    (costRates.two_pass
+                      ? `1차 인식 $${costRates.stt_per_min}/분 + 문장 보정 $${costRates.revise_per_min}/분`
+                      : `음성 인식 $${costRates.stt_per_min}/분`)
+                    + (preset.translate ? ` + 번역 $${costRates.translate_per_min}/분` : "")
+                    + " + (완료 시) 회의록 생성비. 대략치입니다."
+                  }
+                >
                   💵 ~${(
-                    (duration / 60) * (costRates.stt_per_min + (preset.translate ? costRates.translate_per_min : 0))
+                    (duration / 60) * (
+                      // 구버전 백엔드(필드 없음)에서는 1차 단가로 폴백한다.
+                      (costRates.stt_effective_per_min ?? costRates.stt_per_min)
+                      + (preset.translate ? costRates.translate_per_min : 0)
+                    )
                     + ((status === "generating" || status === "completed") ? costRates.minutes_flat : 0)
                   ).toFixed(3)}
+                  {costRates.two_pass && <span className="text-zinc-500"> (2패스)</span>}
                 </span>
               )}
             </div>

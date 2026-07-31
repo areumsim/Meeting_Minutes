@@ -1805,6 +1805,9 @@ class BrowserRealtimeSession:
                 _est = pricing.estimate_session_cost(
                     duration, _m["stt_model"], include_minutes=True,
                     llm=_m["llm"], minutes_model=_m["minutes_model"],
+                    # 실시간 경로는 2단계 보정 전사를 거쳐 STT 과금이 두 번 난다.
+                    # 이 두 인자가 없어서 월 합계·지출 한도가 실제의 1/3로 계산됐다.
+                    two_pass=_m["two_pass"], revise_model=_m["revise_model"],
                 )["total"]
             except Exception:
                 _est = 0.0

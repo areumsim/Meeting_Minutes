@@ -144,7 +144,9 @@ class TestEstimate:
                 return {"models.stt": "gpt-4o-transcribe", "models.llm": "gpt",
                         "models.minutes_model": "gpt-4o"}.get(k, d)
         m = pricing.current_models(Cfg())
-        assert m == {"stt_model": "gpt-4o-transcribe", "llm": "gpt", "minutes_model": "gpt-4o"}
+        assert m["stt_model"] == "gpt-4o-transcribe"
+        assert m["llm"] == "gpt"
+        assert m["minutes_model"] == "gpt-4o"
 
     def test_current_models_claude(self):
         class Cfg:
@@ -157,6 +159,74 @@ class TestEstimate:
         short = pricing.estimate_session_cost(60, "gpt-4o-transcribe", include_minutes=True)
         long = pricing.estimate_session_cost(3600, "gpt-4o-transcribe", include_minutes=True)
         assert long["total"] > short["total"] > 0
+
+
+class TestTwoPassCost:
+    """2단계 보정 전사(realtime.two_pass)의 STT 이중 과금이 추정에 반영되는가.
+
+    회귀 배경: two_pass 는 기본 **켜짐**이고 스키마 설명문도 "STT 비용이 약 2배"라고
+    적고 있는데 estimate_session_cost 에 그 인자가 없었다. 그래서 기본 설정에서
+    실청구 $0.009/분(표시 $0.003 + 보정 $0.006)을 $0.003/분으로 추정했다.
+    월 지출 한도가 같은 추정치를 쓰기 때문에 표시가 아니라 지출 통제의 문제였다.
+    """
+
+    def test_current_models_exposes_two_pass_defaults(self):
+        """설정이 비어 있으면 config_schema 기본값(True / gpt-4o-transcribe)을 따른다."""
+        class Cfg:
+            def get(self, k, d=None):
+                return d
+        m = pricing.current_models(Cfg())
+        assert m["two_pass"] is True
+        assert m["revise_model"] == "gpt-4o-transcribe"
+
+    def test_current_models_reads_two_pass_off(self):
+        class Cfg:
+            def get(self, k, d=None):
+                return {"realtime.two_pass": False}.get(k, d)
+        assert pricing.current_models(Cfg())["two_pass"] is False
+
+    def test_two_pass_adds_revise_stt_charge(self):
+        """기본 조합: 표시 mini($0.003) + 보정 gpt-4o-transcribe($0.006) = $0.009/분."""
+        off = pricing.estimate_session_cost(
+            600, "gpt-4o-mini-transcribe", include_minutes=False)
+        on = pricing.estimate_session_cost(
+            600, "gpt-4o-mini-transcribe", include_minutes=False,
+            two_pass=True, revise_model="gpt-4o-transcribe")
+        assert off["stt_revise"] == 0.0
+        assert on["stt_revise"] == pytest.approx(10 * 0.006, rel=1e-6)
+        assert on["stt"] == pytest.approx(10 * 0.003, rel=1e-6)
+        assert on["total"] == pytest.approx(off["total"] + 10 * 0.006, rel=1e-6)
+        # 실측 분당 단가가 두 패스 합계여야 한다(러닝 미터·한도가 이 값을 쓴다).
+        assert on["stt_effective_per_min"] == pytest.approx(0.009, rel=1e-6)
+        assert off["stt_effective_per_min"] == pytest.approx(0.003, rel=1e-6)
+
+    def test_two_pass_total_is_three_times_when_revise_is_pricier(self):
+        """회귀의 크기를 고정한다 — 과거 추정치는 실제의 약 1/3이었다."""
+        on = pricing.estimate_session_cost(
+            3600, "gpt-4o-mini-transcribe", include_minutes=False,
+            two_pass=True, revise_model="gpt-4o-transcribe")
+        assert on["total"] == pytest.approx(3 * on["stt"], rel=1e-6)
+
+    def test_revise_model_defaults_to_stt_model(self):
+        """보정 모델을 안 주면 표시 모델과 같은 단가로 두 번 계산한다(2배)."""
+        on = pricing.estimate_session_cost(
+            600, "gpt-4o-transcribe", include_minutes=False, two_pass=True)
+        assert on["total"] == pytest.approx(2 * on["stt"], rel=1e-6)
+        assert on["revise_model"] == "gpt-4o-transcribe"
+
+    def test_two_pass_off_keeps_legacy_shape(self):
+        """기본값 False — 배치/업로드 경로의 기존 추정치가 바뀌지 않아야 한다."""
+        est = pricing.estimate_session_cost(600, "gpt-4o-transcribe", include_minutes=True)
+        assert est["two_pass"] is False
+        assert est["revise_model"] is None
+        assert est["total"] == pytest.approx(est["stt"] + est["minutes"], rel=1e-6)
+
+    def test_is_two_pass_source(self):
+        """보정 패스는 실시간 경로에만 있다 — 업로드 세션에 적용하면 과대 표시된다."""
+        for s in ("web_realtime", "realtime", "recover"):
+            assert pricing.is_two_pass_source(s) is True
+        for s in ("web", "batch", "ingest", "cli", "vault_audio", "", None):
+            assert pricing.is_two_pass_source(s) is False
 
 
 class TestCliRunningCostEstimate:

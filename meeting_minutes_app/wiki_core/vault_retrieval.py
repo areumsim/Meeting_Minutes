@@ -99,7 +99,7 @@ def normalize_domain_text(text: str) -> str:
 # 드러난다. 조직 고유 마커는 `wiki.domain_relevance_keywords`(config.json, gitignore)
 # 에 넣으면 이 기본값을 대체한다.
 _DEFAULT_DOMAIN_RELEVANCE_MARKERS = (
-    "해커톤", "기념품", "후원", "양자어닐", "볼츠만", "qml", "nisq", "qnn", "ionq", "q-day",
+    "해커톤", "기념품", "후원", "양자어닐", "볼츠만", "qml", "nisq", "qnn", "q-day",
 )
 
 

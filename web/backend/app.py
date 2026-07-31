@@ -23,7 +23,7 @@ try:
 except Exception as _ts_err:
     print(f"[ssl] truststore 주입 생략(무시): {_ts_err}")
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
@@ -181,9 +181,14 @@ if _mcp_app is not None:
 #   - iOS(capacitor.config iosScheme:'https', hostname:'localhost') → Origin: https://localhost
 #   - capacitor://localhost / ionic://localhost (플랫폼/버전별 스킴)
 # 참고: allow_origins=["*"] + allow_credentials=True 는 CORS 명세상 무효 조합이라 쓰지 않는다.
+#
+# 허용 목록은 web/backend/security.py 의 ALLOWED_ORIGIN_REGEX 하나를 쓴다 — CORS 와
+# 개별 엔드포인트 검증(SEC-009)이 같은 값을 봐야 한다. 두 곳에 복사하면 갈라진다.
+from web.backend.security import ALLOWED_ORIGIN_REGEX
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origin_regex=r"^(https?://(localhost|127\.0\.0\.1)(:\d+)?|capacitor://localhost|ionic://localhost)$",
+    allow_origin_regex=ALLOWED_ORIGIN_REGEX,
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -214,16 +219,71 @@ app.include_router(assistant_router, prefix="/api")
 
 
 @app.post("/api/shutdown")
-def shutdown():
-    """웹에서 앱(서버)을 종료. 콘솔 창이 없는 배포(windowed)에서 깔끔히 끄기 위한 용도."""
-    import threading, os, time
+def shutdown(request: Request, force: bool = False):
+    """웹에서 앱(서버)을 종료. 콘솔 창이 없는 배포(windowed)에서 깔끔히 끄기 위한 용도.
+
+    SEC-009 로 세 가지가 추가됐다.
+
+    1. **출처 검증.** 예전에는 인증도 loopback 검사도 없어, 사용자가 앱을 켜 둔 채 아무
+       웹페이지를 열기만 해도 그 페이지가 `POST /api/shutdown` 으로 앱을 끌 수 있었다.
+       CORS 는 단순 요청의 **전송**을 막지 않는다(응답 읽기만 막는다).
+    2. **진행 중 작업 확인.** 확인이 프런트 `confirm()` 에만 있어 우회 가능했다.
+       처리 중 세션이 있으면 409 로 거절하고, 사용자가 화면에서 승인하면 force=true 로 온다.
+    3. **정상 종료.** `os._exit(0)` 은 atexit·finally·lifespan shutdown 을 모두 건너뛴다.
+       그래서 실시간 세션 정리(스레드풀 shutdown, tmpdir 삭제)가 실행되지 않고 처리 중
+       세션이 `processing` 으로 영구 고착됐다. SIGTERM 상당의 정상 경로로 내려간다.
+    """
+    from web.backend.security import require_local
+    require_local(request)
+
+    busy: list = []
+    if not force:
+        try:
+            from web.backend import database as db
+            busy = [s for s in (db.list_sessions() or [])
+                    if (s.get("status") or "") == "processing"]
+        except Exception:
+            busy = []          # 조회 실패로 종료를 막지는 않는다
+        if busy:
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "message": (f"처리 중인 회의가 {len(busy)}건 있습니다. "
+                                f"지금 종료하면 중단됩니다."),
+                    "processing": [
+                        {"id": s.get("id"), "title": s.get("title") or "제목 없음"}
+                        for s in busy[:5]
+                    ],
+                    "count": len(busy),
+                },
+            )
+
+    import threading
+    import time
+
+    srv = getattr(app.state, "uvicorn_server", None)
 
     def _die():
+        # 응답이 클라이언트에 도달할 시간을 준 뒤 내려간다.
         time.sleep(0.4)
+        # 정상 경로: uvicorn 이 lifespan shutdown 을 실행한다 — 실시간 세션 정리
+        # (스레드풀 shutdown, tmpdir 삭제)와 DB 커밋이 끝난다.
+        # 핸들은 런처가 server_launch.register_shutdown_handle() 로 심는다.
+        if srv is not None:
+            srv.should_exit = True
+            for _ in range(100):            # 최대 10초 대기
+                time.sleep(0.1)
+                if getattr(srv, "started", True) is False:
+                    return
+        # 폴백: 핸들이 없거나 10초 안에 안 내려간 경우. Windows 에서는 SIGTERM 이
+        # 강제 종료라 정상 종료 훅이 돌지 않는다 — 즉 이 경로는 os._exit 과 사실상
+        # 같고, 정리를 보장하지 못한다. 그래서 응답의 graceful 로 어느 쪽이었는지 알린다.
+        import os
         os._exit(0)
 
     threading.Thread(target=_die, daemon=True).start()
-    return {"ok": True}
+    # graceful=false 면 정리 없이 내려간다는 뜻이다(런처가 핸들을 심지 않은 실행 방식).
+    return {"ok": True, "graceful": srv is not None}
 
 
 @app.get("/api/health")

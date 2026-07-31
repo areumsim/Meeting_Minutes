@@ -181,3 +181,27 @@ def open_browser_when_ready(port: int, timeout: float = 30.0,
         webbrowser.open(url)
 
     threading.Thread(target=_wait_and_open, daemon=True).start()
+
+
+def register_shutdown_handle(server) -> bool:
+    """uvicorn Server 핸들을 FastAPI app.state 에 심어 /api/shutdown 이 정상 종료를
+    요청할 수 있게 한다. 성공하면 True.
+
+    왜 필요한가 — 예전 종료 경로는 `os._exit(0)` 이었다. 그것은 atexit·finally·
+    lifespan shutdown 을 모두 건너뛰므로 실시간 세션 정리(스레드풀 shutdown,
+    tmpdir 삭제)가 실행되지 않고, 처리 중이던 세션이 DB 에 'processing' 으로 남아
+    다음 실행에서 영구 고착됐다.
+
+    폴백(SIGTERM)으로 대신할 수 없다 — **Windows 에서 SIGTERM 은 강제 종료**라
+    정상 종료 훅이 돌지 않는다. 그래서 서버 객체를 직접 들고 있어야 한다.
+
+    소스 런처(run_ui.py)와 포터블 런처(run_ui_exe.py)가 같은 함수를 쓴다. 이 등록을
+    각자 복사하면 한쪽만 고쳐져 "배포본에서만 종료가 더럽다"가 된다.
+    """
+    try:
+        from web.backend.app import app
+        app.state.uvicorn_server = server
+        return True
+    except Exception as e:                     # pragma: no cover - 방어
+        print(f"  [종료] 서버 핸들 등록 실패(무시): {e}")
+        return False

@@ -2,7 +2,7 @@
 api/sessions.py — 세션 CRUD API
 """
 
-from fastapi import APIRouter, Query, HTTPException
+from fastapi import APIRouter, Query, HTTPException, Request
 from typing import Optional
 
 from web.backend import database as db
@@ -90,12 +90,24 @@ def get_session_status(session_id: str):
 
 
 @router.delete("/sessions/{session_id}")
-def delete_session(session_id: str):
+def delete_session(session_id: str, request: Request):
+    # 부수효과(삭제)가 있는 요청은 Origin 을 본다 — CORS 는 단순 요청의 전송을 막지
+    # 않으므로, 예전에는 아무 웹페이지가 사용자의 회의 기록을 지울 수 있었다(SEC-009).
+    from web.backend.security import require_local
+    require_local(request)
     db.delete_session(session_id)
     return {"success": True}
 
 
 @router.post("/sessions/clear")
-def clear_sessions():
+def clear_sessions(request: Request):
+    """모든 세션 기록 삭제. 확인은 프런트 confirm() 뿐이었고 서버는 무조건 실행했다.
+
+    Origin 검증을 넣어 외부 페이지가 호출하지 못하게 한다(SEC-009). 되돌리기(soft
+    delete)와 입력 확인은 FR-001 개정으로 Batch C 에서 다룬다 — 여기서는 원격
+    트리거만 막는다.
+    """
+    from web.backend.security import require_local
+    require_local(request)
     db.clear_all_sessions()
     return {"success": True}

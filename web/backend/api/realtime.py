@@ -1845,6 +1845,13 @@ class BrowserRealtimeSession:
 
 @router.websocket("/ws/realtime")
 async def websocket_realtime(ws: WebSocket):
+    # CORS 는 WebSocket 에 적용되지 않는다. 그래서 예전에는 사용자가 앱을 켜 둔 채 아무
+    # 웹페이지를 열기만 해도 그 페이지가 이 소켓을 열어 실시간 전사(=사용자 키로 과금)를
+    # 시작시킬 수 있었다. loopback 바인딩은 이걸 막지 못한다 — 브라우저가 사용자 PC 안에서
+    # 연결하기 때문이다. accept() **전에** Origin 을 보고 거절한다(SEC-009 / N-8).
+    from web.backend.security import ws_reject_foreign_origin
+    if await ws_reject_foreign_origin(ws):
+        return
     await ws.accept()
 
     try:

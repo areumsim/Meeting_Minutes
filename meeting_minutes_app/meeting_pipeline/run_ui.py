@@ -197,7 +197,11 @@ def main():
                 port, expect_config_path=str(app_paths.get_config_path()))
 
         import uvicorn
-        uvicorn.run(
+        # uvicorn.run() 대신 Server 를 직접 만든다 — 그래야 /api/shutdown 이 정상 종료를
+        # 요청할 수 있다(should_exit). 예전에는 종료가 os._exit(0) 이라 lifespan shutdown 을
+        # 건너뛰어 실시간 세션 정리가 실행되지 않고 처리 중 세션이 'processing' 으로
+        # 영구 고착됐다. Windows 에서는 SIGTERM 이 강제 종료라 그 폴백만으로는 부족하다.
+        config = uvicorn.Config(
             "web.backend.app:app",
             host=host,
             port=port,
@@ -205,6 +209,9 @@ def main():
             # 녹음 필수 기능이므로 명시적으로 선택해 누락을 즉시 드러낸다.
             ws="websockets",
         )
+        server = uvicorn.Server(config)
+        server_launch.register_shutdown_handle(server)
+        server.run()
 
 
 if __name__ == "__main__":

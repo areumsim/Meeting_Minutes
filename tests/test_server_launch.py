@@ -144,6 +144,33 @@ class _FakeHealth:
         return False
 
 
+def _fake_uvicorn(calls: dict):
+    """uvicorn 대역 — 프로덕션 경로는 `uvicorn.run()` 이 아니라 Config+Server 를 쓴다.
+
+    /api/shutdown 이 정상 종료를 요청하려면 Server 객체가 필요하기 때문이다
+    (`server_launch.register_shutdown_handle`). dev 경로는 여전히 run() 을 쓴다.
+    """
+    mod = types.ModuleType("uvicorn")
+
+    class _Server:
+        def __init__(self, config):
+            self.config = config
+            calls["server_created"] = True
+
+        def run(self):
+            calls["server_ran"] = True
+
+    def _config(app, **kw):
+        calls.update(kw)
+        calls["app"] = app
+        return {"app": app, **kw}
+
+    mod.Config = _config
+    mod.Server = _Server
+    mod.run = lambda app, **kw: calls.update(kw) or calls.update({"app": app})
+    return mod
+
+
 class TestRunUiLauncher:
     """소스 런처가 공용 규칙을 실제로 쓰는지(포트 이동·브라우저 순서·dev 모드 실패)."""
 
@@ -154,9 +181,7 @@ class TestRunUiLauncher:
         monkeypatch.setattr(run_ui, "check_node_deps", lambda: None)
         monkeypatch.setattr(sys, "argv", ["run_ui", *argv])
         calls = {}
-        fake_uvicorn = types.ModuleType("uvicorn")
-        fake_uvicorn.run = lambda app, **kw: calls.update(kw) or calls.update({"app": app})
-        monkeypatch.setitem(sys.modules, "uvicorn", fake_uvicorn)
+        monkeypatch.setitem(sys.modules, "uvicorn", _fake_uvicorn(calls))
         return run_ui, calls
 
     def test_production_moves_to_free_port_and_defers_browser(self, monkeypatch, occupied_port):
@@ -224,12 +249,42 @@ class TestBindHostRule:
         monkeypatch.setattr(sl, "lan_access_enabled", lambda: False)
         monkeypatch.setattr(sl, "open_browser_when_ready", lambda *a, **k: None)
         calls = {}
-        fake = types.ModuleType("uvicorn")
-        fake.run = lambda app, **kw: calls.update(kw)
-        monkeypatch.setitem(sys.modules, "uvicorn", fake)
+        monkeypatch.setitem(sys.modules, "uvicorn", _fake_uvicorn(calls))
         monkeypatch.setattr(sys, "argv", ["run_ui", "--no-browser"])
         run_ui.main()
         assert calls["host"] == "127.0.0.1"
+
+
+class TestGracefulShutdownHandle:
+    """종료가 os._exit 이 아니라 정상 경로를 타는지 — 핸들 등록이 그 전제다.
+
+    회귀 배경: `/api/shutdown` 이 `os._exit(0)` 이라 lifespan shutdown 을 건너뛰어
+    실시간 세션 정리가 실행되지 않고, 처리 중이던 세션이 DB 에 'processing' 으로
+    남아 다음 실행에서 영구 고착됐다. Windows 에서는 SIGTERM 이 강제 종료라
+    폴백만으로는 대체할 수 없어 Server 객체를 들고 있어야 한다.
+    """
+
+    def test_register_puts_handle_on_app_state(self):
+        from web.backend.app import app
+        sentinel = object()
+        assert sl.register_shutdown_handle(sentinel) is True
+        assert app.state.uvicorn_server is sentinel
+
+    def test_source_launcher_registers(self, monkeypatch):
+        from meeting_minutes_app.meeting_pipeline import run_ui
+        monkeypatch.setattr(run_ui, "check_python_deps", lambda: None)
+        monkeypatch.setattr(run_ui, "build_frontend", lambda: None)
+        monkeypatch.setattr(sl, "lan_access_enabled", lambda: False)
+        monkeypatch.setattr(sl, "open_browser_when_ready", lambda *a, **k: None)
+        registered = {}
+        monkeypatch.setattr(sl, "register_shutdown_handle",
+                            lambda s: registered.update({"s": s}) or True)
+        calls = {}
+        monkeypatch.setitem(sys.modules, "uvicorn", _fake_uvicorn(calls))
+        monkeypatch.setattr(sys, "argv", ["run_ui", "--no-browser"])
+        run_ui.main()
+        assert calls.get("server_created") and calls.get("server_ran")
+        assert "s" in registered, "런처가 종료 핸들을 등록하지 않으면 graceful 종료가 안 된다"
 
 
 class TestWsRequirementIsOneRule:

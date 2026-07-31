@@ -147,7 +147,9 @@ def main():
     server_launch.require_ws_decode_support()
 
     import uvicorn
-    uvicorn.run(
+    # Server 를 직접 만들어 /api/shutdown 이 정상 종료를 요청할 수 있게 한다
+    # (소스 런처 run_ui.py 와 같은 이유·같은 함수 — 판정을 복사하지 않는다).
+    config = uvicorn.Config(
         "web.backend.app:app",
         host=host,
         port=port,
@@ -156,6 +158,9 @@ def main():
         # 상태를 허용하지 않는다. build_exe.bat도 빌드 전에 같은 의존성을 검사한다.
         ws="websockets",
     )
+    server = uvicorn.Server(config)
+    server_launch.register_shutdown_handle(server)
+    server.run()
 
 
 if __name__ == "__main__":

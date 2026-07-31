@@ -139,8 +139,15 @@ def build_related_notes_section(evidence: Optional[List[Dict[str, Any]]],
             rows.append(f"- 📄 [[{t}]]")
     if not rows:
         return ""
+    # 표현 수위는 **실측에 맞춘다**. 이 목록은 '근거'가 아니라 '찾아볼 만한 후보'다 —
+    # scripts/measure_retrieval_floor.py 로 실볼트를 재 보면, 전사에 대해 그 전사
+    # 자신의 회의록(볼트에서 가장 관련 있는 문서)이 1위로 회수되는 비율이 임베딩
+    # 0%(중위 15위) · TF-IDF 0%(중위 88위)다. 이런 회수 결과를 "근거"로 적으면
+    # 회의록이 검증되지 않은 연결을 사실처럼 주장한다.
     return (f"{RELATED_NOTES_HEADING}\n\n"
-            "> 회의 중 실시간 검색으로 찾은 내부 자료입니다(자동 삽입).\n\n"
+            "> 회의 내용과 **비슷해 보이는** 내부 노트를 자동 검색해 붙인 목록입니다.\n"
+            "> 관련성은 검증되지 않았고, 회의록 본문은 이 노트들을 참고하지 않고 "
+            "이번 녹음만으로 작성됩니다. 확인이 필요하면 직접 열어 보세요.\n\n"
             + "\n".join(rows) + "\n")
 
 
@@ -340,6 +347,13 @@ def run_post_session(
             segments = inputs.segments or []
     title = inputs.title or inputs.topic or "무제 회의"
     memo: Optional[str] = inputs.base_memo
+    # 회의록 **본문 생성 프롬프트**에 이전 노트 내용을 실을지 (기본 꺼짐).
+    # 아래 스테이지 1~3 은 이 값과 무관하게 계속 회수한다 — 관련 노트 목록·근거 기록·
+    # 사실 검증·wiki_context.json 은 그대로이고, 본문을 '쓰는 데' 참고하지 않을 뿐이다.
+    from meeting_minutes_app.meeting_pipeline.meeting_workflow import (
+        minutes_vault_context_enabled as _mv_ctx,
+    )
+    inject_vault = _mv_ctx()
 
     def _stage(name: str, fn: Callable[[], None]) -> None:
         try:
@@ -355,10 +369,11 @@ def run_post_session(
         from meeting_minutes_app.meeting_pipeline import publish as _pub
         if options.plan_match is PLAN_UNSET:
             res.plan_match, memo = _pub.plan_context_memo(
-                title, inputs.session_dt, memo)
+                title, inputs.session_dt, memo, include_plan_body=inject_vault)
         else:
             res.plan_match, memo = _pub.plan_context_memo(
-                title, inputs.session_dt, memo, match=options.plan_match)
+                title, inputs.session_dt, memo, match=options.plan_match,
+                include_plan_body=inject_vault)
         if res.plan_match:
             ev.on_status("plan", f"계획 회의 매칭: {res.plan_match.get('path', '')}")
     _stage("plan_context", _plan)
@@ -367,15 +382,19 @@ def run_post_session(
     def _extra_memo():
         nonlocal memo
         blocks = list(options.extra_memo_blocks or [])
-        if options.extra_related_titles:
-            blocks.append(
-                "[실시간 관련 노트(Vault 검색)]:\n"
-                + "\n".join(f"- [[{t}]]" for t in options.extra_related_titles[:10]))
-        # 근거(섹션경로·점수·snippet)까지 주입 — 제목만 넣던 과거엔 LLM이 어느
-        # 대목이 관련인지 몰라 관련 노트를 사실상 활용하지 못했다.
-        ev_block = _related_evidence_memo(options.extra_related_evidence)
-        if ev_block:
-            blocks.append(ev_block)
+        # 실시간 검색이 찾은 볼트 노트(제목·근거)는 '이전 노트 내용'이므로 본문 주입이
+        # 꺼져 있으면 싣지 않는다. 회의록 말미 "🔗 관련 노트" 섹션과 세션 상세의 누적
+        # 목록에는 그대로 남는다(스테이지 7.5 는 extra_related_* 를 직접 읽는다).
+        if inject_vault:
+            if options.extra_related_titles:
+                blocks.append(
+                    "[실시간 관련 노트(Vault 검색)]:\n"
+                    + "\n".join(f"- [[{t}]]" for t in options.extra_related_titles[:10]))
+            # 근거(섹션경로·점수·snippet)까지 주입 — 제목만 넣던 과거엔 LLM이 어느
+            # 대목이 관련인지 몰라 관련 노트를 사실상 활용하지 못했다.
+            ev_block = _related_evidence_memo(options.extra_related_evidence)
+            if ev_block:
+                blocks.append(ev_block)
         if blocks:
             memo = "\n\n".join(([memo] if memo else []) + blocks)
     _stage("extra_memo", _extra_memo)
@@ -393,20 +412,26 @@ def run_post_session(
             indexer=options.indexer,
             obs=options.obs,
             include_web=options.include_web,
+            inject_vault=inject_vault,
         )
         memo = memo2
         res.related_note_titles = mw.merge_related_note_titles(
             options.extra_related_titles, titles)
         res.context_flags = flags or {}
-        # 소스별 주입 현황 한 줄 요약 (A5 — silent failure 가시화)
+        # 소스별 **회수** 현황 한 줄 요약 (A5 — silent failure 가시화).
+        # 본문 주입 여부는 별도로 찍는다 — 둘을 한 줄에 섞으면 "회수 실패"와
+        # "일부러 주입 안 함"이 구분되지 않는다.
         stats = " ".join(
             f"{k}={'O' if res.context_flags.get(k) else 'X'}"
             for k in ("wiki", "graph", "registry", "web"))
-        ev.on_status("context", f"컨텍스트 주입: {stats}, 노트 {len(res.related_note_titles)}개")
+        ev.on_status("context",
+                     f"컨텍스트 회수: {stats}, 노트 {len(res.related_note_titles)}개"
+                     + (" · 회의록 본문 주입 O" if inject_vault
+                        else " · 회의록 본문 주입 X(이전 회의 내용 미참고)"))
     _stage("context", _context)
 
     if not res.related_note_titles and not res.context_flags.get("registry"):
-        print("  ⚠ wiki 컨텍스트 없이 회의록을 생성합니다 "
+        print("  ⚠ 관련 노트를 찾지 못했습니다 "
               "(인덱스 미구축/Obsidian 미연결 여부를 확인하세요)")
 
     # wiki_context.json 진단 아티팩트 저장 — 회의록 생성 성공 여부와 무관하게
@@ -544,13 +569,17 @@ def run_post_session(
                                + "\n\n" + verify_md)
                 ev.on_document("fact_check", verify_md)
                 ev.on_document("minutes", res.minutes)   # 검증 반영본 재방출 (웹 파리티)
-                conflicts = verify_md.count("- ⚠️")
-                matches = verify_md.count("- ✅")
-                unknowns = verify_md.count("- ❓") + verify_md.count("- 🔍")
+                # 집계는 **구조화 결과**에서 센다. 예전엔 마크다운의 아이콘 문자열
+                # ("- ✅" 등)을 셌는데, 표기를 바꾸면 집계가 조용히 0이 됐다
+                # (실제로 '확인됨'→'노트와 일치' 표현을 고칠 때 걸렸다).
+                verdicts = [str((r or {}).get("verdict", "")) for r in res.claim_results]
+                conflicts = sum(1 for v in verdicts if v == "conflict")
+                matches = sum(1 for v in verdicts if v == "match")
+                unknowns = sum(1 for v in verdicts if v not in ("conflict", "match"))
                 ev.on_status("claim_verify",
-                             f"사실 검증 완료: 충돌 {conflicts}, 일치 {matches}, 확인불가 {unknowns}")
+                             f"노트 대조 완료: 충돌 {conflicts}, 일치 {matches}, 확인불가 {unknowns}")
             else:
-                ev.on_status("claim_verify", "검증 가능한 주장을 추출하지 못했습니다")
+                ev.on_status("claim_verify", "대조할 주장을 추출하지 못했습니다")
         _stage("claim_verify", _verify)
 
     # ── 7.5 관련 노트 섹션 자동 삽입 (FR-6) ──
@@ -599,8 +628,13 @@ def run_post_session(
         def _publish_stage():
             from meeting_minutes_app.meeting_pipeline import meeting_workflow as mw
             from meeting_minutes_app.meeting_pipeline.publish import enrich_and_publish
-            evidence_links = mw.evidence_to_wikilinks(
-                (res.context_flags or {}).get("evidence", []))
+            # frontmatter `evidence` 의 뜻은 "회의록 생성에 **실제로 주입된** 근거"다
+            # (obsidian.write_meeting_note 참고). 본문 주입이 꺼져 있으면 아무것도
+            # 주입되지 않았으므로 비워 둔다 — 회수한 목록을 여기 적으면 "이 노트를
+            # 근거로 썼다"는 거짓 기록이 남는다. 회수 결과 자체는 본문 "🔗 관련 노트"
+            # 섹션과 related_notes 로 그대로 남는다.
+            evidence_links = (mw.evidence_to_wikilinks(
+                (res.context_flags or {}).get("evidence", [])) if inject_vault else [])
             plan_for_publish = (res.plan_match
                                 if res.plan_match is not None or options.plan_match is PLAN_UNSET
                                 else options.plan_match)

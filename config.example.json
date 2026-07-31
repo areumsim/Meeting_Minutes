@@ -386,8 +386,20 @@
     "embedding_enabled": true,
     "embedding_model": "text-embedding-3-small",
     "embedding_dims": 256,
-    "_embedding_min_cosine_comment": "의미 검색 결과로 인정할 최소 코사인 유사도 (노이즈 컷)",
-    "embedding_min_cosine": 0.25,
+    "_embedding_min_z_comment": [
+      "의미 검색(임베딩) 노이즈 컷 — **쿼리마다 다시 계산한 상대 위치**(z점수) 문턱.",
+      "z = (그 노트의 코사인 - 이번 쿼리 후보 전체의 평균) / 표준편차.",
+      "실측(scripts/measure_retrieval_floor.py · 실볼트 457노트 · text-embedding-3-small/256차원):",
+      "  z>=1.0 → 진짜 양성 유지 92.9% · 무관 노트 통과 상한 약 15.9%",
+      "  z>=1.5 → 진짜 양성 유지 78.6% · 무관 노트 통과 상한 약  6.7%  (기본값)",
+      "  z>=2.0 → 진짜 양성 유지 50.0% · 무관 노트 통과 상한 약  2.3%",
+      "0 이하로 두면 컷을 끈다(상위 N을 그대로 사용).",
+      "구 키 embedding_min_cosine(절대 코사인 0.25)은 폐기했다 — 같은 실측에서 그 값이",
+      "무작위 노트 쌍의 78.5%를 통과시켰고(필터가 아니었다), 더 올리는 것도 답이 아니었다:",
+      "가장 확실한 양성(같은 회의의 전사↔회의록) 평균 0.576이 무관 분포 p95(0.619)보다 낮아",
+      "노이즈를 걷는 절대 문턱은 양성도 같이 걷어냈다(cos>=0.619 → 양성 유지 42.9%)."
+    ],
+    "embedding_min_z": 1.5,
     "embedding_max_chars": 4000,
     "_graph_comment": "Wiki Knowledge Graph — registry/vault/세션 산출물을 노드·엣지로 파생 저장(data/wiki_graph.db). 읽기 전용 API + 백필 스크립트만 사용, Obsidian/registry 원본은 건드리지 않음. 실험 기능이 아니라 이미 있는 데이터의 파생 뷰이므로 기본값 true.",
     "graph_enabled": true,
@@ -430,6 +442,17 @@
       "memo"
     ],
     "default_type": "meeting",
+    "_minutes_vault_context_comment": [
+      "회의록 **본문 생성 프롬프트**에 이전 노트(볼트) 내용을 실을지. 기본 false.",
+      "false: 회의록 본문은 이번 녹음 전사만으로 쓴다. 이전 회의 노트/지난 결정/계획 노트 사전자료가",
+      "       회의록 문장에 섞이지 않는다. 관련 노트 회수 자체는 계속 돌아가므로 '🔗 관련 노트' 목록,",
+      "       frontmatter evidence, 사실 검증, wiki_context.json, prep-brief 는 모두 그대로 동작한다.",
+      "true : 이전 노트 내용을 배경으로 함께 주입한다. 용어·맥락이 풍부해지는 대신, 이번 회의에서",
+      "       다뤄지지 않은 배경·경과가 '배경 및 진행 경과'로 서술되거나 지난 결정이 이번 결정으로",
+      "       승격되는 사례가 있었다(그래서 기본을 false 로 두었다).",
+      "사용자 본인이 적은 메모(--memo / 웹 추가 메모)와 웹 리서치는 이 값과 무관하게 항상 쓰인다."
+    ],
+    "minutes_vault_context": false,
     "_custom_minutes_instructions_comment": "회의록 생성 AI에 추가로 전달할 사용자 맞춤 지시(형식/내용/강조점). 비우면 기본 형식 사용. 웹 [설정]→저장 위치에서 편집 가능. 메일 발송 회의록에도 동일 적용.",
     "custom_minutes_instructions": "",
     "_entity_aliases_comment": [

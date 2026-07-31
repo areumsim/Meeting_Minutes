@@ -265,17 +265,55 @@ EVIDENCE = [
 ]
 
 
+@pytest.fixture
+def vault_context_on(monkeypatch):
+    """analysis.minutes_vault_context=true — 이전 노트 내용을 회의록 본문에 주입."""
+    from meeting_minutes_app.meeting_pipeline import meeting_workflow as mw
+    monkeypatch.setattr(mw, "minutes_vault_context_enabled", lambda: True)
+
+
 class TestExtraContext:
-    def test_extra_titles_merged_and_memo_block(self, patched, tmp_path):
+    """실시간 검색 결과의 **회수**와 **본문 주입**은 별개 축이다.
+
+    기본(analysis.minutes_vault_context=false)에서는 회수만 하고 본문에는 넣지 않는다 —
+    회의록은 그 회의에서 나온 말의 기록이어야 하므로. 목록·근거 기록은 그대로 남는다.
+    """
+
+    def test_titles_merged_but_not_injected_by_default(self, patched, tmp_path):
         res, ev = run(patched, tmp_path,
                       extra_related_titles=["실시간노트1", "노트A"])
-        # 실시간 노트가 앞에, 중복(노트A) 제거
+        # 실시간 노트가 앞에, 중복(노트A) 제거 — 회수·목록은 종전대로
         assert res.related_note_titles == ["실시간노트1", "노트A"]
-        # build_generation_context_memo에 전달된 base_memo에 실시간 블록 포함
+        # 그러나 회의록 생성 memo 에는 실리지 않는다
+        _, ctx_kwargs = patched["context"][0]
+        assert "실시간 관련 노트" not in (ctx_kwargs.get("base_memo") or "")
+        # 볼트 주입 여부도 build_generation_context_memo 로 전달된다
+        assert ctx_kwargs.get("inject_vault") is False
+
+    def test_evidence_not_injected_by_default(self, patched, tmp_path):
+        run(patched, tmp_path, extra_related_evidence=EVIDENCE)
+        _, ctx_kwargs = patched["context"][0]
+        memo = ctx_kwargs.get("base_memo") or ""
+        assert "[[QAOA#요약]]" not in memo
+        assert "조합최적화" not in memo
+
+    def test_plan_body_excluded_by_default(self, patched, tmp_path):
+        """계획 노트 '사전 자료' 본문도 기본적으로 회의록 본문 컨텍스트에서 빠진다."""
+        run(patched, tmp_path)
+        _, plan_kwargs = patched["plan"][0]
+        assert plan_kwargs.get("include_plan_body") is False
+
+    def test_extra_titles_memo_block_when_enabled(self, patched, tmp_path,
+                                                  vault_context_on):
+        res, ev = run(patched, tmp_path,
+                      extra_related_titles=["실시간노트1", "노트A"])
+        assert res.related_note_titles == ["실시간노트1", "노트A"]
         _, ctx_kwargs = patched["context"][0]
         assert "실시간 관련 노트" in (ctx_kwargs.get("base_memo") or "")
+        assert ctx_kwargs.get("inject_vault") is True
 
-    def test_evidence_injected_into_memo(self, patched, tmp_path):
+    def test_evidence_injected_into_memo_when_enabled(self, patched, tmp_path,
+                                                     vault_context_on):
         """제목만이 아니라 근거(섹션·snippet·발화)까지 회의록 생성 memo에 들어간다."""
         run(patched, tmp_path, extra_related_evidence=EVIDENCE)
         _, ctx_kwargs = patched["context"][0]
@@ -283,6 +321,12 @@ class TestExtraContext:
         assert "[[QAOA#요약]]" in memo
         assert "조합최적화" in memo
         assert "발화: QAOA 적용 가능성 논의" in memo
+
+    def test_plan_body_included_when_enabled(self, patched, tmp_path,
+                                             vault_context_on):
+        run(patched, tmp_path)
+        _, plan_kwargs = patched["plan"][0]
+        assert plan_kwargs.get("include_plan_body") is True
 
 
 class TestRelatedNotesSection:

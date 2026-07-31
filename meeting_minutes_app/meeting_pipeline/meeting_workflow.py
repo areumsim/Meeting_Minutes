@@ -197,6 +197,23 @@ def graph_expand_titles(titles: List[str], hop: int = 1, max_extra: int = 5) -> 
         return []
 
 
+def minutes_vault_context_enabled() -> bool:
+    """회의록 **본문 생성 프롬프트**에 이전 노트 내용을 주입할지 (기본 False).
+
+    회수(관련 노트 목록·근거 기록·사실 검증·registry·prep-brief)는 이 값과 무관하게
+    계속 돌아간다. 이 값이 끄는 것은 "이전 회의 내용을 회의록 본문을 **쓰는 데**
+    참고하게 할지" 하나뿐이다.
+
+    기본을 False 로 둔 이유: 주입된 이전 노트는 회의록에 두 가지 방식으로 새어 들어왔다 —
+    (1) 이번 회의에서 다뤄지지 않은 배경·경과가 '배경 및 진행 경과'로 서술되고,
+    (2) 이전 회의의 결정·액션이 이번 회의 결정으로 승격됐다. 프롬프트에 "다뤄진 경우에만
+    반영" 지시가 있어도 근거 블록이 본문 컨텍스트에 들어와 있으면 모델은 그것을 쓴다.
+    회의록은 **그 회의에서 실제로 나온 말**의 기록이어야 하므로 기본은 주입하지 않는다.
+    (사용자 본인이 적은 메모(`base_memo`)와 웹 리서치는 '이전 회의 내용'이 아니라 그대로 쓴다.)
+    """
+    return bool(_c("analysis.minutes_vault_context", False))
+
+
 def build_generation_context_memo(
     *,
     llm=None,
@@ -208,18 +225,27 @@ def build_generation_context_memo(
     indexer=None,
     obs=None,
     include_web: bool = True,
+    inject_vault: Optional[bool] = None,
 ) -> Tuple[Optional[str], List[str], Dict[str, Any]]:
     """Build one shared generation memo for batch, realtime, and ingestion.
 
     Returns:
         (merged_memo, related_note_titles, flags)
 
-    flags["evidence"]: [{"note": title, "heading": Optional[str]}] — 실제 주입된 근거 목록.
+    flags["evidence"]: [{"note": title, "heading": Optional[str]}] — 회수된 근거 목록.
     Personal Wiki frontmatter의 `evidence` 필드, wiki_context.json의 근거 기록에 재사용된다.
+
+    inject_vault: 볼트에서 회수한 내용을 **회의록 생성 memo 에 실을지**. None 이면
+    `minutes_vault_context_enabled()`(config `analysis.minutes_vault_context`, 기본 False).
+    False 라도 회수·근거 기록·flags 는 그대로다 — 목록과 사실 검증은 계속 동작하고,
+    본문 생성 프롬프트에서만 빠진다. flags 는 "무엇이 회수됐나"를 뜻하며(주입 여부와
+    별개) 주입 여부는 flags["injected"] 로 따로 남긴다.
 
     This is the single place where local Obsidian Wiki context and optional
     online research are combined for LLM generation.
     """
+    if inject_vault is None:
+        inject_vault = minutes_vault_context_enabled()
     wiki_memo, related_titles, evidence = build_obsidian_context_memo(
         title=title,
         topic=topic,
@@ -241,57 +267,77 @@ def build_generation_context_memo(
             limit=limit,
         )
         if extra_titles:
-            extra_memo = build_related_notes_memo(
-                indexer, obs, extra_titles,
-                max_chars_per_note=int(_c("wiki.context_max_chars", 2000) or 2000),
-            )
+            # 본문 주입이 꺼져 있으면 텍스트를 만들지 않는다 — 노트 본문 읽기가
+            # 그만큼 줄고(노트당 최대 2000자 × 5건), 회수 결과는 그대로 남는다.
+            if inject_vault:
+                extra_memo = build_related_notes_memo(
+                    indexer, obs, extra_titles,
+                    max_chars_per_note=int(_c("wiki.context_max_chars", 2000) or 2000),
+                )
             related_titles = related_titles + extra_titles
             evidence = evidence + [{"note": t, "heading": None} for t in extra_titles]
+    #: 1·2차(볼트 검색)에서 노트를 하나라도 회수했나 — flags["wiki"] 판정용.
+    #: 그래프 확장분은 아래에서 related_titles 에 더해지므로 그 전에 확정한다.
+    vault_found = bool(related_titles)
 
     # 3차: 그래프 기반 확장 (옵트인, 기본 off) — 지금까지 모은 관련 노트를 그래프로
     # 1-hop 확장해 연결된 인물/조직/주제 노트를 추가로 끌어온다. 실패해도 위 결과에 영향 없음.
     graph_memo = ""
     graph_titles = graph_expand_titles(related_titles)
     if graph_titles:
-        graph_memo = build_related_notes_memo(
-            indexer, obs, graph_titles,
-            max_chars_per_note=int(_c("wiki.context_max_chars", 2000) or 2000),
-        )
+        if inject_vault:
+            graph_memo = build_related_notes_memo(
+                indexer, obs, graph_titles,
+                max_chars_per_note=int(_c("wiki.context_max_chars", 2000) or 2000),
+            )
         related_titles = related_titles + graph_titles
         evidence = evidence + [{"note": t, "heading": None} for t in graph_titles]
 
-    # Registry 컨텍스트: 이전 결정사항/미완료 액션을 생성 프롬프트에 주입
+    # Registry 컨텍스트: 이전 결정사항/미완료 액션.
+    # 이전 회의의 결정·액션이 이번 회의 것으로 승격되던 경로라, 본문 주입이 꺼져 있으면
+    # 조립하지 않는다(registry 자체의 적재·prep-brief 용도는 그대로 살아 있다).
     registry_memo = ""
-    try:
-        from meeting_minutes_app.wiki_core.wiki_knowledge import (
-            DATA_DIR as _wk_data_dir,
-            build_wiki_context_package,
-            format_wiki_context_for_prompt,
-        )
-        _search_text = segments_to_search_text(segments_or_text)
-        _pkg = build_wiki_context_package(
-            related_titles=[],  # 관련 노트는 wiki_memo가 담당 — 여기서는 registry만
-            data_dir=_wk_data_dir,
-            filter_query=" ".join([title or "", topic or "", (_search_text or "")[:1000]]).strip(),
-        )
-        registry_memo = format_wiki_context_for_prompt(
-            _pkg, max_chars=int(_c("wiki_knowledge.registry_context_max_chars", 2000) or 2000)
-        )
-    except Exception:
-        registry_memo = ""
+    registry_found = False
+    if inject_vault:
+        try:
+            from meeting_minutes_app.wiki_core.wiki_knowledge import (
+                DATA_DIR as _wk_data_dir,
+                build_wiki_context_package,
+                format_wiki_context_for_prompt,
+            )
+            _search_text = segments_to_search_text(segments_or_text)
+            _pkg = build_wiki_context_package(
+                related_titles=[],  # 관련 노트는 wiki_memo가 담당 — 여기서는 registry만
+                data_dir=_wk_data_dir,
+                filter_query=" ".join([title or "", topic or "", (_search_text or "")[:1000]]).strip(),
+            )
+            registry_memo = format_wiki_context_for_prompt(
+                _pkg, max_chars=int(_c("wiki_knowledge.registry_context_max_chars", 2000) or 2000)
+            )
+            registry_found = bool(registry_memo)
+        except Exception:
+            registry_memo = ""
 
     web_memo = build_online_research_memo(llm, title=title, topic=topic) if include_web else ""
-    merged = merge_memo_parts(base_memo, wiki_memo, extra_memo, graph_memo, registry_memo, web_memo)
+    if inject_vault:
+        merged = merge_memo_parts(base_memo, wiki_memo, extra_memo, graph_memo,
+                                  registry_memo, web_memo)
+    else:
+        # 사용자 본인 메모 + 웹 리서치만 — 볼트(이전 회의) 내용은 싣지 않는다.
+        merged = merge_memo_parts(base_memo, web_memo)
 
     _max_chars = int(_c("wiki_knowledge.max_context_chars", 12000) or 12000)
     if merged and len(merged) > _max_chars:
         merged = merged[:_max_chars].rstrip() + "\n\n...(Wiki 참고 자료 초과로 일부 생략)"
 
     return merged, related_titles, {
-        "wiki": bool(wiki_memo or extra_memo),
-        "graph": bool(graph_memo),
-        "registry": bool(registry_memo),
+        # flags 는 "회수됐나"를 뜻한다 — 주입 여부는 아래 injected 로 따로 본다.
+        # (memo 텍스트 유무로 판정하면 주입을 끈 순간 진단이 전부 X 로 보인다.)
+        "wiki": vault_found,
+        "graph": bool(graph_titles),
+        "registry": registry_found,
         "web": bool(web_memo),
+        "injected": bool(inject_vault),
         "evidence": evidence,
         # 주입된 관련 노트 수 — "wiki 근거 없이 생성됨" 감지용 (finalize에서 경고)
         "note_count": len(related_titles),
@@ -997,7 +1043,19 @@ def _format_verification_section(results: List[Dict]) -> str:
     if not results:
         return ""
 
-    lines: List[str] = ["## 사실 검증\n"]
+    # 머리말의 수위를 **실측에 맞춘다**. 판정은 "노트를 얼마나 잘 회수했나"에 종속되는데,
+    # scripts/measure_retrieval_floor.py 로 실볼트(457노트)를 재 보면 전사에 대해 그
+    # 전사 자신의 회의록조차 1위로 회수되는 비율이 0%(임베딩 중위 15위 · TF-IDF 중위
+    # 88위)다. 즉 "관련 노트를 못 찾아서 unknown"인 경우와 "정말 근거가 없어서 unknown"인
+    # 경우를 이 기능은 구분할 수 없다. 그래서 '검증'이 아니라 '대조'라고 쓰고, 확인됨도
+    # 단정하지 않는다 — 사람이 열어 보게 만드는 것이 이 섹션의 실제 효용이다.
+    # 제목은 publish 의 상수를 쓴다 — 제거 정규식과 갈라지면 재발행 때 중복된다.
+    from meeting_minutes_app.meeting_pipeline.publish import FACT_SECTION_HEADING
+    lines: List[str] = [
+        f"{FACT_SECTION_HEADING}\n",
+        "> 회의록의 주장을 기존 노트와 **자동으로 대조**한 결과입니다. 노트 검색이 "
+        "관련 자료를 놓칠 수 있어, 아래 판정은 참고용이며 확정된 사실 검증이 아닙니다.\n",
+    ]
 
     for r in results:
         verdict      = r.get("verdict", "unknown")
@@ -1026,7 +1084,10 @@ def _format_verification_section(results: List[Dict]) -> str:
             if src:
                 lines.append(f"  - 출처: {src}")
         elif verdict == "match":
-            lines.append(f"- ✅ **[확인됨]** {claim}")
+            # '확인됨'이라고 쓰지 않는다 — 검증한 것이 아니라 '어긋나는 기록을 못 봤다'가
+            # 사실이다(위 머리말의 실측 근거 참고). 표현이 판정보다 강하면 사용자가
+            # 확인을 건너뛴다.
+            lines.append(f"- ☑️ **[노트와 일치]** {claim}")
             if summary:
                 lines.append(f"  - 판정: {summary}")
             if confidence:

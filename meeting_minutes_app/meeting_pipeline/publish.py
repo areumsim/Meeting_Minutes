@@ -187,19 +187,26 @@ def _attendee_candidates(segments: List[Dict], planned_match: Optional[Dict[str,
     return names[:10]
 
 
-def _strip_fact_verification_sections(markdown: str) -> str:
-    """LLM이 생성한 중복 사실 검증 섹션을 제거한다.
+#: 노트 대조 섹션 제목 — **생성(meeting_workflow._format_verification_section)과
+#: 제거(아래)가 같은 값을 봐야 한다.** 제목만 바꾸고 아래 정규식을 안 고치면,
+#: 재발행(화자 수정 등)에서 이전 섹션이 지워지지 않아 같은 블록이 두 번 남는다.
+FACT_SECTION_HEADING = "## 노트 대조 (자동 · 사람 확인 필요)"
 
-    Vault 기반 검증은 후처리에서 별도로 붙이므로, 본문에 이미 같은 제목이 있으면
+#: 걷어낼 제목 후보. 현재 제목 + 예전 제목("사실 검증") + LLM 이 템플릿 지시를 보고
+#: 직접 써 버리는 변형까지 포함한다. 구 산출물을 재처리할 때도 중복이 생기지 않게.
+_FACT_SECTION_PATTERN = re.compile(
+    r"(?ms)^##\s*(?:노트\s*대조|사실\s*검증|사실검증)[^\n]*\n.*?(?=^##\s+|\Z)")
+
+
+def _strip_fact_verification_sections(markdown: str) -> str:
+    """이미 붙어 있는 노트 대조 섹션(및 LLM이 직접 만든 사실 검증 섹션)을 제거한다.
+
+    Vault 기반 대조는 후처리에서 별도로 붙이므로, 본문에 이미 같은 제목이 있으면
     다음 2레벨 섹션 전까지 삭제해 결과가 중복되지 않게 한다.
     """
     if not markdown:
         return ""
-    return re.sub(
-        r"(?ms)^##\s*사실\s*검증\b.*?(?=^##\s+|\Z)",
-        "",
-        markdown,
-    ).strip()
+    return _FACT_SECTION_PATTERN.sub("", markdown).strip()
 
 
 def _stt_quality_meta(
@@ -595,12 +602,19 @@ def _clean_attendee_names(attendees):
     return out
 
 
-def plan_context_memo(title, session_dt, base_memo=None, match=_PLAN_UNSET):
+def plan_context_memo(title, session_dt, base_memo=None, match=_PLAN_UNSET,
+                      include_plan_body: bool = True):
     """[모든 진입점 공용] 계획 매칭(+사전 자료)을 회의록 생성용 memo 에 주입.
-    match 를 넘기면 재탐색하지 않고 재사용한다. 반환: (match_or_None, memo_or_None)."""
+    match 를 넘기면 재탐색하지 않고 재사용한다. 반환: (match_or_None, memo_or_None).
+
+    include_plan_body=False 면 계획 노트 **본문**(사전 자료)은 싣지 않는다 — 회의에서
+    다뤄지지 않은 사전 자료 항목이 회의록 본문으로 새어 들던 경로다
+    (`meeting_workflow.minutes_vault_context_enabled()` 참고). 참석자 명단은 이 회의의
+    사실 메타데이터이고 화자 표기 정확도에 직접 쓰이므로 이 값과 무관하게 남긴다.
+    """
     if match is _PLAN_UNSET:
         match = _lookup_plan(title, session_dt)
-    ctx = _plan_context_text(match)
+    ctx = _plan_context_text(match) if include_plan_body else ""
     directives = []
     if match:
         names = _clean_attendee_names((match.get("meta") or {}).get("attendees"))

@@ -95,6 +95,7 @@ SCHEMA: List[Dict[str, Any]] = [
             {"section": "output_dir", "key": "", "label": "결과물 저장 폴더", "type": "text", "default": "./output", "scalar": True, "picker": True, "desc": "회의록·요약·전사(.md/.txt) 결과 파일이 저장되는 폴더입니다. 기본값 ./output 은 프로그램 옆 MeetingMinutesData\\output 폴더를 뜻합니다. 특정 위치에 모으려면 절대경로를 넣으세요(예: D:\\Minutes)."},
             {"section": "analysis", "key": "custom_minutes_instructions", "label": "회의록 맞춤 지시 (선택)", "type": "textarea", "default": "", "placeholder": "예: 회의록 맨 위에 '핵심 3줄 요약'을 넣어줘. 액션 아이템은 반드시 표로 정리하고, 각 결정에는 담당자를 표시해줘.", "desc": "원하는 회의록 형식·내용·강조점을 자유롭게 적으면 회의록 생성 AI가 이를 우선 반영합니다. 비우면 기본 형식을 사용합니다. (메일로 받는 회의록도 이 형식이 적용됩니다.)"},
             {"section": "analysis", "key": "default_type", "label": "기본 문서 유형", "type": "select", "default": "meeting", "options": ["meeting", "seminar", "lecture", "memo"], "desc": "유형을 따로 고르지 않았을 때 적용되는 기본값입니다(회의/세미나/강의/메모)."},
+            {"section": "analysis", "key": "minutes_vault_context", "label": "회의록 본문에 이전 노트 내용 참고", "type": "boolean", "default": False, "desc": "끄면(기본) 회의록 본문은 이번 녹음 내용만으로 씁니다 — 이전 회의 노트·지난 결정·사전 자료가 회의록 문장에 섞이지 않습니다. 관련 노트 목록('🔗 관련 노트')과 사실 검증은 켜져 있든 꺼져 있든 그대로 동작합니다. 켜면 이전 노트 내용을 배경으로 함께 넣어 용어·맥락이 풍부해지지만, 이번 회의에서 다뤄지지 않은 내용이 회의록에 들어갈 수 있습니다."},
             {"section": "analysis", "key": "templates_dir", "label": "AI 프롬프트 폴더 (고급)", "type": "text", "default": "prompts", "desc": "회의록을 만들 때 쓰는 AI 지시문(.md) 폴더입니다. 문구를 직접 바꾸고 싶은 게 아니면 기본값(prompts) 그대로 두세요."},
         ],
     },

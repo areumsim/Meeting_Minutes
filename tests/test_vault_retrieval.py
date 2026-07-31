@@ -14,8 +14,8 @@ class TestDomainRelevanceMarkers:
     def test_default_markers_used_when_not_configured(self, monkeypatch):
         monkeypatch.setattr(vr, "_c", lambda key, default=None: default)
         markers = vr._domain_relevance_markers()
-        assert "한빛" in markers
         assert "볼츠만" in markers
+        assert "nisq" in markers
 
     def test_config_override_replaces_defaults(self, monkeypatch):
         custom = ["physicalai", "로보틱스"]
@@ -42,7 +42,7 @@ class TestDomainRelevanceMarkers:
             lambda key, default=None: [] if key == "wiki.domain_relevance_keywords" else default,
         )
         markers = vr._domain_relevance_markers()
-        assert "한빛" in markers  # 빈 리스트는 무시하고 기본값 유지
+        assert "볼츠만" in markers  # 빈 리스트는 무시하고 기본값 유지
 
 
 PROJECT_DOMAINS = {

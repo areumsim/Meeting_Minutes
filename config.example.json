@@ -496,7 +496,7 @@
     },
     "_entity_alias_patterns_comment": "정규식 별칭 — 좌: 정규식(이스케이프 주의), 우: 치환할 정식 명칭. 매칭 시 전체를 치환.",
     "entity_alias_patterns": {
-      "코[오롱론]+\\s*커스텀\\s*문제": "한빛 커스텀 트랙"
+      "한[빛빗빚빝]+\\s*커스텀\\s*문제": "한빛 커스텀 트랙"
     },
     "_entity_query_hints_comment": "특정 엔티티를 웹 검색으로 보완할 때 쓸 맞춤 지시문 (동음이의어 혼동 방지 등).",
     "entity_query_hints": {},

@@ -94,8 +94,12 @@ def normalize_domain_text(text: str) -> str:
 # (하위호환). 여러 도메인(예: 양자 + PhysicalAI)을 동시에 다루려면 config에
 # 두 도메인 마커를 모두 합쳐 넣으면 된다 — 이 목록은 "관련도 가산점" 용도라
 # 도메인 구분 없이 매칭되는 마커가 많을수록 검색 품질이 오른다.
+#
+# 회사·고객사·사람 이름은 여기 두지 않는다 — 리포가 공개돼 있어 조직 정보가 그대로
+# 드러난다. 조직 고유 마커는 `wiki.domain_relevance_keywords`(config.json, gitignore)
+# 에 넣으면 이 기본값을 대체한다.
 _DEFAULT_DOMAIN_RELEVANCE_MARKERS = (
-    "해커톤", "기념품", "후원", "한빛", "양자어닐", "볼츠만", "qml", "nisq", "qnn", "ionq", "q-day",
+    "해커톤", "기념품", "후원", "양자어닐", "볼츠만", "qml", "nisq", "qnn", "ionq", "q-day",
 )
 
 

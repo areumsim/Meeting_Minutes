@@ -617,7 +617,7 @@ def sync_session_graph(
 _PLACEHOLDER_PERSON_KEYS = frozenset(
     resolve_canonical_key("person", n) for n in (
         "A", "B", "C", "발언자A", "발언자B", "발언자C", "발언자 A", "발언자 B",
-        "화자1", "화자2", "미정", "CFO", "코롱측", "내부 수행사", "외부 업체",
+        "화자1", "화자2", "미정", "CFO", "한빗측", "내부 수행사", "외부 업체",
     )
 )
 

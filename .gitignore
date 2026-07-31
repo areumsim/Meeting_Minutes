@@ -1,7 +1,21 @@
 # ── 비밀 설정 (절대 git에 올리지 말 것) ─────────
 config.json
+config.local.json
 .env
+.env.*
 .mcp.json
+# 자격증명 파일 일반형 — 위 목록은 "우리가 쓰는 파일명"만 막는다. 사내 CA 등록(ssl.ca_bundle)
+# 이나 디버깅 중에 키·인증서를 리포에 두는 일이 실제로 생기므로 확장자로도 막는다.
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+id_rsa*
+id_ed25519*
+secrets.*
+credentials.*
+*_credentials.json
 
 # ── 출력 파일 ─────────────────────────────────────
 output/
@@ -19,9 +33,22 @@ dist/
 # (vendor/ffmpeg/*.exe 는 위 *.exe 규칙으로 이미 제외됨)
 vendor/python-embed/
 
+# ── 사용자 데이터 (개인정보 — 회의 내용·실제 파일 경로·노트 본문이 들어간다) ─────
+# 포터블 배포본의 데이터 폴더. 리포 안에서 배포본을 테스트하면 여기 생긴다.
+# processed_audio.json(감시한 실제 녹음 경로), vault_index.json(노트 본문 인덱스),
+# prompts/ 는 어떤 확장자 규칙에도 걸리지 않아 그대로 커밋될 수 있었다.
+MeetingMinutesData/
+# 처리 대기 오디오와 그 산출물. 오디오 확장자는 아래에서 막지만 폴더 안의 전사·메모
+# (.txt/.md/.json)는 안 막혀 회의 내용이 그대로 올라갈 수 있었다.
+input/
+
 # ── 작업 중 만든 백업 잔재 ────────────────────────
-.recording-fix-backup/
-.recording-fix-backup-final/
+# 이름을 하나씩 적으면 다음 백업(-2, -old …)이 새 나간다. 이 폴더들에는 실제 API 키가
+# 든 config.json 사본이 있다(2026-07-31 확인).
+.recording-fix-backup*/
+*-backup/
+*-backup-*/
+*.backup/
 
 # ── Node ─────────────────────────────────────────
 node_modules/

@@ -1,7 +1,11 @@
 # Meeting Minutes System — Architecture
 
-> 코드 기반 정확한 참조 문서 · 2026-07-08  
+> 코드 기반 정확한 참조 문서 · 최초 2026-07-08 · **갱신 2026-07-31 (기준 커밋 `8917d11`)**
 > `meeting_minutes_app/` · `web/backend/api/realtime.py` 분석
+>
+> 기준 커밋을 적어 두는 이유: 날짜만으로는 이 문서가 낡았는지 알 수 없다. 해시가 있으면
+> `git log 8917d11..HEAD -- meeting_minutes_app web/backend` 로 그 뒤 무엇이 바뀌었는지
+> 기계적으로 확인할 수 있다. 문서를 고칠 때 이 해시도 함께 올린다.
 
 ---
 

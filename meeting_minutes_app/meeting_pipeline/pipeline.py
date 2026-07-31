@@ -43,6 +43,7 @@ def process_single(
     memo: Optional[str] = None,
     debug_dir: Optional[str] = None,
     progress_cb=None,
+    stt_meta_out: Optional[dict] = None,
 ) -> Tuple[str, Optional[str]]:
     """
     단일 파일 처리 파이프라인.
@@ -50,6 +51,13 @@ def process_single(
 
     progress_cb: 선택. progress_cb(percent:int, stage:str) 형태로 단계 진행을 보고.
                  지정하지 않으면(CLI 등) 아무 동작도 하지 않는다.
+
+    stt_meta_out: 선택. dict 를 주면 **실제로 전사를 만든** 제공자·모델을 채워 준다
+                 (`stt_models`, `stt_providers`, `stt_fallback_used`). 반환 시그니처를
+                 바꾸면 CLI 호출부가 깨지므로 `run_stt(meta_out=...)` 과 같은 out-param
+                 방식을 쓴다. 웹은 이 값을 세션에 기록해 벤더 전환을 화면에 표시한다 —
+                 과거에는 폴백 사실이 노트 frontmatter 에만 남아 배치·업로드 사용자는
+                 자기 회의가 다른 벤더로 갔는지 알 수 없었다.
     """
     def _p(pct: int, stage: str):
         if progress_cb:
@@ -267,6 +275,15 @@ def process_single(
         stt_providers=stt_used.get("stt_providers", []),
         stt_fallback_used=bool(stt_used.get("stt_fallback_used")),
     )
+
+    # 실측 제공자를 호출부(웹 세션 기록)로 넘긴다. 노트 frontmatter 에만 남기면
+    # 배치·업로드 사용자는 벤더 전환을 알 수 없다.
+    if stt_meta_out is not None:
+        stt_meta_out.update({
+            "stt_models": list(stt_used.get("stt_models", [])),
+            "stt_providers": list(stt_used.get("stt_providers", [])),
+            "stt_fallback_used": bool(stt_used.get("stt_fallback_used")),
+        })
 
     def header() -> str:
         """로컬 산출물 맨 위 주석 — 볼트 노트 frontmatter 와 **같은 dict** 에서 렌더한다.

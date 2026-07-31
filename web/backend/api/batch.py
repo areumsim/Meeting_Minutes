@@ -126,6 +126,7 @@ def _run_batch_processing(session_id: str, file_path: str, args: argparse.Namesp
             prev = _PROGRESS.get(session_id, {})
             _PROGRESS[session_id] = {**prev, "percent": pct, "stage": stage}
 
+        stt_meta: dict = {}
         with tempfile.TemporaryDirectory() as work_dir:
             pipeline.process_single(
                 input_path=file_path,
@@ -135,11 +136,18 @@ def _run_batch_processing(session_id: str, file_path: str, args: argparse.Namesp
                 title=title or "Upload",
                 work_dir=work_dir,
                 progress_cb=_progress,
+                stt_meta_out=stt_meta,
             )
 
         _progress(95, "결과 저장 중")
         db.import_output_files(session_id, output_dir)
-        db.update_session_status(session_id, "completed")
+        # 실제로 전사를 만든 제공자를 남긴다 — 폴백이 일어났으면 상세 화면이
+        # '대체 경로' 배지를 띄운다(과거엔 노트 frontmatter 에만 있었다).
+        db.update_session_status(
+            session_id, "completed",
+            stt_provider=", ".join(stt_meta.get("stt_providers") or []),
+            stt_fallback_used=1 if stt_meta.get("stt_fallback_used") else 0,
+        )
         _progress(100, "완료")
 
         # Wiki Knowledge Graph 동기화 (best-effort — 실패해도 배치 처리 결과에 영향 없음)

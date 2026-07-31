@@ -68,6 +68,15 @@ def _build_clients():
     return llm, obs
 
 
+def _automation_paused() -> bool:
+    """전역 일시정지(automation.paused). 웹 자동화와 CLI 워처가 같이 멈춰야 한다."""
+    try:
+        from meeting_minutes_app.common import spend_guard
+        return spend_guard.automation_paused()
+    except Exception:
+        return False
+
+
 def _budget_blocked(est_cost: float = 0.0) -> str:
     """지출 한도를 넘었으면 사유. 웹 자동화와 CLI 워처가 같은 판정을 쓰게 여기 둔다.
 
@@ -93,6 +102,8 @@ def _process_file(path: Path, llm, obs) -> bool:
     except Exception:
         return False
     if "status: planned" not in content and "status: \"planned\"" not in content:
+        return False
+    if _automation_paused():
         return False
     blocked = _budget_blocked()
     if blocked:
@@ -138,6 +149,9 @@ def _audio_pass(vault, notes_subdir, min_age=6.0):
             continue
         key = (ap_, mt)
         if _audio_seen.get(key):
+            continue
+        if _automation_paused():
+            # _audio_seen 에 넣지 않는다 — 스위치를 되돌리면 그대로 다시 후보가 된다.
             continue
         # 오디오는 길이로 비용을 추정할 수 있으므로 리서치와 달리 사전 판정이 가능하다.
         est = 0.0

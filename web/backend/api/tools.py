@@ -90,6 +90,21 @@ def process_text(payload: dict, background_tasks: BackgroundTasks):
 
 
 # ── 2) 회의록 재생성(노트 반영) ───────────────────
+def _regenerate_cost_usd() -> float:
+    """재생성 1회의 예상 비용(USD) = 회의록 생성 LLM 비용.
+
+    전사는 `args.resume` 으로 재사용하므로 STT 과금이 없다. 세션의 최초
+    `cost_estimate` 도 같은 `minutes_cost()` 를 쓰므로 성질이 같은 추정치다.
+    """
+    try:
+        from meeting_minutes_app.common import pricing
+        from meeting_minutes_app.common import config_loader as cfg
+        m = pricing.current_models(cfg)
+        return float(pricing.minutes_cost(m["llm"], m["minutes_model"]))
+    except Exception:
+        return 0.0
+
+
 def _run_regenerate(session_id: str, notes: str):
     try:
         from meeting_minutes_app.meeting_pipeline import meeting_minutes as mm, pipeline
@@ -119,6 +134,11 @@ def _run_regenerate(session_id: str, notes: str):
             )
         db.import_output_files(session_id, out)
         db.update_session_status(session_id, "completed")
+        # 재생성 과금을 세션 비용에 누적한다. 이게 없어서 재생성 LLM 비용이
+        # 어디에도 기록되지 않았고(월 합계에서 빠짐), 몇 번을 재생성해도 지출이
+        # 0으로 보였다. STT 는 args.resume 으로 재사용하므로 과금이 없다 —
+        # 회의록 생성 LLM 비용만 더한다.
+        db.add_session_cost(session_id, _regenerate_cost_usd())
     except Exception as e:
         traceback.print_exc()
         db.update_session_status(session_id, "error",
@@ -134,8 +154,21 @@ def regenerate(session_id: str, payload: dict, background_tasks: BackgroundTasks
         raise HTTPException(status_code=404, detail="세션을 찾을 수 없습니다.")
     if not sess.get("output_dir"):
         raise HTTPException(status_code=400, detail="재생성할 전사 데이터가 없습니다.")
+    # 재생성도 지출 한도를 지난다. 지금까지 이 경로는 검사를 받지 않아 한도를 넘긴
+    # 뒤에도 무제한으로 LLM 을 부를 수 있었다(업로드만 막혀 있었다).
+    # 1건당 한도는 적용하지 않는다 — 그 한도는 '오디오 파일 한 건'의 길이를 뜻한다.
+    est = _regenerate_cost_usd()
+    from meeting_minutes_app.common import spend_guard
+    reason = spend_guard.blocked(est, check_per_item=False)
+    if reason:
+        raise HTTPException(
+            status_code=400,
+            detail=(f"{reason}. 회의록 재생성을 시작하지 않았습니다. "
+                    f"[설정] → 지출 한도에서 한도를 조정하세요."),
+        )
     background_tasks.add_task(_run_regenerate, session_id, payload.get("notes", ""))
-    return {"sessionId": session_id, "status": "processing"}
+    return {"sessionId": session_id, "status": "processing",
+            "estimatedUsd": round(est, 4)}
 
 
 # ── 3) 볼트 인덱스 + 지식 그래프 재빌드 ───────────

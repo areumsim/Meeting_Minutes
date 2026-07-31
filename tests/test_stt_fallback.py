@@ -42,6 +42,10 @@ def keys(monkeypatch):
     monkeypatch.setattr(stt, "DEFAULT_STT_MODEL", "gpt-4o-mini-transcribe")
     monkeypatch.setattr(stt, "FALLBACK_STT_MODEL", "gpt-4o-transcribe")
     monkeypatch.setattr(stt, "GROQ_STT_MODEL", "whisper-large-v3-turbo")
+    # Groq 단계는 이제 명시 토글(stt.groq_fallback, 기본 꺼짐)이 있어야 체인에 든다 —
+    # 다른 벤더로 회의 음성이 나가기 때문이다. 이 파일의 관심사는 체인 **순서**이므로
+    # 여기서는 켜 둔다. 꺼짐이 기본이라는 계약은 TestGroqFallbackToggle 이 검증한다.
+    monkeypatch.setattr(stt, "GROQ_FALLBACK_ENABLED", True)
     monkeypatch.setattr(stt, "LOCAL_STT_ENABLED", False)
     monkeypatch.setattr(stt, "LOCAL_STT_MODEL", "base")
     # 로컬 단계는 "라이브러리 + 가중치 준비됨"을 기본 전제로 둔다(개발 환경엔 둘 다 없다).
@@ -420,6 +424,93 @@ class TestGroqClient:
         keys["GROQ_API_KEY"] = "gsk-test"
         client, model = stt.groq_fallback()
         assert client is not None and model == "whisper-large-v3-turbo"
+
+
+class TestGroqFallbackToggle:
+    """Groq 는 다른 벤더다 — 키만 있으면 자동 편입되던 것을 명시 토글로 바꿨다.
+
+    과거에는 `groq_fallback()` 이 키 존재만으로 클라이언트를 돌려줬다. 즉 사용자가
+    "선택 사항"으로 Groq 키를 넣어 두면 그 뒤 벤더 전환은 무동의·자동이었고, 회의
+    음성이 승인 여부가 불분명한 제3 벤더로 나갔다. 로컬 단계에는 토글
+    (`stt.local_fallback`, 기본 꺼짐)이 있었으므로 Groq 만 예외였다.
+    """
+
+    def test_off_by_default_even_with_key(self, keys, monkeypatch):
+        keys["GROQ_API_KEY"] = "gsk-test"
+        monkeypatch.setattr(stt, "GROQ_FALLBACK_ENABLED", False)
+        assert stt.groq_fallback() == (None, "")
+
+    def test_off_warns_so_difference_is_not_silent(self, keys, monkeypatch, capsys):
+        """키를 넣어 두고 토글을 모르는 사용자에게는 안내가 필요하다."""
+        keys["GROQ_API_KEY"] = "gsk-test"
+        monkeypatch.setattr(stt, "GROQ_FALLBACK_ENABLED", False)
+        stt.groq_fallback()
+        out = capsys.readouterr().out
+        assert "Groq" in out and "꺼져" in out
+
+    def test_off_without_key_is_quiet(self, keys, monkeypatch, capsys):
+        """키도 없으면 안내할 것이 없다 — 매 호출 경고로 로그를 채우지 않는다."""
+        monkeypatch.setattr(stt, "GROQ_FALLBACK_ENABLED", False)
+        stt.groq_fallback()
+        assert "Groq" not in capsys.readouterr().out
+
+    def test_chain_omits_groq_when_off(self, keys, monkeypatch):
+        keys["OPENAI_API_KEY"] = "sk-test"
+        keys["GROQ_API_KEY"] = "gsk-test"
+        monkeypatch.setattr(stt, "GROQ_FALLBACK_ENABLED", False)
+        chain = stt._build_stt_provider_chain("gpt-4o-mini-transcribe")
+        assert _shape(chain) == [
+            ("OpenAI", "gpt-4o-mini-transcribe"),
+            ("OpenAI", "gpt-4o-transcribe"),
+        ]
+
+
+class TestVendorSwitchIsVisibleInSession:
+    """폴백이 일어났음을 세션에 남겨 화면에 표시할 수 있는가.
+
+    과거에는 실제 사용 제공자가 **노트 frontmatter 에만** 기록됐다(`finalize.py`).
+    실시간 HTTP 경로만 `fallback_provider` 이벤트를 보냈고, 배치·업로드 사용자는
+    자기 회의 음성이 다른 벤더로 갔는지 화면에서 알 수 없었다.
+    """
+
+    @pytest.fixture
+    def fresh_db(self, tmp_path, monkeypatch):
+        from web.backend import database as db
+        monkeypatch.setattr(db, "DB_PATH", tmp_path / "a.db")
+        db.init_db()
+        return db
+
+    def test_columns_exist_and_round_trip(self, fresh_db):
+        db = fresh_db
+        sid = db.create_session(title="t", source="web", mode="1")
+        db.update_session_status(sid, "completed",
+                                stt_provider="OpenAI, Groq", stt_fallback_used=1)
+        s = db.get_session(sid)
+        assert s["stt_provider"] == "OpenAI, Groq"
+        assert s["stt_fallback_used"] == 1
+
+    def test_default_is_no_fallback(self, fresh_db):
+        """폴백이 없었으면 배지가 뜨지 않아야 한다(0/빈 값)."""
+        db = fresh_db
+        sid = db.create_session(title="t", source="web", mode="1")
+        db.update_session_status(sid, "completed",
+                                stt_provider="OpenAI", stt_fallback_used=0)
+        s = db.get_session(sid)
+        assert not s["stt_fallback_used"]
+
+    def test_pipeline_fills_meta_out(self, monkeypatch):
+        """process_single 이 out-param 으로 실측 제공자를 넘기는가.
+
+        반환 시그니처를 바꾸면 CLI 호출부가 깨지므로 run_stt(meta_out=) 과 같은
+        out-param 방식이어야 한다 — 그 계약을 고정한다.
+        """
+        import inspect
+        from meeting_minutes_app.meeting_pipeline import pipeline
+        sig = inspect.signature(pipeline.process_single)
+        assert "stt_meta_out" in sig.parameters
+        assert sig.parameters["stt_meta_out"].default is None
+        # 반환 시그니처는 그대로 (summary, obs_path) 2-튜플이다.
+        assert sig.return_annotation is not inspect.Signature.empty
 
 
 # ━━━━━━━━ 4) 로컬 백업 — 전사 중 다운로드 금지 ━━━━━━━━

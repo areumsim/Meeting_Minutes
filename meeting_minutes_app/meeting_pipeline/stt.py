@@ -33,7 +33,7 @@ from meeting_minutes_app.common.text_filters import (
 )
 from meeting_minutes_app.meeting_pipeline import meeting_minutes as _mm
 from meeting_minutes_app.meeting_pipeline.meeting_minutes import (
-    DEFAULT_STT_MODEL, FALLBACK_STT_MODEL, GROQ_STT_MODEL,
+    DEFAULT_STT_MODEL, FALLBACK_STT_MODEL, GROQ_STT_MODEL, GROQ_FALLBACK_ENABLED,
     LOCAL_STT_ENABLED, LOCAL_STT_MODEL,
     MAX_FILE_SIZE_MB, MAX_CHUNK_DURATION_SEC,
     MIN_STT_CHARS_PER_SEC, MAX_STT_RETRY_SPLIT_DEPTH, UPLOAD_FORMATS,
@@ -46,13 +46,14 @@ def _refresh_config_globals() -> None:
     """config_loader.reload() 훅 — 위 from-import 로 복사된 키/모델 전역을
     웹 UI 설정 저장 시 재시작 없이 갱신한다(원본 모듈 훅이 먼저 실행됨)."""
     global OPENAI_API_KEY, GROQ_API_KEY, DEFAULT_STT_MODEL, FALLBACK_STT_MODEL
-    global GROQ_STT_MODEL, LOCAL_STT_ENABLED, LOCAL_STT_MODEL
+    global GROQ_STT_MODEL, GROQ_FALLBACK_ENABLED, LOCAL_STT_ENABLED, LOCAL_STT_MODEL
     from meeting_minutes_app.common import llm_client as _llm
     OPENAI_API_KEY = _llm.OPENAI_API_KEY
     GROQ_API_KEY = _llm.GROQ_API_KEY
     DEFAULT_STT_MODEL = _mm.DEFAULT_STT_MODEL
     FALLBACK_STT_MODEL = _mm.FALLBACK_STT_MODEL
     GROQ_STT_MODEL = _mm.GROQ_STT_MODEL
+    GROQ_FALLBACK_ENABLED = _mm.GROQ_FALLBACK_ENABLED
     LOCAL_STT_ENABLED = _mm.LOCAL_STT_ENABLED
     LOCAL_STT_MODEL = _mm.LOCAL_STT_MODEL
 
@@ -609,11 +610,23 @@ STT_MAX_RETRIES = 1
 
 
 def groq_fallback() -> Tuple[Any, str]:
-    """Groq STT 폴백 (클라이언트, 모델). 키가 없거나 생성 실패면 (None, "").
+    """Groq STT 폴백 (클라이언트, 모델). 꺼져 있거나 키가 없으면 (None, "").
 
     배치 체인과 실시간(http 청크) 경로가 같은 규칙을 쓰도록 여기 한 곳에 둔다.
-    호출부는 client 가 None 이면 Groq 단계를 건너뛴다."""
+    호출부는 client 가 None 이면 Groq 단계를 건너뛴다.
+
+    Groq 는 **다른 벤더**다. 과거에는 토글이 없어 키가 있으면 그것만으로 체인에
+    편입됐다 — 사용자가 "선택 사항"으로 키를 넣어 두면 회의 음성이 무동의로
+    OpenAI 밖으로 나갔다. 이제 `stt.groq_fallback`(기본 꺼짐)을 명시로 켜야 한다.
+    """
     gkey = get_api_key("GROQ_API_KEY", GROQ_API_KEY)
+    if not GROQ_FALLBACK_ENABLED:
+        # 키만 넣어 두고 토글을 모르는 사용자에게는 조용한 차이가 아니라 안내가 필요하다.
+        if gkey:
+            warn("Groq STT 폴백 키가 있으나 꺼져 있어 체인에서 제외합니다 "
+                 "(회의 음성이 다른 벤더로 나가므로 기본 꺼짐입니다). "
+                 "쓰려면 [설정] > 모델 > 'Groq 대체 전사 사용'을 켜세요.")
+        return None, ""
     if not gkey:
         return None, ""
     try:

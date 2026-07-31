@@ -127,3 +127,15 @@ def estimate_audio_cost(path: str, *, translate: bool = False,
         return (duration, float(est["total"]))
     except Exception:
         return (duration, 0.0)
+
+
+def automation_paused() -> bool:
+    """모든 자동 실행을 한 번에 멈추는 전역 스위치(FR-011 '일시 정지').
+
+    개별 중지(`watcher/stop`, `watcher/plan/stop`)는 있었지만 "지금 앱이 스스로 하는
+    일을 다 멈춰라"를 한 번에 하는 수단이 없었다. 개별 중지는 켜진 것을 하나씩 찾아
+    꺼야 하고, 앱을 재시작하면 `autostart_from_config()` 가 다시 켠다.
+
+    이 스위치는 설정값이므로 재시작에도 유지된다 — 그 점이 '중지'와 다르다.
+    """
+    return bool(_c("automation.paused", False))

@@ -14,7 +14,7 @@ autostart_from_config()가 자동으로 재개한다.
 import threading
 from pathlib import Path
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Body
 
 router = APIRouter(prefix="/watcher", tags=["watcher"])
 
@@ -37,6 +37,11 @@ class _WatcherManager:
             if self.is_running():
                 return {"ok": True, "running": True, "message": "이미 감시 중입니다.",
                         "folders": self._folders}
+            from meeting_minutes_app.common import spend_guard
+            if spend_guard.automation_paused():
+                return {"ok": False, "running": False, "folders": [],
+                        "message": ("모든 자동 실행이 일시 정지 상태입니다. "
+                                    "[설정] → 자동 실행에서 해제한 뒤 시작하세요.")}
             try:
                 from meeting_minutes_app.common import config_loader as cfg
                 from meeting_minutes_app.meeting_pipeline.audio_watcher import (
@@ -95,22 +100,75 @@ class _WatcherManager:
                     "message": "감시를 중지했습니다." if not still
                     else "중지 요청됨 — 처리 중인 파일이 끝나면 종료됩니다."}
 
+    @staticmethod
+    def _state_path() -> Path:
+        """워처 상태 파일 경로. 대기열 조회·승인도 같은 파일을 봐야 하므로
+        경로 해석을 한 곳에 둔다(복사하면 웹이 보는 대기열과 워처가 쓰는 것이 갈린다)."""
+        from meeting_minutes_app.common import config_loader as cfg
+        state_path = cfg.get("vault_watcher.processed_state_path", "data/processed_audio.json")
+        p = Path(state_path)
+        if not p.is_absolute():
+            from meeting_minutes_app.common import app_paths
+            p = app_paths.get_base_dir() / state_path
+        return p
+
+    def _load_watcher_for_queue(self):
+        """대기열 조회·승인용 AudioWatcher. 감시가 꺼져 있어도 동작해야 한다 —
+        한도를 넘겨 대기열이 생긴 뒤 사용자가 감시를 끄고 검토할 수 있다."""
+        if self._watcher is not None:
+            return self._watcher
+        from meeting_minutes_app.meeting_pipeline.audio_watcher import (
+            AudioWatcher, _default_callback,
+        )
+        w = AudioWatcher.from_config(_default_callback)
+        w.state_path = str(self._state_path())
+        return w
+
+    def pending(self) -> dict:
+        """확인 대기열 — 자동 처리하지 않은 파일과 그 사유·예상 비용."""
+        try:
+            items = self._load_watcher_for_queue().pending()
+        except Exception as e:
+            return {"ok": False, "items": [], "totalUsd": 0.0, "message": f"대기열 조회 실패: {e}"}
+        return {
+            "ok": True,
+            "items": items,
+            "totalUsd": round(sum(float(i.get("est_cost_usd") or 0) for i in items), 4),
+        }
+
+    def approve(self, paths: list) -> dict:
+        """대기열의 파일을 승인해 처리 후보로 되돌린다.
+
+        여기서 바로 처리하지 않는다 — 승인된 파일은 다음 스캔(또는 감시 재시작)에서
+        평소 경로를 그대로 지난다. 즉 지출 한도 검사를 다시 통과해야 한다.
+        승인이 한도를 우회하는 뒷문이 되면 안 된다.
+        """
+        try:
+            w = self._load_watcher_for_queue()
+            queued = {i["path"] for i in w.pending()}
+            targets = [p for p in (paths or []) if p in queued] if paths else list(queued)
+            for p in targets:
+                w.reprocess(p)
+            if not self.is_running():
+                msg = (f"{len(targets)}건을 승인했습니다. 감시를 시작하면 처리합니다.")
+            else:
+                msg = (f"{len(targets)}건을 승인했습니다. 다음 스캔에서 처리합니다.")
+            return {"ok": True, "approved": len(targets), "message": msg}
+        except Exception as e:
+            return {"ok": False, "approved": 0, "message": f"승인 실패: {e}"}
+
     def status(self) -> dict:
         from meeting_minutes_app.common import config_loader as cfg
         enabled = bool(cfg.get("vault_watcher.enabled", False))
         folders = [str(f) for f in (cfg.get("vault_watcher.watch_folders", []) or []) if f]
-        # queued = 지출 한도를 넘어 자동 처리하지 않고 확인 대기열에 넣은 파일.
-        # 이 키가 없으면 status() 가 대기열을 조용히 세지 않아 사용자는 파일이
-        # 사라진 것처럼 본다.
+        # queued = 자동 처리하지 않고 확인 대기열에 넣은 파일(지출 한도 초과 또는
+        # 감시를 켜기 전부터 있던 파일). 이 키가 없으면 status() 가 대기열을 조용히
+        # 세지 않아 사용자는 파일이 사라진 것처럼 본다.
         counts = {"done": 0, "failed": 0, "processing": 0, "skipped": 0,
                   "queued": 0, "total": 0}
         recent = []
         try:
-            state_path = cfg.get("vault_watcher.processed_state_path", "data/processed_audio.json")
-            p = Path(state_path)
-            if not p.is_absolute():
-                from meeting_minutes_app.common import app_paths
-                p = app_paths.get_base_dir() / state_path
+            p = self._state_path()
             if p.exists():
                 import json
                 with open(p, "r", encoding="utf-8") as f:
@@ -132,6 +190,7 @@ class _WatcherManager:
                 recent = items[:10]
         except Exception:
             pass
+        from meeting_minutes_app.common import spend_guard
         return {
             "running": self.is_running(),
             "config_enabled": enabled,
@@ -139,6 +198,8 @@ class _WatcherManager:
             "counts": counts,
             "recent": recent,
             "error": self._error,
+            # 켜져 있는데 아무것도 처리되지 않을 때 사용자가 이유를 알 수 있어야 한다.
+            "automation_paused": spend_guard.automation_paused(),
         }
 
 
@@ -158,6 +219,19 @@ def watcher_start():
 @router.post("/stop")
 def watcher_stop():
     return _manager.stop()
+
+
+@router.get("/pending")
+def watcher_pending():
+    """확인 대기열 — 자동 처리하지 않은 파일 목록과 예상 비용 합계."""
+    return _manager.pending()
+
+
+@router.post("/approve")
+def watcher_approve(body: dict = Body(default={})):
+    """대기열 승인. `paths` 를 주면 그 항목만, 없으면 전체."""
+    paths = body.get("paths") if isinstance(body, dict) else None
+    return _manager.approve(paths if isinstance(paths, list) else None)
 
 
 # ── 계획 자동화 (plan-watcher/auto-process 통합) ──────────────────
@@ -180,6 +254,11 @@ class _PlanAutomationManager:
         with self._lock:
             if self.is_running():
                 return {"ok": True, "running": True, "message": "이미 실행 중입니다."}
+            from meeting_minutes_app.common import spend_guard
+            if spend_guard.automation_paused():
+                return {"ok": False, "running": False,
+                        "message": ("모든 자동 실행이 일시 정지 상태입니다. "
+                                    "[설정] → 자동 실행에서 해제한 뒤 시작하세요.")}
             from meeting_minutes_app.common import config_loader as cfg
             vault = (cfg.get("obsidian.vault_path", "") or cfg.get("indexing.vault_path", "") or "").strip()
             if not vault or not Path(vault).is_dir():
@@ -289,6 +368,13 @@ def autostart_from_config() -> None:
     시작 시 자동으로 다시 켠다(실패해도 부팅은 계속).
     """
     from meeting_minutes_app.common import config_loader as cfg
+    from meeting_minutes_app.common import spend_guard
+    # 전역 일시정지가 켜져 있으면 아예 기동하지 않는다. 개별 중지(stop)와 달리 이
+    # 스위치는 설정값이라 재시작에도 유지돼야 한다 — 그러지 않으면 사용자가 밤에
+    # 멈춰 둔 자동 실행이 다음 실행에서 조용히 다시 켜진다.
+    if spend_guard.automation_paused():
+        print("[watcher] 자동 실행이 일시 정지 상태입니다 - 자동 시작을 건너뜁니다.")
+        return
     try:
         if bool(cfg.get("vault_watcher.enabled", False)):
             r = _manager.start()

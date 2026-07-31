@@ -336,6 +336,17 @@ export default function SessionDetail({ id, onBack, onOpenGraph }: Props) {
             )}
             {session.source === "cli" && <span className="text-zinc-400">CLI</span>}
           </div>
+          {/* 벤더 전환 고지 — 과거엔 폴백 사실이 노트 frontmatter 에만 남아
+              업로드·배치 사용자는 자기 회의 음성이 다른 회사로 갔는지 알 수 없었다. */}
+          {session.stt_fallback_used ? (
+            <p className="mt-2 text-sm text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+              <b>대체 경로로 처리되었습니다</b>
+              {session.stt_provider ? ` — ${session.stt_provider}` : ""}
+              <br />
+              기본 음성 인식이 실패해 대체 제공자로 전환했습니다. 이 회의의 음성이 위
+              제공자로 전송되었고, 회의록 출처에도 같은 내용이 기록됩니다.
+            </p>
+          ) : null}
           {session.status === "error" && (
             <div className="mt-2">
               {session.error_detail && (

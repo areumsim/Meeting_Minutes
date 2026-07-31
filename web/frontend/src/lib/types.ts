@@ -14,6 +14,10 @@ export interface Session {
   cost_estimate: number;
   duration_sec: number;
   error_detail?: string | null;
+  /** 실제로 전사를 만든 STT 제공자(폴백이 일어나면 여러 개). 구버전 DB 에는 없다. */
+  stt_provider?: string | null;
+  /** 다른 벤더로 폴백해 처리됐는지. 회의 음성이 어디로 갔는지 사용자가 알아야 한다. */
+  stt_fallback_used?: number | null;
   created_at: string;
 }
 

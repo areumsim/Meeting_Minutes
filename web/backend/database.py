@@ -104,6 +104,17 @@ def init_db():
             c.execute("ALTER TABLE sessions ADD COLUMN error_detail TEXT")
         except sqlite3.OperationalError:
             pass  # 이미 존재
+        # 실제로 전사를 만든 STT 제공자와 폴백 여부. 벤더 전환이 노트 frontmatter 에만
+        # 남아 있어 배치·업로드 사용자는 자기 회의가 다른 벤더(Groq 등)로 갔는지
+        # 화면에서 알 수 없었다. 세션에 남겨 상세 화면에 표시한다.
+        for _ddl in (
+            "ALTER TABLE sessions ADD COLUMN stt_provider TEXT",
+            "ALTER TABLE sessions ADD COLUMN stt_fallback_used INTEGER DEFAULT 0",
+        ):
+            try:
+                c.execute(_ddl)
+            except sqlite3.OperationalError:
+                pass  # 이미 존재
         # 서버가 (재)시작되는 시점엔 실제로 처리 중인 작업이 있을 수 없다.
         # 이전 실행이 비정상 종료(크래시·강제종료·키 누락 등)돼 'processing'
         # 상태로 고착된 세션을 error 로 정리해 대시보드가 지저분해지는 것을 막는다.
@@ -178,6 +189,25 @@ def update_session_status(sid: str, status: str, **kwargs):
             params.append(v)
         params.append(sid)
         c.execute(f"UPDATE sessions SET {', '.join(sets)} WHERE id = ?", params)
+        c.commit()
+
+
+def add_session_cost(sid: str, delta_usd: float) -> None:
+    """세션의 누적 예상 비용에 delta 를 더한다.
+
+    회의록 재생성처럼 **같은 세션에서 추가 과금이 발생하는** 경우에 쓴다.
+    `update_session_status(cost_estimate=...)` 는 값을 덮어쓰기 때문에 이 용도로는
+    쓸 수 없었고, 그래서 재생성 비용이 어디에도 기록되지 않아 월 합계에서 빠졌다
+    (재생성을 몇 번 해도 지출이 0으로 보였다).
+    """
+    d = float(delta_usd or 0.0)
+    if d <= 0:
+        return
+    with _conn() as c:
+        c.execute(
+            "UPDATE sessions SET cost_estimate = COALESCE(cost_estimate, 0) + ? "
+            "WHERE id = ?", (d, sid),
+        )
         c.commit()
 
 

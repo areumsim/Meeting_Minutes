@@ -95,6 +95,11 @@ DEFAULT_STT_MODEL  = _c("models.stt",          "gpt-4o-mini-transcribe") or "gpt
 FALLBACK_STT_MODEL = _c("models.stt_fallback", "gpt-4o-transcribe") or "gpt-4o-transcribe"
 # STT 폴백 체인 — OpenAI(위 2개) 실패 시 다른 벤더/로컬로 이어진다.
 GROQ_STT_MODEL     = _c("models.stt_groq",     "whisper-large-v3-turbo") or "whisper-large-v3-turbo"
+# Groq 는 **다른 벤더**다 — 켜면 회의 음성이 OpenAI 가 아닌 곳으로 나간다.
+# 과거에는 이 토글이 없어서 Groq 키가 있으면 그것만으로 체인에 편입됐다. 즉 사용자가
+# "선택 사항"으로 키를 넣어 두면 그 뒤 벤더 전환은 무동의·자동이었다.
+# 로컬 폴백(stt.local_fallback)에는 토글이 있었으므로 Groq 만 예외였다.
+GROQ_FALLBACK_ENABLED = bool(_c("stt.groq_fallback", False))
 LOCAL_STT_ENABLED  = bool(_c("stt.local_fallback", False))
 LOCAL_STT_MODEL    = _c("models.stt_local",    "base") or "base"
 MINUTES_MODEL      = _c("models.minutes_model", "gpt-4o") or "gpt-4o"
@@ -105,11 +110,12 @@ def _refresh_config_globals() -> None:
     """config_loader.reload() 훅 — 웹 UI 설정 저장 시 재시작 없이 반영.
     llm_client 훅이 먼저 등록·실행되므로 키/SSL은 갱신된 값을 그대로 복사한다."""
     global DEFAULT_STT_MODEL, FALLBACK_STT_MODEL, MINUTES_MODEL, SUMMARY_MODEL
-    global GROQ_STT_MODEL, LOCAL_STT_ENABLED, LOCAL_STT_MODEL
+    global GROQ_STT_MODEL, GROQ_FALLBACK_ENABLED, LOCAL_STT_ENABLED, LOCAL_STT_MODEL
     global OPENAI_API_KEY, GROQ_API_KEY, SSL_VERIFY
     DEFAULT_STT_MODEL  = _c("models.stt",          "gpt-4o-mini-transcribe") or "gpt-4o-mini-transcribe"
     FALLBACK_STT_MODEL = _c("models.stt_fallback", "gpt-4o-transcribe") or "gpt-4o-transcribe"
     GROQ_STT_MODEL     = _c("models.stt_groq",     "whisper-large-v3-turbo") or "whisper-large-v3-turbo"
+    GROQ_FALLBACK_ENABLED = bool(_c("stt.groq_fallback", False))
     LOCAL_STT_ENABLED  = bool(_c("stt.local_fallback", False))
     LOCAL_STT_MODEL    = _c("models.stt_local",    "base") or "base"
     MINUTES_MODEL      = _c("models.minutes_model", "gpt-4o") or "gpt-4o"

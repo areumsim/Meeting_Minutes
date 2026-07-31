@@ -115,6 +115,10 @@ class AudioWatcher:
                 "reason": entry.get("error", ""),
                 "est_cost_usd": entry.get("est_cost_usd", 0.0),
                 "duration_sec": entry.get("duration_sec", 0.0),
+                # 대기 사유 구분 — 화면 문구가 달라야 한다.
+                #   preexisting: 감시를 켜기 전부터 있던 파일(전량 과금 방지)
+                #   그 외:       지출 한도 초과
+                "preexisting": bool(entry.get("preexisting", False)),
             })
         out.sort(key=lambda e: e.get("queued_at") or "")
         return out
@@ -169,6 +173,20 @@ class AudioWatcher:
             prev_size = size
         return True
 
+    # ── 자동 실행 관문 ────────────────────────────────────
+    def _paused(self) -> bool:
+        """전역 일시정지(automation.paused)면 아무 파일도 처리하지 않는다.
+
+        스레드를 죽이지 않고 여기서 막는 이유: 사용자가 스위치를 되돌리면 다음
+        스캔부터 곧바로 다시 동작해야 하고, 감시 자체를 멈췄다 켜면 첫 스캔 규칙
+        (기존 파일 대기열)이 다시 적용돼 혼란스럽다.
+        """
+        try:
+            from meeting_minutes_app.common import spend_guard
+            return spend_guard.automation_paused()
+        except Exception:
+            return False
+
     # ── 지출 한도 관문 ────────────────────────────────────
     def _spend_gate(self, abs_path: str) -> bool:
         """한도를 넘으면 확인 대기열에 넣고 True(=처리하지 않음).
@@ -187,7 +205,10 @@ class AudioWatcher:
         reason = spend_guard.blocked(est)
         if not reason:
             return False
-        print(f"[watcher] 지출 한도로 자동 처리 보류: {Path(abs_path).name} — {reason}")
+        # 콘솔 인코딩이 cp949 인 환경(한국어 Windows 콘솔)에서는 em-dash 가
+        # UnicodeEncodeError 를 낸다. 이 print 는 start() 첫 스캔 경로에서도 불리므로
+        # 여기서 터지면 감시가 아예 켜지지 않는다. ASCII 구분자만 쓴다.
+        print(f"[watcher] 지출 한도로 자동 처리 보류: {Path(abs_path).name} ({reason})")
         self._mark_processed(
             abs_path, "queued", error=reason,
             extra={"est_cost_usd": round(est, 4), "duration_sec": round(duration, 1)},
@@ -219,6 +240,8 @@ class AudioWatcher:
     def _handle_file(self, abs_path: str) -> None:
         if self._is_processed(abs_path):
             return
+        if self._paused():
+            return
         if not self._is_stable(abs_path):
             print(f"[watcher] 파일 불안정(복사 중?), 건너뜀: {Path(abs_path).name}")
             return
@@ -248,7 +271,36 @@ class AudioWatcher:
             print(f"[watcher] 처리 실패: {e}")
 
     # ── 폴링 스캔 ─────────────────────────────────────────
-    def _scan_once(self) -> None:
+    def _queue_preexisting(self, candidates: List[str]) -> None:
+        """감시를 켜기 전부터 있던 파일을 처리하지 않고 확인 대기열에 넣는다.
+
+        과거에는 첫 스캔이 이 파일들을 4-worker 로 즉시 병렬 처리했다. 즉 감시
+        폴더를 처음 지정하는 순간 **과거 녹음 전체가 한꺼번에 과금**됐다.
+        1건당 한도로도 막히지 않는다 — 각 파일이 한도 이하이면 전부 통과한다.
+        그래서 건수와 총액을 사용자에게 보여주고 승인을 받는다(FR-011 확인 대기열).
+        """
+        total = 0.0
+        for path in candidates:
+            est = 0.0
+            duration = 0.0
+            try:
+                from meeting_minutes_app.common import spend_guard
+                duration, est = spend_guard.estimate_audio_cost(path)
+            except Exception:
+                pass
+            total += est
+            self._mark_processed(
+                path, "queued",
+                error="감시를 켜기 전부터 폴더에 있던 파일입니다. 승인하면 처리합니다.",
+                extra={"est_cost_usd": round(est, 4),
+                       "duration_sec": round(duration, 1),
+                       "preexisting": True},
+            )
+        print(f"[watcher] 기존 파일 {len(candidates)}건은 자동 처리하지 않았습니다 "
+              f"(예상 ${total:.2f}). [설정] > 폴더 자동 감시 > 확인 대기열 에서 "
+              f"승인하면 처리합니다.")
+
+    def _scan_once(self, first_scan: bool = False) -> None:
         import glob
         from concurrent.futures import ThreadPoolExecutor
         candidates = []
@@ -260,10 +312,20 @@ class AudioWatcher:
                     abs_path = os.path.abspath(fpath)
                     if not self._is_processed(abs_path):
                         candidates.append(abs_path)
-        if candidates:
-            with ThreadPoolExecutor(max_workers=4) as ex:
-                for path in candidates:
-                    ex.submit(self._handle_file, path)
+        if not candidates:
+            return
+        if self._paused():
+            # 대기열에 넣지도 않는다 — 일시정지는 '아무것도 하지 마라'는 뜻이고,
+            # 스위치를 되돌리면 이 파일들이 그대로 다시 후보가 되어야 한다.
+            return
+        # 첫 스캔에서 발견된 것은 '감시 중에 새로 생긴 파일'이 아니라 '원래 있던 파일'이다.
+        # 기본값은 처리하지 않고 대기열에 넣는 것 — 옛 동작이 필요하면 설정으로 켠다.
+        if first_scan and not bool(_c("vault_watcher.process_existing", False)):
+            self._queue_preexisting(candidates)
+            return
+        with ThreadPoolExecutor(max_workers=4) as ex:
+            for path in candidates:
+                ex.submit(self._handle_file, path)
 
     def _polling_loop(self) -> None:
         print(f"[watcher] 폴링 모드 (interval={self.poll_interval}s)")
@@ -274,9 +336,9 @@ class AudioWatcher:
     # ── 감시 시작/중지 ────────────────────────────────────
     def start(self) -> None:
         """감시를 시작한다. watchdog 있으면 FS 이벤트 기반, 없으면 폴링."""
-        # 시작 시 기존 파일 스캔
+        # 시작 시 기존 파일 스캔 — 처리하지 않고 대기열에 넣는다(_scan_once 참조).
         print(f"[watcher] 감시 폴더: {self.watch_folders}")
-        self._scan_once()
+        self._scan_once(first_scan=True)
 
         try:
             from watchdog.observers import Observer

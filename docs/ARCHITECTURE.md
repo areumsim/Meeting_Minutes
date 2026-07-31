@@ -143,11 +143,11 @@ flowchart LR
 
 ---
 
-## 사실 검증 (Claim Verify) — 상세
+## 노트 대조 (Claim Verify) — 상세
 
 회의록에서 기존 vault 지식과 비교 가능한 사실적 주장을 추출해 검증한다. `current_title`로 자기참조를 방지한다.
 
-용어·배경 enrichment는 사실 검증과 별도 단계다. 외부 검색/LLM 리서치가 신뢰 가능한 설명을 주지 못하거나 "죄송합니다/찾을 수 없습니다" 류의 응답을 반환하면, 해당 문장을 그대로 출력하지 않고 `확인 불가: 외부 검색에서 신뢰할 만한 설명을 찾지 못했습니다.`로 정규화한다. 인물 항목은 동명이인 오염을 피하기 위해 정보 없음 응답이면 제외한다.
+용어·배경 enrichment는 노트 대조과 별도 단계다. 외부 검색/LLM 리서치가 신뢰 가능한 설명을 주지 못하거나 "죄송합니다/찾을 수 없습니다" 류의 응답을 반환하면, 해당 문장을 그대로 출력하지 않고 `확인 불가: 외부 검색에서 신뢰할 만한 설명을 찾지 못했습니다.`로 정규화한다. 인물 항목은 동명이인 오염을 피하기 위해 정보 없음 응답이면 제외한다.
 
 ```mermaid
 flowchart TD
@@ -277,7 +277,7 @@ flowchart TD
 | vault 검색 | 세션 완료 후 2패스 | 세그먼트마다 비동기(내부자료 우선: 노트 RRF + 논문폴더 보강, 후보 안에서 섹션 위치특정) + 세션 종료 후 통합 |
 | 실시간 웹 보완 | 해당 없음 | 웹 UI 녹음 전용(`online_search_enabled`+`realtime_web_search_interval`>0), 내부 미발견 시만. **CLI 실시간엔 없음** |
 | 회의록 생성 | 전체 전사 후 1회 | 세션 종료 후 1회 |
-| 사실 검증 | ✅ (current_title 필터) | ✅ CLI/서버 WebSocket, ❌ standalone/mobile direct |
+| 노트 대조 | ✅ (current_title 필터) | ✅ CLI/서버 WebSocket, ❌ standalone/mobile direct |
 | Wiki Context/Proposal | ✅ | ✅ CLI/서버 WebSocket, ❌ standalone/mobile direct |
 | Supermemory 저장 | ✅ `write_meeting_note()` 성공 시(`finalize.run_post_session()` 경유) | ✅ CLI/서버 WebSocket의 `enrich_and_publish()` 성공 시 |
 
@@ -326,7 +326,7 @@ flowchart TD
 **누적(사이드카).** 종료 시 `collected_evidence()`(노트별 최고 근거 + 참조 횟수)를 웹 SQLite
 `related_notes` 테이블에 upsert 하고, 회의 상세의 "참조된 관련 노트"와 교차 회의 집계
 (`related_notes_cross_sessions()`)로 다시 열람한다. 동시에 `finalize`가 근거를 생성 memo에 주입하고
-회의록 말미에 `## 🔗 관련 노트` 섹션을 LLM 없이 결정적으로 덧붙인다(사실검증 블록 뒤 → 검증 섹션
+회의록 말미에 `## 🔗 관련 노트` 섹션을 LLM 없이 결정적으로 덧붙인다(노트 대조 블록 뒤 → 검증 섹션
 재작성에 지워지지 않음). vault 원본은 불변 — 관련정보는 전부 사이드카에 쌓인다.
 
 라이브 스모크 절차는 `docs/SMOKE_실시간_관련노트.md` 참고.
@@ -535,7 +535,7 @@ flowchart LR
 
 ## 참조 노트 자동 보강 (Reference Note Enrichment)
 
-`enrichment.enrich()`(용어·인물·기업 설명)와 `meeting_workflow._save_out_domain_fact_note()`(도메인 외 사실검증)가
+`enrichment.enrich()`(용어·인물·기업 설명)와 `meeting_workflow._save_out_domain_fact_note()`(도메인 외 노트 대조)가
 공통으로 쓰는 `obsidian.ObsidianClient.create_reference_note()`는, 과거엔 동일 이름 노트가 이미 있으면
 무조건 스킵하고 아무것도 갱신하지 않았다 — 같은 인물/용어가 열 번째 회의에서 언급돼도 노트는
 최초 생성 시점 그대로 멈춰 있었고, 웹 검색은 매번 새로 수행되고도 결과가 버려지는 낭비가 있었다.
@@ -724,7 +724,7 @@ evidence:
 도메인 카테고리만 감지 대상이었고, 폴더형 카테고리는 전용 스코프가 없어 항상 볼트 전체 검색으로
 빠졌다.) 아무 카테고리도 감지되지 않으면 필터 없이 볼트 전체를 검색한다(기존 동작). `wiki_ask.py`,
 `wiki_knowledge.py`(prep-brief), 회의록 생성 컨텍스트(`vault_retrieval.build_obsidian_context_memo()`),
-사실 검증(`meeting_workflow._fetch_vault_notes_for_claim()`) 네 곳에 연결돼 있다.
+노트 대조(`meeting_workflow._fetch_vault_notes_for_claim()`) 네 곳에 연결돼 있다.
 
 **도메인 아카이브 오염 방지 하드 게이트 (`is_domain_mismatched()`, 2026-07 추가)**: 실전에서
 무관한 팀 회의 스크립트에 "양자컴퓨터"라는 말이 지나가듯 한 번 언급됐다는 이유만으로, 검색이
@@ -735,7 +735,7 @@ evidence:
 않으면 True(배제)를 반환한다 — 키워드 1개(예: "양자" 한 단어)만 우연히 겹치는 것은 신호로
 인정하지 않는다. `note_domain_score(title, content, query, note_path)`는 내부적으로 이 게이트를
 먼저 거쳐 걸리면 무조건 0점을 반환하고, `build_obsidian_context_memo()`(회의록 생성 컨텍스트)와
-`_fetch_vault_notes_for_claim()`(사실 검증)가 이를 통해 후보를 채택/배제한다. relevance
+`_fetch_vault_notes_for_claim()`(노트 대조)가 이를 통해 후보를 채택/배제한다. relevance
 재채점이 원래 없던 `wiki_knowledge._get_brief_related_notes()`(prep-brief)는 기존 TF-IDF 랭킹을
 그대로 신뢰하되 `is_domain_mismatched()`만 직접 호출해 도메인 오염만 걸러낸다(전체 재채점을
 끼얹으면 원래 신뢰하던 관련 결과까지 걸러지는 부작용이 있어 분리함). 세 경로 모두 REST 검색
@@ -893,7 +893,7 @@ LLM은 다음 고정 답변 구조를 반드시 따르도록 강제된다:
 | API | 용도 | 호출 모듈 | 비고 |
 |---|---|---|---|
 | OpenAI Realtime API | 낮은 지연 실시간 전사 | `realtime_transcription.py` · `web/backend/api/realtime.py` · `web/frontend/src/lib/api.ts` | Realtime은 기본 화자분리 없음. 브라우저/모바일은 직접 연결, 서버 수신 오디오는 WebSocket 프록시 옵션 |
-| OpenAI Chat API | 회의록·요약·액션·사실검증 | `LLMClient._gpt()` | gpt-4o 기본, 폴백 역할 |
+| OpenAI Chat API | 회의록·요약·액션·노트 대조 | `LLMClient._gpt()` | gpt-4o 기본, 폴백 역할 |
 | Anthropic API | 회의록·요약 생성 (`models.llm=claude` 선택 시) | `LLMClient._claude()` | claude-opus-4-8 기본, web_search tool 지원. **기본 LLM은 GPT**(`models.llm=gpt`) |
 | Obsidian REST API | 노트 읽기/쓰기/검색 | `obsidian.ObsidianClient` | https://127.0.0.1:27124 Bearer token |
 | Supermemory API | 크로스세션 팩트 메모리 저장·검색 | `supermemory_client.SupermemoryClient` | 클라우드 또는 `npx supermemory local` (MIT, 로컬) |
@@ -921,7 +921,7 @@ LLM은 다음 고정 답변 구조를 반드시 따르도록 강제된다:
 | `indexing.index_path` | `"data/vault_index.json"` | 인덱스 파일 위치 |
 | `wiki.enabled` | `true` | 생성 전 vault 컨텍스트 주입 |
 | `wiki.vault_enrich` | `true` | 생성 후 엔티티 기반 관련 노트 추가 |
-| `wiki.claim_verify` | `true` | 사실 검증 활성화 |
+| `wiki.claim_verify` | `true` | 노트 대조 활성화 |
 | `wiki.claim_verify_max` | `8` | 최대 검증 주장 수 (비용 제한용) |
 | `wiki.context_max_chars` | `6000` | 노트당 주입 최대 글자 수 (코드 fallback은 2000, 배포 config.example 기본은 6000) |
 | `wiki.online_search_enabled` | `false` | 웹 리서치 (Anthropic web_search tool) |
@@ -952,7 +952,7 @@ LLM은 다음 고정 답변 구조를 반드시 따르도록 강제된다:
 | `wiki_knowledge.graph_enabled` | `true` | Wiki Knowledge Graph 동기화(registry/vault 백필 + 세션 실시간 동기화) — 파생 데이터라 기본 활성 |
 | `wiki_knowledge.graph_retrieval_expand_enabled` | `true` | 회의록 생성 컨텍스트를 그래프로 1-hop 확장(`graph_expand_titles()`) — 그래프 DB가 비어 있어도 조용히 건너뛰므로 기본 활성. 효과를 보려면 `scripts/graph_backfill.py`로 먼저 백필 |
 | `obsidian.reference_note_max_updates` | `5` | 참조 노트가 재언급될 때 "추가 언급 기록"에 유지할 최근 블록 수 — 초과분은 가장 오래된 것부터 제거 |
-| `supermemory.enabled` | `false` | Supermemory 팩트 메모리 활성화 — Obsidian 저장 시 동시 저장, 다음 회의 컨텍스트·사실 검증 시 자동 참조 |
+| `supermemory.enabled` | `false` | Supermemory 팩트 메모리 활성화 — Obsidian 저장 시 동시 저장, 다음 회의 컨텍스트·노트 대조 시 자동 참조 |
 | `supermemory.api_key` | `""` | Supermemory API 키 (클라우드) 또는 로컬 서버는 빈 값 허용 |
 | `supermemory.base_url` | `"https://api.supermemory.ai"` | 자체 호스팅 시 `http://localhost:6767` |
 | `notify.on_finish` | `"none"` | 완료 후 알림 채널 (none/email/slack/teams/all) |
@@ -1222,7 +1222,7 @@ People/Organizations/Topics 폴더의 실제 노트 제목과 일치하므로 `b
 | 화자분리 | DER, speaker confusion rate |
 | 액션 추출 | precision / recall / due date accuracy |
 | 결정사항 추출 | 결정 누락률, 잘못된 결정 생성률 |
-| 사실 검증 | claim support rate, conflict detection accuracy |
+| 노트 대조 | claim support rate, conflict detection accuracy |
 | Vault 검색 | context precision@k, evidence recall@k |
 | 회의록 품질 | 요약-본문 중복률, 미정사항 보존률, hallucinated decision rate |
 

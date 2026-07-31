@@ -1,7 +1,7 @@
 # 옵시디언 녹음 → 요약 → 메일 자동화
 
 옵시디언 코어 **"음성 녹음"** 플러그인은 오디오 파일만 저장합니다(전사·요약 없음).
-이 도구가 그 뒤를 이어 **STT → 회의록·요약·액션 → 사실 검증 → Wiki Context/Proposal → 메일 발송**까지 처리합니다.
+이 도구가 그 뒤를 이어 **STT → 회의록·요약·액션 → 노트 대조 → Wiki Context/Proposal → 메일 발송**까지 처리합니다.
 
 세 가지 경로가 있습니다. 모두 같은 `config.json` email 설정을 사용하지만, 저장/병합 방식은 다릅니다.
 
@@ -91,11 +91,11 @@ python run_meeting.py watch --folders "D:\Recordings"
 | `refined_script.txt` 또는 `script_refined.txt` | 오탈자·고유명사 교정본(처리 경로에 따라 파일명이 다를 수 있음) |
 | `segments.json` | STT 원시 세그먼트(start/end/speaker/text) |
 | `minutes.md` / `summary.md` / `actions.md` | 회의록 / 요약 / 액션 |
-| `fact_check.md` 또는 `*_fact_check.md` | Vault 근거 기반 사실 검증 결과(경로별 파일명 차이 있음) |
+| `fact_check.md` 또는 `*_fact_check.md` | Vault 근거 기반 노트 대조 결과(경로별 파일명 차이 있음) |
 | `wiki_context.json` | 회의록 생성에 사용된 관련 노트·근거·레지스트리 컨텍스트 |
 | `* wiki_proposal.md/json` | 관련 Wiki 노트 업데이트 후보(자동 반영 안 함) |
 
-옵시디언 노트에는 **한눈에 보는 요약·회의록·액션·사실 검증**이 들어갑니다. 전체 STT는 기본적으로 회의록 본문에 붙이지 않고, `obsidian.transcripts_path/yymmdd 제목 - 전사.md` 별도 노트/파일로 보관합니다.
+옵시디언 노트에는 **한눈에 보는 요약·회의록·액션·노트 대조**이 들어갑니다. 전체 STT는 기본적으로 회의록 본문에 붙이지 않고, `obsidian.transcripts_path/yymmdd 제목 - 전사.md` 별도 노트/파일로 보관합니다.
 회의록 파일명도 `yymmdd 제목.md` 형식입니다. 예: `260627 260627_5.md`.
 batch/process 회의록 frontmatter에는 `session_date`, `source_audio`, `source_file_date`, `processed_at`, `stt_source`, `stt_segment_count`, `refined_ratio` 같은 처리 메타데이터가 기록됩니다.
 ingest recording note에는 `source_audio`, `source_file_date`, `processed_at`, `stt_source`, `stt_segment_count`가 기록됩니다. `vault-audio`는 녹음이 들어 있던 기존 노트에 병합하므로 기존 frontmatter를 보존하고 `audio_processed`로 중복 처리를 막습니다.
@@ -110,7 +110,7 @@ ingest recording note에는 `source_audio`, `source_file_date`, `processed_at`, 
 
 메일 첨부 기준:
 - `.md` 파일은 메일 클라이언트에서 한글이 깨질 수 있어 기본적으로 UTF-8 `.txt`로 변환 첨부합니다.
-- 상세 회의록, 요약본, 액션, STT 원본(`script.md`/`transcript.md`/`segments.json`), STT 교정본, `wiki_context.json`, `wiki_proposal.md/json`, 사실검증 파일을 가능한 한 모두 첨부합니다.
+- 상세 회의록, 요약본, 액션, STT 원본(`script.md`/`transcript.md`/`segments.json`), STT 교정본, `wiki_context.json`, `wiki_proposal.md/json`, 노트 대조 파일을 가능한 한 모두 첨부합니다.
 - 설정: `email.markdown_attachment = "txt"`
 - Markdown 확장자를 꼭 유지하려면 `"markdown"`으로 바꿀 수 있습니다.
 

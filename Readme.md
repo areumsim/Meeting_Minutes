@@ -1,6 +1,6 @@
 # 🎙️ Meeting Minutes Generator v2.1
 
-음성/영상 파일에서 자동으로 **스크립트 + 회의록 + 요약본 + 사실검증 + Wiki 업데이트 후보**를 생성하고,
+음성/영상 파일에서 자동으로 **스크립트 + 회의록 + 요약본 + 노트 대조 + Wiki 업데이트 후보**를 생성하고,
 누적된 회의록·결정사항·액션을 **지식그래프(Wiki Knowledge Graph)**로 정착시킵니다.
 실시간 마이크 녹취와 파일 배치 처리를 모두 지원합니다. `pip install -e .` 설치 후에는 `meeting-minutes`
 커맨드를, 설치 없이 저장소만 clone했다면 `run_meeting.bat` / `python run_meeting.py`를 씁니다(동일한 로직).
@@ -16,7 +16,7 @@
 > `python scripts/graph_backfill.py`로 기존 registry·vault를 백필. 자세한 구조는
 > [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md)의 "Wiki Knowledge Graph" 절 참고.
 >
-> 🆕 **Supermemory 팩트 메모리**: Obsidian에 회의록을 저장할 때 동시에 Supermemory에도 저장 → 다음 회의 컨텍스트 빌딩 및 사실 검증 시 이전 회의 기억을 자동 참조합니다. `config.supermemory.enabled: true` 로 활성화. 자체 호스팅 가능 (`npx supermemory local`, MIT 라이선스).
+> 🆕 **Supermemory 팩트 메모리**: Obsidian에 회의록을 저장할 때 동시에 Supermemory에도 저장 → 다음 회의 컨텍스트 빌딩 및 노트 대조 시 이전 회의 기억을 자동 참조합니다. `config.supermemory.enabled: true` 로 활성화. 자체 호스팅 가능 (`npx supermemory local`, MIT 라이선스).
 >
 > 저장 경로와 요약/회의록 구분 기준은 [`docs/출력_구조_저장경로_요약회의록.md`](docs/출력_구조_저장경로_요약회의록.md)를 기준으로 합니다.
 > 새 팀/새 PC 설치는 [`docs/SETUP_NEW_TEAM.md`](docs/SETUP_NEW_TEAM.md) 참고.
@@ -149,7 +149,7 @@ python run_meeting.py web --port 9000        # 포트 변경
 | **File Upload** | 드래그앤드롭 파일 업로드 → 배치 처리 (7가지 모드 지원) |
 | **Text Analysis** | 텍스트 붙여넣기 → AI 분석 |
 | **Settings** | STT/GPT/Claude 모델 설정, 실시간 녹음 설정 (VAD, 노이즈), 프로파일 CRUD |
-| **Session Detail** | 멀티탭 문서 뷰어 (회의록/요약/사실검증/Wiki Context/Wiki Proposal/스크립트/액션아이템), 복사/다운로드, 세그먼트 타임라인 |
+| **Session Detail** | 멀티탭 문서 뷰어 (회의록/요약/노트 대조/Wiki Context/Wiki Proposal/스크립트/액션아이템), 복사/다운로드, 세그먼트 타임라인 |
 
 ### CLI ↔ 웹 동기화
 
@@ -176,7 +176,7 @@ python run_meeting.py web --port 9000        # 포트 변경
     → 중앙 로깅/회사망 통제용. 기본 웹 Recorder 경로는 아님.
 ```
 
-현재 프론트 구현은 `web/frontend/src/lib/api.ts`의 `createRealtimeWS()`가 OpenAI Realtime API에 직접 WebSocket으로 연결합니다. 이 standalone/mobile 경로는 지연은 낮지만 서버의 Obsidian/Wiki/사실검증 파이프라인을 우회합니다. 서버 기반 운영 품질이 필요하면 FastAPI `/ws/realtime` 경로를 사용해야 하며, 이 경로는 종료 시 회의록·요약·액션·사실검증·Wiki Context·Wiki Proposal을 DB와 output에 남깁니다. 공식 권장 목표는 브라우저/모바일에서 WebRTC + ephemeral credential을 사용하는 구조입니다.
+현재 프론트 구현은 `web/frontend/src/lib/api.ts`의 `createRealtimeWS()`가 OpenAI Realtime API에 직접 WebSocket으로 연결합니다. 이 standalone/mobile 경로는 지연은 낮지만 서버의 Obsidian/Wiki/노트 대조 파이프라인을 우회합니다. 서버 기반 운영 품질이 필요하면 FastAPI `/ws/realtime` 경로를 사용해야 하며, 이 경로는 종료 시 회의록·요약·액션·노트 대조·Wiki Context·Wiki Proposal을 DB와 output에 남깁니다. 공식 권장 목표는 브라우저/모바일에서 WebRTC + ephemeral credential을 사용하는 구조입니다.
 
 > 보안 TODO: 프론트엔드에 장기 OpenAI API Key를 저장하지 않고, 브라우저/모바일은 FastAPI가 발급한 ephemeral credential을 사용하도록 전환합니다.
 
@@ -242,7 +242,7 @@ Browser mic → AudioWorkletProcessor
 | --- | --- | --- |
 | `run_meeting.bat` / `run_meeting.py` | 권장 통합 실행 메뉴 | 기존 배치/실시간/ingest/web 명령으로 안전하게 위임 |
 | `batch` / `process` | 기존 배치 처리 | `output/` 저장, 설정 시 Obsidian 발행 및 계획 매칭 |
-| `realtime` / `record` | 마이크 실시간 녹취 | 종료 시 회의록/요약/사실검증/Wiki Context/Proposal 생성, 설정 시 Obsidian/메일 |
+| `realtime` / `record` | 마이크 실시간 녹취 | 종료 시 회의록/요약/노트 대조/Wiki Context/Proposal 생성, 설정 시 Obsidian/메일 |
 | `vault-audio` | Obsidian 노트에 임베드된 녹음 처리 | 해당 노트에 `## 회의 기록`으로 직접 병합 |
 | `ingest` / `watch` | 자동 수집용 오디오 처리 | 관련 노트 링크 포함 recording note 생성, 실패 시 `output/` 저장 |
 | `prep` / `schedule` / `merge` | 계획 회의 운영 | 계획 노트 사전 리서치, 충돌 점검, 병합 대기 처리 |
@@ -279,14 +279,14 @@ python run_meeting.py prep-brief --title "주간 회의" --reindex
 
 - 배치 처리와 자동 수집은 STT 세그먼트 내용으로 Vault 인덱스와 Obsidian REST 검색을 수행합니다.
 - **회의록 본문은 기본적으로 이번 녹음 내용만으로 작성됩니다**(`analysis.minutes_vault_context=false`). 관련 노트는 링크 목록(`🔗 관련 노트`)으로만 남고 생성 프롬프트에 주입되지 않습니다 — 이전 회의 내용이 이번 회의록 문장으로 새어 들던 경로를 끊은 것입니다. 배경 맥락까지 넣고 싶으면 이 값을 켜세요(다뤄지지 않은 내용이 섞일 수 있습니다).
-- CLI 실시간과 서버 `/ws/realtime`은 종료 후 누적 세그먼트를 기준으로 같은 컨텍스트를 한 번 주입합니다. 웹 standalone/mobile direct OpenAI 경로는 Vault/Wiki/사실검증을 우회하므로 운영 기록용 기본 경로로 보지 않습니다.
+- CLI 실시간과 서버 `/ws/realtime`은 종료 후 누적 세그먼트를 기준으로 같은 컨텍스트를 한 번 주입합니다. 웹 standalone/mobile direct OpenAI 경로는 Vault/Wiki/노트 대조을 우회하므로 운영 기록용 기본 경로로 보지 않습니다.
 - Obsidian은 로컬 Wiki입니다. 최신 인터넷 정보는 `wiki.online_search_enabled`가 켜진 경우 별도 웹 리서치 memo로 보완합니다.
 - 녹음 **중**에는 `wiki.realtime_vault_search`(기본 켜짐)가 발화별로 관련 노트를 찾아 화면에 조용히 표시합니다. **내부자료 우선** — 노트 인덱스(TF-IDF+임베딩 RRF)로 순위를 정하고, 논문/이론 폴더(`wiki.realtime_paper_dirs`)를 따로 검색해 로컬 논문이 후보에서 빠지지 않게 하며, 찾은 노트 안에서 관련 섹션(`#헤딩`)까지 짚어 근거로 보여줍니다. 인덱스·노트 폴더가 없으면 사유가 배지로 표시됩니다. 랭킹 설계 근거는 `docs/검색랭킹_이론과근거.md`.
   - 논문/이론 폴더는 **폴더 이름만 맞으면 볼트 하위에 있어도** 찾습니다(예: `Archive/양자아카이브/02_이론_학습`). 폴더 소속으로 순위를 올려주지는 않습니다 — 실측에서 관련도가 나빠졌습니다.
   - 검색은 별도 스레드에서 돌아 전사에 영향을 주지 않습니다(1회 0.3~0.5초, 기본 3세그먼트마다).
 - 실시간 **웹** 보완(`wiki.realtime_web_search_interval`>0)은 **웹 UI 녹음 전용**이며 내부에서 못 찾은 구간에서만 동작합니다. 터미널 CLI 실시간 녹음은 내부 노트 검색만 합니다.
 - 종료 후 관련 노트는 근거(관련도·섹션경로·snippet·발화)와 함께 남아 회의 상세의 **참조된 관련 노트**에서 다시 볼 수 있고, 회의록 말미 `## 🔗 관련 노트`에 자동 삽입됩니다. 라이브 확인 절차는 `docs/SMOKE_실시간_관련노트.md`.
-- `wiki.claim_verify=true`이면 회의록 생성 후 노트와 대조해 `## 노트 대조 (자동 · 사람 확인 필요)` 섹션을 추가합니다. 판정·신뢰도·대조 노트가 포함되며, 노트 검색이 관련 자료를 놓칠 수 있으므로 **확정된 사실 검증이 아닌 참고 자료**입니다(근거: `docs/검색랭킹_이론과근거.md` §2.2.1).
+- `wiki.claim_verify=true`이면 회의록 생성 후 노트와 대조해 `## 노트 대조 (자동 · 사람 확인 필요)` 섹션을 추가합니다. 판정·신뢰도·대조 노트가 포함되며, 노트 검색이 관련 자료를 놓칠 수 있으므로 **확정된 노트 대조이 아닌 참고 자료**입니다(근거: `docs/검색랭킹_이론과근거.md` §2.2.1).
 - 용어·배경 enrichment가 신뢰할 만한 설명을 찾지 못하면 챗봇식 사과문을 싣지 않고 `확인 불가`로 표시합니다.
 - 처리 결과 폴더의 `wiki_context.json`에는 회의 날짜, 원본 파일명, STT 재사용 여부, 관련 노트, 추출 용어/엔티티, 레지스트리 액션이 함께 저장됩니다.
 - Obsidian 연결 실패는 치명 오류가 아니며, 파일 출력은 계속 생성됩니다.
@@ -424,7 +424,7 @@ flowchart LR
 | **Obsidian yymmdd 파일명** | 회의록/전사 노트를 `260627 제목.md`처럼 회의 날짜 prefix로 저장 |
 | **Vault 노트 대조** | 회의록 주장과 Vault 노트를 비교해 일치/충돌/확인불가 및 신뢰도 표시 (자동 대조 · 사람 확인 필요) |
 | **Wiki Context 기록** | 관련 노트·레지스트리·STT 품질 메타데이터를 `wiki_context.json`에 저장 |
-| **Supermemory 팩트 메모리** | Obsidian 저장 시 동시에 Supermemory에 팩트 카드 저장 → 다음 회의 컨텍스트·사실 검증 시 자동 참조 (`supermemory.enabled: true`, 자체 호스팅 지원) |
+| **Supermemory 팩트 메모리** | Obsidian 저장 시 동시에 Supermemory에 팩트 카드 저장 → 다음 회의 컨텍스트·노트 대조 시 자동 참조 (`supermemory.enabled: true`, 자체 호스팅 지원) |
 | **번역 컨텍스트 윈도우** | 앞 5개 세그먼트를 힌트로 제공해 번역 용어 일관성 향상 |
 | **고정 헤더 UI** | 실시간 녹취 중 제목·경과시간·예상비용이 상단 2줄에 항상 표시 |
 | **스크롤 잠금** | `s+Enter` 로 화면 고정 — 이전 대화를 위로 스크롤하여 확인 가능 |
@@ -622,7 +622,7 @@ cp   config.example.json config.json   # Mac/Linux
 | `realtime` | `realtime_transcription.py`, `run_realtime.py`, 웹 Recorder |
 | `email`, `notify` | 배치/실시간/자동 처리 완료 알림. `notify.on_finish`가 있으면 기본 알림으로 사용 |
 | `obsidian` | Local REST API 발행, 계획 노트 매칭/병합, Vault 폴더 경로 |
-| `supermemory` | 회의록 저장 시 팩트 카드 동시 저장 + 다음 회의 컨텍스트·사실 검증에 자동 참조 (`supermemory_client.py`) |
+| `supermemory` | 회의록 저장 시 팩트 카드 동시 저장 + 다음 회의 컨텍스트·노트 대조에 자동 참조 (`supermemory_client.py`) |
 | `vault_watcher` | `run_meeting.py watch`, `run_meeting.py audio-watcher`, 자동 처리 상태 파일 |
 | `indexing`, `wiki` | `vault_indexer.py`, `wiki_ask.py`, 관련 노트 검색과 Q&A |
 | `wiki_knowledge.graph_enabled`/`graph_retrieval_expand_enabled` | Wiki Knowledge Graph 동기화(`graph_db.py`/`graph_sync.py`) + 회의록 생성 시 그래프 기반 검색 확장 |
@@ -667,7 +667,7 @@ python run_meeting.py obsidian --where
 
 - `obsidian.transcript_mode = "separate"`이면 전체 STT는 회의록 본문에 붙지 않고 `yymmdd 제목 - 전사.md` 별도 노트로 저장됩니다.
 - `append`로 바꾸면 전체 STT를 회의록 본문 끝에 포함하고, `off`로 바꾸면 저장하지 않습니다.
-- 배치/실시간 완료 메일에는 기본적으로 상세 회의록, 요약본, 액션, STT 원본(`script.md`/`transcript.md`/`segments.json`), STT 교정본, `wiki_context.json`, `wiki_proposal.md/json`, 사실검증 파일을 가능한 한 모두 첨부합니다.
+- 배치/실시간 완료 메일에는 기본적으로 상세 회의록, 요약본, 액션, STT 원본(`script.md`/`transcript.md`/`segments.json`), STT 교정본, `wiki_context.json`, `wiki_proposal.md/json`, 노트 대조 파일을 가능한 한 모두 첨부합니다.
 - `email.markdown_attachment = "txt"`가 기본입니다. `.md` 첨부 한글 깨짐을 피하기 위해 UTF-8 `.txt`로 변환해 보냅니다.
 
 환경변수도 지원합니다 (환경변수 > config.json 순으로 우선):

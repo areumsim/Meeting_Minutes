@@ -1,9 +1,9 @@
 # 회의록 자동화 — 쉬운 사용 설명서
 
-녹음만 하면 **Claude가 회의록을 쓰고 → 관련 Wiki를 찾아 반영하고 → 사실 검증과 Wiki 업데이트 후보를 남기고 → Obsidian에 정리하고 → 메일로 보냅니다.**
+녹음만 하면 **Claude가 회의록을 쓰고 → 관련 Wiki를 찾아 반영하고 → 노트 대조과 Wiki 업데이트 후보를 남기고 → Obsidian에 정리하고 → 메일로 보냅니다.**
 
 ```
-🎙️ 녹음/업로드 ──▶ 📝 회의록(Claude) ──▶ 🔎 Wiki 컨텍스트 ──▶ ✅ 사실 검증 ──▶ 📚 Obsidian 저장 ──▶ ✉️ 메일
+🎙️ 녹음/업로드 ──▶ 📝 회의록(Claude) ──▶ 🔎 Wiki 컨텍스트 ──▶ ✅ 노트 대조 ──▶ 📚 Obsidian 저장 ──▶ ✉️ 메일
 ```
 
 ---
@@ -16,7 +16,7 @@
 |------|------|
 | Claude로 회의록 작성 | `models.llm = "claude"` 및 Anthropic API 키 |
 | 용어·인물·기업 자동 검색·설명 | Obsidian 연결 및 후처리 설정 |
-| Vault 사실 검증 | `wiki.claim_verify = true` |
+| Vault 노트 대조 | `wiki.claim_verify = true` |
 | Wiki Context/Proposal 저장 | `wiki_knowledge.enabled = true` |
 | Obsidian 볼트에 자동 저장 | `obsidian.enabled`, `obsidian.api_key`, `obsidian.vault_path` |
 | 완료 후 메일 자동 발송 | `notify.on_finish = "email"` 및 `email` 섹션 |
@@ -40,7 +40,7 @@ python run_meeting.py web
 ```
 → 브라우저에서 **업로드** 또는 **실시간 녹음** 버튼을 사용할 수 있습니다.
 
-주의: 현재 웹/모바일 Recorder의 direct OpenAI 경로는 기기 로컬 저장 중심이라 Obsidian/Wiki/사실검증 파이프라인을 우회합니다. 운영 기록으로 남길 회의는 `batch`, `ingest`, CLI 실시간 또는 서버 `/ws/realtime` 경로를 사용하세요.
+주의: 현재 웹/모바일 Recorder의 direct OpenAI 경로는 기기 로컬 저장 중심이라 Obsidian/Wiki/노트 대조 파이프라인을 우회합니다. 운영 기록으로 남길 회의는 `batch`, `ingest`, CLI 실시간 또는 서버 `/ws/realtime` 경로를 사용하세요.
 
 ### 방법 C — 실시간 마이크 녹음
 ```bash
@@ -48,7 +48,7 @@ python run_meeting.py realtime --language ko
 ```
 → 말이 끝나고 `q`+Enter 누르면 회의록이 만들어집니다.
 
-설정이 켜져 있으면 batch/ingest/CLI 실시간/server realtime 경로는 처리 후 Obsidian 저장, 사실검증, Wiki Context/Proposal, 메일 발송을 시도합니다. Obsidian 연결이 없으면 파일 출력은 유지되고, 저장 단계만 건너뜁니다.
+설정이 켜져 있으면 batch/ingest/CLI 실시간/server realtime 경로는 처리 후 Obsidian 저장, 노트 대조, Wiki Context/Proposal, 메일 발송을 시도합니다. Obsidian 연결이 없으면 파일 출력은 유지되고, 저장 단계만 건너뜁니다.
 
 ---
 
@@ -67,7 +67,7 @@ python run_meeting.py realtime --language ko
    - **도메인** = `config.json`의 `obsidian.project` (여러 프로젝트를 묶으려면 `obsidian.project_domains` 매핑). 단, `meetings_path`가 있으면 회의록은 그 경로를 우선 사용합니다.
    - Obsidian 앱의 **그래프 뷰**에서 회의록 ↔ 용어가 이어진 걸 볼 수 있습니다.
 2. **메일** — 설정된 주소로 회의록·요약이 첨부되어 발송
-3. **로컬 폴더** `output/날짜_제목/` — 회의록·요약·전사·액션·사실검증·Wiki Context/Proposal 파일 (백업/검토용)
+3. **로컬 폴더** `output/날짜_제목/` — 회의록·요약·전사·액션·노트 대조·Wiki Context/Proposal 파일 (백업/검토용)
 
 ---
 

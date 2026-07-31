@@ -1,4 +1,4 @@
-﻿# 회의록 자동화 — 쉬운 사용 설명서
+# 회의록 자동화 — 쉬운 사용 설명서
 
 녹음만 하면 **Claude가 회의록을 쓰고 → 관련 Wiki를 찾아 반영하고 → 사실 검증과 Wiki 업데이트 후보를 남기고 → Obsidian에 정리하고 → 메일로 보냅니다.**
 
@@ -60,7 +60,7 @@ python run_meeting.py realtime --language ko
    - `obsidian.meetings_path`가 비어 있으면 `00_Meetings/<도메인>/yymmdd 제목.md` — 회의록 (프로젝트 미설정 시 `기타/`)
    - batch/process 회의록 frontmatter에는 `session_date`, `session_dt`, `source_file_date`, `source_audio`, `processed_at`, `stt_source`, `stt_segment_count`, `refined_ratio`가 기록됩니다.
    - ingest recording note도 `source_audio`, `source_file_date`, `processed_at`, `stt_source`, `stt_segment_count`를 기록합니다. vault-audio는 기존 노트에 병합하므로 기존 frontmatter를 우선 보존합니다.
-   - Vault 근거 검증이 켜져 있으면 본문에 `## 사실 검증` 섹션이 추가되고 판정·신뢰도·근거 노트가 표시됩니다.
+   - Vault 노트 대조가 켜져 있으면 본문에 `## 노트 대조 (자동 · 사람 확인 필요)` 섹션이 추가되고 판정·신뢰도·대조 노트가 표시됩니다(참고용 — 확정된 검증이 아닙니다).
    - 처리 폴더에는 `wiki_context.json`, 관련 노트가 있을 때 `wiki_proposal.md/json`, 실시간/서버 경로에서는 `*_fact_check.md` 또는 웹 `Fact Check` 탭이 남습니다.
    - `01_References/People|Companies/이름.md` — 인물·기업 설명 노트 (종류별, 프로젝트 무관 공유)
    - `01_References/<도메인>/용어.md` — 용어·기술 노트 (프로젝트 미설정 시 `공통/`)

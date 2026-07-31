@@ -102,7 +102,7 @@ flowchart TD
 | 요약 생성 | `generate_summary()` | `minutes_generation.py` |
 | 액션 아이템 | `extract_action_items()` | `minutes_generation.py` |
 | 용어/인물/기업 보완(신규 노트 생성 포함) | `enrich()` | `enrichment.py` |
-| 사실 검증 | `claim_verify()` | `meeting_workflow.py` |
+| 노트 대조(구 사실 검증) | `claim_verify()` | `meeting_workflow.py` |
 | 자동 분류 라우팅 | `classify_meeting_route()` | `meeting_workflow.py` |
 | Obsidian 저장 | `write_meeting_note()` | `obsidian.py` |
 | 재인덱싱 | `_reindex_if_configured()` | `wiki_knowledge.py` |
@@ -173,7 +173,7 @@ flowchart TD
     J1 --> K
     J2 --> K
     J3 --> K
-    K --> L[## 사실 검증 섹션\nObsidian 노트 하단 append]
+    K --> L[## 노트 대조 섹션\nObsidian 노트 하단 append]
 ```
 
 ### 판정 기호 의미
@@ -513,7 +513,7 @@ flowchart LR
     C --> C1[한눈에 보는 요약\n결론·결정·리스크·액션]
     C --> C2[본문 회의록\n주요 논의 내용]
     C --> C3[주요 용어·인물]
-    C --> C4[사실 검증\n✅⚠️❓🔍]
+    C --> C4[노트 대조\n✅⚠️❓🔍]
     C --> C5[관련 노트\nwikilinks]
     A --> D{transcript_mode}
     D -- separate --> E[별도 전사 파일\ntranscripts_path/yymmdd 제목 - 전사.md]
@@ -945,7 +945,7 @@ LLM은 다음 고정 답변 구조를 반드시 따르도록 강제된다:
 | `wiki_knowledge.embedding_enabled` | `true` | 임베딩 하이브리드 검색 (TF-IDF + 코사인 RRF 융합). 실패 시 TF-IDF 폴백 |
 | `wiki_knowledge.embedding_model` | `"text-embedding-3-small"` | 임베딩 모델 (OpenAI) |
 | `wiki_knowledge.embedding_dims` | `256` | 임베딩 차원 축소 (인덱스 크기/속도 절충) |
-| `wiki_knowledge.embedding_min_cosine` | `0.25` | 의미 검색 인정 최소 코사인 유사도 |
+| `wiki_knowledge.embedding_min_z` | `1.5` | 의미 검색 노이즈 컷 — **쿼리 상대 z 문턱**. 구 `embedding_min_cosine`(절대 0.25)은 실측으로 폐기(무작위 노트 쌍의 78.5% 통과). `docs/검색랭킹_이론과근거.md` §2.2.1 |
 | `wiki_knowledge.section_index_enabled` | `true` | 섹션(heading) 단위 인덱싱. claim_verify/context memo/wiki_ask가 whole-note 대신 관련 섹션을 근거로 우선 사용. 변경 후 `reindex` 필요 |
 | `wiki_knowledge.proposal_llm_enabled` | `false` | LLM 기반 proposal 초안 생성 (구현됨 — 기본은 규칙 기반, true 시 노트별 LLM 초안, 실패 시 규칙 폴백) |
 | `wiki_knowledge.auto_apply_updates` | `false` | **항상 false — Obsidian 원본 자동 수정 금지** |
@@ -1085,11 +1085,18 @@ SectionIndex (data/vault_index.json, notes[rel]["sections"]):
   빌드: `build()`가 자동 수행, 또는 `python vault_indexer.py --embed`.
 - **RRF 융합**: `search()`가 TF-IDF 랭킹과 임베딩 코사인 랭킹(후보 limit×3)을
   Reciprocal Rank Fusion(`_rrf_fuse`, k=60)으로 융합. 결과의 `score`는 하위호환을 위해
-  TF-IDF 점수 유지, `cosine`/`rrf` 필드 추가. `embedding_min_cosine`(기본 0.25) 미만은 컷.
+  TF-IDF 점수 유지, `cosine`/`rrf` 필드 추가. 노이즈 컷은 `_semantic_cut()` — **쿼리 상대
+  z 문턱**(`embedding_min_z`, 기본 1.5). 구 절대 코사인 컷(`embedding_min_cosine` 0.25)은
+  실측으로 폐기했다: 무작위 노트 쌍의 78.5%를 통과시켰고, 값을 올려도 양성이 먼저 죽었다
+  (`docs/검색랭킹_이론과근거.md` §2.2.1). 같은 실측에서 **회수 자체가 약하다**는 것도
+  확인됐다(전사의 부모 회의록 top1 회수율 임베딩 0%·TF-IDF 0%) — 그래서 회수 결과를
+  '근거'로 단정하지 않는다.
 - **안정성 폴백**: API 키 없음·네트워크 실패·인덱스 모델 불일치 시 자동으로 TF-IDF 단독 동작
   (기존 동작과 동일). 임베딩 빌드 실패는 TF-IDF 인덱스에 영향 없음.
 - `find_related()`는 TF-IDF `min_score` 미달이라도 임베딩 히트는 유지 — 키워드가 겹치지
   않는 의미적 관련 노트 회수용. `_fetch_vault_notes_for_claim()`의 whole-note 경로도 동일.
+  `cosine` 필드가 붙어 있다는 것 자체가 `_semantic_cut()` 통과를 뜻하므로 호출부가 값을
+  다시 절대 문턱과 비교하지 않는다(규칙 이원화 방지 — `wiki_ask` 에서 실제로 갈렸던 자리).
 
 남은 단계: 섹션 단위 임베딩, Reranker(상위 20 → 최종 5~8). Vault 규모가 커지면
 FAISS/SQLite-vec → Qdrant, pgvector 순으로 검토.

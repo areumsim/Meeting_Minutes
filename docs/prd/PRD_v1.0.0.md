@@ -157,7 +157,7 @@ v1.0.0의 목표는 기능을 더 늘리는 것이 아니라 다음 세 가지�
 | P0 | **사용자 확인 없이 외부 유료 API를 호출하는 자동 실행 경로** `[소스 검증]` | FR-005·UX-003을 만족할 수 없다. 부록 A G-24(단 prep-brief 는 오판 — 부록 A.5) |
 | P0 | **비용 추정에 `realtime.two_pass`가 빠져 있음** `[소스 검증]` | 기본 켜짐인데 추정 함수에 인자가 없어 예상 비용·월 합계·**지출 한도 검사가 전부 실제의 1/3**. FR-014 · N-1 |
 | P0 | **폴더 워처의 과금이 DB에 기록되지 않음** `[소스 검증]` | 월 합계에서 영구히 안 보이고, 그 결과 다른 경로의 한도 판정까지 왜곡. FR-011 개정 · N-2 |
-| P0 | **`POST /api/shutdown`이 인증·loopback 검사 없이 `os._exit(0)`** `[소스 검증]` | 정리 코드를 건너뛰어 처리 중 세션이 `processing`으로 영구 고착. SEC-009 · N-7 |
+| ~~P0~~ **해소** | **`POST /api/shutdown`이 인증·loopback 검사 없이 `os._exit(0)`** `[소스 검증]` | 정리 코드를 건너뛰어 처리 중 세션이 `processing`으로 영구 고착. SEC-009 · N-7 → **`3d64112` 로 해소**(N-8·N-10 동반). 실행 세션 토큰(SEC-002)은 미착수 |
 | P0 | **설정 저장이 비원자적이고, 파싱 실패 시 `_cache = {}`로 폴백** `[소스 검증]` | 이후 어떤 저장이든 **모든 설정이 사라진 config.json을 기록**한다. FR-004 개정 · N-12 |
 | P0 | **세션 삭제가 하드 DELETE이고 결과 파일·노트를 남긴다** `[소스 검증]` | `output_dir`을 DB에 갖고 있는데도 정리하지 않아 고아 파일. 무조건 `success: True`. FR-001 개정 · N-13 |
 | P1 | **프런트엔드 테스트가 0건** `[소스 검증]` | v1.2가 게이트로 올린 axe·키보드 E2E·스냅샷 테스트는 실행 수단부터 없다. UX-015 · N-15 |
@@ -983,6 +983,33 @@ SEC-001(loopback 바인딩)과 SEC-002(실행 세션 토큰)가 **아직 구현�
 **수용 기준**: 토큰 없는 요청이 위 엔드포인트 전부에서 거부되는 것을 테스트로 고정한다. 다른 Origin의
 WebSocket 접속이 거부된다. 처리 중 세션이 있을 때 종료 요청이 확인 없이 성공하지 않는다. 강제 종료 후에도
 `processing`으로 남는 세션이 없다.
+
+> **구현 (2026-07-31 · `3d64112`)** — **N-7·N-8·N-10 해소.** 미해소로 인용하면 틀린다.
+>
+> `web/backend/security.py` 신설이 Origin/loopback 판정의 단일 지점이고, 허용 목록 정규식을
+> `CORSMiddleware` 와 **공유**한다(두 곳에 복사하면 갈라진다).
+>
+> | 항목 | 조치 |
+> |---|---|
+> | N-8 | `/ws/realtime` 이 **`accept()` 전에** Origin 검증 후 1008 로 닫는다. accept 후 닫으면 상대는 이미 연결에 성공한 것이고 그 사이 프레임이 처리된다 |
+> | N-7 | Origin 검증 + **서버측** 진행 중 작업 확인(409 + 목록, 승인 시 `force=true`) + `uvicorn.run()` → `Config`+`Server` 로 바꿔 `should_exit` 정상 종료 |
+> | N-10 | `config/reveal`·`system/pick-folder` 에 Origin 검증. 삭제 경로(`sessions/{id}`, `sessions/clear`)도 포함 |
+>
+> **Origin 없음은 허용한다** — curl·스크립트·앱 WebView 의 정당한 호출이고, 브라우저가 다른
+> 사이트에서 부를 때는 항상 Origin 을 붙인다. 없음을 거부하면 CLI 만 깨지고 얻는 것이 없다.
+>
+> **실측**(TestClient, `client=127.0.0.1`): 악성 Origin 은 shutdown·clear·delete·reveal 이 403,
+> pick-folder 는 `ok=false`, WS 는 거부. 정상 Origin 은 reveal·clear 200, WS 연결 성공.
+> Origin 없음은 reveal 200(CLI 경로 유지). 회귀 테스트 `tests/test_security_origin.py` 27건.
+>
+> **남은 것 2개.** ① **실행 세션 토큰(SEC-002)은 여전히 없다** — 지금 방어는 Origin·loopback
+> 검증이고, 같은 PC의 **비브라우저** 프로세스는 Origin 을 위조할 수 있으므로 막지 못한다.
+> 토큰이 들어오면 이 검사에 토큰 확인을 더한다(Origin 검증은 토큰 유출 시의 2차 방어로 남긴다).
+> ② N-23(WS 원시 예외 노출)은 OPS-004 와 함께 처리한다.
+>
+> Windows 주의: `SIGTERM` 은 강제 종료라 정상 종료 훅이 돌지 않는다. 그래서 런처가
+> `server_launch.register_shutdown_handle()` 로 `Server` 객체를 심어야 하고, 심지 않은 실행
+> 방식에서는 응답 `graceful=false` 로 "정리 없이 내려간다"를 알린다.
 
 ## 8. API 및 운영 요구사항
 

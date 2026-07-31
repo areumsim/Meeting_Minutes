@@ -118,6 +118,10 @@ Batch A(비용 정합·자동 실행 안전장치) 착수 후 추가된 확인 �
 | 워처 첫 스캔이 전량 처리하지 않는지 | `grep -n 'first_scan' meeting_minutes_app/meeting_pipeline/audio_watcher.py` | 존재 → N-3 해소. 대기열은 `GET /watcher/pending` |
 | 전역 일시정지 존재 | `grep -n 'automation_paused' meeting_minutes_app/common/spend_guard.py` | 존재 → N-6 해소 |
 | 벤더 전환이 세션에 남는지 | `grep -n 'stt_fallback_used' web/backend/database.py` | 컬럼 존재 → N-25 는 배치 경로까지 해소 |
+| WS Origin 검증 존재 | `grep -n 'ws_reject_foreign_origin' web/backend/api/realtime.py` | 존재 → N-8 해소. `accept()` **전에** 검사한다 |
+| Origin 허용 목록이 한 곳인지 | `grep -rn 'ALLOWED_ORIGIN_REGEX' web/backend/` | `security.py` 정의 + `app.py` CORS 가 그 값을 쓴다 |
+| shutdown 이 graceful 인지 | `grep -n 'register_shutdown_handle' meeting_minutes_app/` | 두 런처가 같은 함수로 Server 핸들 등록 → N-7 해소 |
+| 실행 세션 토큰(SEC-002) | `grep -rn 'session_token\|bootstrap' web/backend/` | **아직 없음** — Origin 검증이 임시 방어다. 있다고 쓰면 틀린다 |
 
 ## 6. archive/ 와 이력 주의
 

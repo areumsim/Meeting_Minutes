@@ -54,7 +54,8 @@ SCHEMA: List[Dict[str, Any]] = [
             {"section": "models", "key": "llm", "label": "회의록 생성 AI", "type": "select", "default": "gpt", "options": [{"value": "gpt", "label": "GPT (OpenAI)"}, {"value": "claude", "label": "Claude (Anthropic)"}], "desc": "기본 GPT(OpenAI 키만 필요). Claude 선택 시 Anthropic 키 별도 필요."},
             {"section": "models", "key": "stt", "label": "음성 인식(STT) 모델", "type": "select", "default": "gpt-4o-mini-transcribe", "options": [{"value": "gpt-4o-mini-transcribe", "label": "gpt-4o-mini-transcribe — 저렴·빠름 ($0.003/분)"}, {"value": "gpt-4o-transcribe", "label": "gpt-4o-transcribe — 고정확 ($0.006/분)"}, {"value": "gpt-4o-transcribe-diarize", "label": "gpt-4o-transcribe-diarize — 화자분리(배치 전용)"}, {"value": "whisper-1", "label": "whisper-1 — 구형·안정"}], "desc": "실시간 화면에 먼저 뜨는 전사와 배치 처리가 이 모델을 씁니다. 2단계 보정이 켜져 있으면 확정본은 '보정 전사 모델'(기본 gpt-4o-transcribe)이 다시 만듭니다. 실시간 인식 정확도가 아쉬우면 gpt-4o-transcribe로 올리세요."},
             {"section": "models", "key": "stt_fallback", "label": "STT 1차 폴백 모델(OpenAI)", "type": "select", "default": "gpt-4o-transcribe", "options": [{"value": "gpt-4o-transcribe", "label": "gpt-4o-transcribe — 고정확"}, {"value": "gpt-4o-mini-transcribe", "label": "gpt-4o-mini-transcribe — 저렴"}, {"value": "whisper-1", "label": "whisper-1 — 구형·안정"}], "desc": "기본 STT 모델이 실패하면 같은 OpenAI 내에서 먼저 이 모델로 재시도합니다."},
-            {"section": "models", "key": "stt_groq", "label": "STT 2차 폴백 모델(Groq)", "type": "select", "default": "whisper-large-v3-turbo", "options": [{"value": "whisper-large-v3-turbo", "label": "whisper-large-v3-turbo — 빠름·저렴 ($0.04/시간)"}, {"value": "whisper-large-v3", "label": "whisper-large-v3 — 고정확 ($0.111/시간)"}], "desc": "OpenAI가 통째로 실패할 때 다른 벤더인 Groq로 폴백합니다. 위 'Groq API 키'가 있어야 동작. 가격은 전사 1시간당(변동 가능)."},
+            {"section": "stt", "key": "groq_fallback", "label": "Groq 대체 전사 사용(다른 벤더)", "type": "bool", "default": False, "desc": "켜면 OpenAI가 통째로 실패했을 때 회의 음성이 **다른 회사(Groq)로 전송**됩니다. 전송이 일어나면 회의록 출처에 기록되고 화면에도 표시됩니다. 사내 데이터 정책상 국외 이전·처리 위탁 검토가 끝난 뒤에 켜세요. 기본 꺼짐입니다."},
+            {"section": "models", "key": "stt_groq", "label": "STT 2차 폴백 모델(Groq)", "type": "select", "default": "whisper-large-v3-turbo", "options": [{"value": "whisper-large-v3-turbo", "label": "whisper-large-v3-turbo — 빠름·저렴 ($0.04/시간)"}, {"value": "whisper-large-v3", "label": "whisper-large-v3 — 고정확 ($0.111/시간)"}], "desc": "위 'Groq 대체 전사 사용'을 켰을 때 쓰는 모델. 'Groq API 키'도 있어야 동작합니다. 가격은 전사 1시간당(변동 가능)."},
             {"section": "models", "key": "stt_local", "label": "STT 최종 백업 모델(로컬)", "type": "select", "default": "base", "options": [{"value": "tiny", "label": "tiny — 가장 빠름·저정확"}, {"value": "base", "label": "base — 균형(권장)"}, {"value": "small", "label": "small — 느림·정확"}, {"value": "medium", "label": "medium — 매우 느림·고정확"}, {"value": "large-v3", "label": "large-v3 — 가장 느림·최고정확"}], "desc": "아래 '로컬 STT 최종 백업'을 켰을 때 쓰는 faster-whisper 모델 크기. 인터넷·API가 모두 죽어도 이 PC에서 전사합니다. 클수록 정확하지만 느립니다(CPU 실행)."},
             {"section": "models", "key": "claude_model", "label": "Claude 모델", "type": "select", "default": "claude-opus-4-8", "options": [{"value": "claude-opus-4-8", "label": "Opus 4.8 — 최고 성능 (약 $5/$25)"}, {"value": "claude-sonnet-5", "label": "Sonnet 5 — 균형·빠름 (약 $3/$15)"}, {"value": "claude-haiku-4-5", "label": "Haiku 4.5 — 저렴·빠름 (약 $1/$5)"}, {"value": "claude-opus-4-7", "label": "Opus 4.7 — 구버전"}, {"value": "claude-opus-4-6", "label": "Opus 4.6 — 구버전"}]},
             {"section": "models", "key": "gpt_model", "label": "GPT 모델", "type": "select", "default": "gpt-4o-mini", "options": [{"value": "gpt-4o-mini", "label": "gpt-4o-mini — 저렴·빠름 (추천)"}, {"value": "gpt-4o", "label": "gpt-4o — 고품질·비쌈"}, {"value": "o1", "label": "o1 — 추론(느림·고비용)"}, {"value": "o3-mini", "label": "o3-mini — 추론(경량)"}], "desc": "기본 gpt-4o-mini(저렴). 상세 회의록엔 gpt-4o 권장. o1/o3 계열은 추론 모델(느림·고비용)."},
@@ -71,6 +72,15 @@ SCHEMA: List[Dict[str, Any]] = [
         "fields": [
             {"section": "cost", "key": "monthly_cap_usd", "label": "월 지출 한도 ($)", "type": "number", "default": 0, "desc": "이번 달 예상 지출 합계가 이 값을 넘는 업로드를 거절합니다. 0이면 제한 없음."},
             {"section": "cost", "key": "per_file_cap_usd", "label": "파일당 지출 한도 ($)", "type": "number", "default": 0, "desc": "파일 한 건의 예상 비용이 이 값을 넘으면 거절합니다(실수로 올린 초장시간 녹음 방지). 0이면 제한 없음."},
+        ],
+    },
+    {
+        "id": "automation",
+        "tier": "common",
+        "label": "자동 실행",
+        "desc": "내가 화면을 보고 있지 않을 때 앱이 스스로 하는 일(폴더 자동 감시, 계획 자동화)을 한 번에 제어합니다.",
+        "fields": [
+            {"section": "automation", "key": "paused", "label": "모든 자동 실행 일시 정지", "type": "bool", "default": False, "desc": "켜면 폴더 자동 감시와 계획 자동화가 아무것도 처리하지 않습니다. 개별 '중지'와 달리 이 설정은 앱을 다시 켜도 유지되므로, 자리를 비우는 동안 예상 못 한 비용이 발생하지 않게 하는 데 씁니다. 되돌리면 다음 확인 주기부터 다시 동작합니다."},
         ],
     },
     {
@@ -189,6 +199,7 @@ SCHEMA: List[Dict[str, Any]] = [
             {"section": "wiki_knowledge", "key": "update_proposals_enabled", "label": "위키 업데이트 제안", "type": "bool", "default": True},
             {"section": "wiki_knowledge", "key": "section_index_enabled", "label": "섹션 단위 인덱싱", "type": "bool", "default": True},
             {"section": "vault_watcher", "key": "enabled", "label": "폴더 자동 감시 처리", "type": "bool", "default": False, "desc": "켜 두면 앱 시작 시 폴더 감시를 자동으로 시작합니다. 감시할 폴더는 [설정] 하단 '폴더 자동 감시' 카드에서 추가하세요."},
+            {"section": "vault_watcher", "key": "process_existing", "label": "감시 시작 시 기존 파일도 처리", "type": "bool", "default": False, "desc": "기본값(꺼짐)에서는 감시를 켜기 전부터 폴더에 있던 파일을 자동 처리하지 않고 확인 대기열에 넣습니다. 켜면 폴더에 이미 있던 녹음 전체가 즉시 처리되며 그만큼 비용이 한꺼번에 발생합니다."},
             {"section": "plan_watcher", "key": "enabled", "label": "계획 자동화 자동 시작", "type": "bool", "default": False, "desc": "켜 두면 앱 시작 시 planned 노트 사전 리서치·첨부 녹음 자동 처리를 자동으로 시작합니다(Obsidian 볼트 필요)."},
             {"section": "supermemory", "key": "enabled", "label": "Supermemory 연동", "type": "bool", "default": False},
         ],

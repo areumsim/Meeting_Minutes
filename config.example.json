@@ -23,9 +23,14 @@
     "lan_access": false
   },
   "cost": {
-    "_comment": "API 지출 한도(USD). 0이면 무제한(끔). 업로드 시 예상 비용을 계산해 한도를 넘으면 처리를 거절합니다. 예상치는 대략값이라 실제 청구액과 다를 수 있습니다.",
+    "_comment": "API 지출 한도(USD). 0이면 무제한(끔). 업로드·재생성·폴더 감시·계획 자동화·임베딩이 모두 이 한도를 지납니다. 예상치는 대략값이라 실제 청구액과 다를 수 있습니다.",
     "monthly_cap_usd": 0,
     "per_file_cap_usd": 0
+  },
+  "automation": {
+    "_comment": "내가 화면을 보고 있지 않을 때 앱이 스스로 하는 일(폴더 자동 감시, 계획 자동화)의 전역 제어.",
+    "_paused_comment": "true 면 폴더 자동 감시·계획 자동화가 아무것도 처리하지 않는다. 개별 '중지'(watcher/stop)와 달리 설정값이라 앱을 다시 켜도 유지된다 — 자리를 비우는 동안 예상 못 한 과금을 막는 용도. 되돌리면 다음 확인 주기부터 다시 동작한다. 기본 꺼짐.",
+    "paused": false
   },
   "models": {
     "_comment": "아래 _options 목록에서 선택해 값을 변경하세요.",
@@ -94,6 +99,8 @@
     "trim_silence": false,
     "_translation_review_comment": "번역(EN→KR) 후 원문·번역을 병치해 주제 맥락으로 오역·누락을 재검토·교정. 별도 LLM 호출로 비용↑. 기본 켜짐.",
     "translation_review": true,
+    "_groq_fallback_comment": "true 시 OpenAI STT가 통째로 실패하면 **다른 회사(Groq)로 회의 음성을 전송**해 전사한다. models.stt_groq 모델과 api.groq_api_key 가 함께 필요. 과거에는 이 토글이 없어 키만 있으면 자동 편입됐다(무동의 벤더 전환). 사내 데이터 정책상 국외 이전·처리 위탁 검토가 끝난 뒤 켠다. 기본 꺼짐.",
+    "groq_fallback": false,
     "_local_fallback_comment": "true 시 OpenAI·Groq STT가 모두 실패하면 이 PC에서 faster-whisper로 전사(네트워크·API 무관 최종 백업). 포터블 배포본은 라이브러리 포함(그 외 환경은 pip install faster-whisper). 가중치는 웹 [설정]의 [로컬 백업 모델 준비]로 미리 내려받아야 하며(전사 중 다운로드 안 함), 사용 모델은 models.stt_local. 기본 꺼짐.",
     "local_fallback": false
   },
@@ -249,6 +256,8 @@
   "vault_watcher": {
     "_comment": "음성 파일 폴더 자동 감시 및 처리 파이프라인. enabled:true 로 활성화.",
     "enabled": false,
+    "_process_existing_comment": "false(기본) 면 감시를 켜기 전부터 폴더에 있던 파일은 자동 처리하지 않고 확인 대기열에 넣는다. 과거에는 첫 스캔이 기존 파일 전량을 4-worker 로 즉시 처리해, 감시 폴더를 지정하는 순간 과거 녹음 전체가 한꺼번에 과금됐다(파일당 한도로는 막히지 않는다 — 각 파일이 한도 이하면 전부 통과). true 로 하면 그 옛 동작으로 돌아간다.",
+    "process_existing": false,
     "watch_folders": [],
     "output_folder": "Inbox/Processed Recordings",
     "processed_state_path": "data/processed_audio.json",

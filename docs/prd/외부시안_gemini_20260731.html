@@ -1,0 +1,323 @@
+<!DOCTYPE html>
+<html lang="ko" class="theme-corporate">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AI 회의록 시스템 (Commercial Grade)</title>
+  
+  <!-- React & ReactDOM -->
+  <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+  
+  <!-- Babel for JSX -->
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+
+  <!-- 테마별 Custom CSS 변수 및 스타일 -->
+  <style>
+    /* 1. Corporate Theme (Light Professional) */
+    html.theme-corporate {
+      --bg-main: #f8fafc;
+      --bg-card: #ffffff;
+      --border-color: #e2e8f0;
+      --text-main: #0f172a;
+      --text-muted: #64748b;
+      --primary: #4f46e5;
+      --primary-hover: #4338ca;
+      --accent: #10b981;
+    }
+
+    /* 2. Dark Pro Theme (High Contrast Productivity) */
+    html.theme-dark-pro {
+      --bg-main: #09090b;
+      --bg-card: #18181b;
+      --border-color: #27272a;
+      --text-main: #f4f4f5;
+      --text-muted: #a1a1aa;
+      --primary: #8b5cf6;
+      --primary-hover: #7c3aed;
+      --accent: #22d3ee;
+    }
+
+    /* 3. Soft Neutral Theme (Warm Minimal) */
+    html.theme-soft-neutral {
+      --bg-main: #fafaf9;
+      --bg-card: #f5f5f4;
+      --border-color: #e7e5e4;
+      --text-main: #292524;
+      --text-muted: #78716c;
+      --primary: #0d9488;
+      --primary-hover: #0f766e;
+      --accent: #f59e0b;
+    }
+
+    body {
+      background-color: var(--bg-main);
+      color: var(--text-main);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      transition: background-color 0.3s ease, color 0.3s ease;
+    }
+
+    .app-card {
+      background-color: var(--bg-card);
+      border: 1px solid var(--border-color);
+    }
+  </style>
+</head>
+<body class="min-h-screen flex flex-col">
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect, useRef } = React;
+
+    // --- [IndexedDB Utility for Local First Storage] ---
+    const DB_NAME = 'AIMinutesDB';
+    const initDB = () => {
+      return new Promise((resolve) => {
+        const request = indexedDB.open(DB_NAME, 1);
+        request.onupgradeneeded = (e) => {
+          const db = e.target.result;
+          if (!db.objectStoreNames.contains('meetings')) {
+            db.createObjectStore('meetings', { keyPath: 'id' });
+          }
+        };
+        request.onsuccess = () => resolve(request.result);
+      });
+    };
+
+    const saveMeetingLocal = async (meeting) => {
+      const db = await initDB();
+      const tx = db.transaction('meetings', 'readwrite');
+      tx.objectStore('meetings').put(meeting);
+    };
+
+    // --- [Main App Component] ---
+    function App() {
+      // 1. Theme State
+      const [currentTheme, setCurrentTheme] = useState('corporate');
+      
+      // 2. Connection & Recording State
+      const [isWSConnected, setIsWSConnected] = useState(false);
+      const [isRecording, setIsRecording] = useState(false);
+      const [isAnalyzing, setIsAnalyzing] = useState(false);
+
+      // 3. Meeting Data State
+      const [transcript, setTranscript] = useState([
+        { id: '1', speaker: '참석자 A', text: '오늘 AI 회의록 시스템 구축 건 건에 대해 논의를 시작해보겠습니다.', timestamp: 0 },
+        { id: '2', speaker: '참석자 B', text: '윈도우 .exe 배포 환경과 iOS 지원을 고려해서 로컬 저장소 위주로 설계되었나요?', timestamp: 4 }
+      ]);
+      const [summary, setSummary] = useState('회의 요약 정보가 이 영역에 생성됩니다.');
+
+      // Theme Switcher Effect
+      useEffect(() => {
+        const root = document.documentElement;
+        root.className = `theme-${currentTheme}`;
+      }, [currentTheme]);
+
+      // Lucide Icons Render
+      useEffect(() => {
+        if (window.lucide) {
+          window.lucide.createIcons();
+        }
+      }, [currentTheme, isRecording, isAnalyzing, transcript]);
+
+      // Mock WebSocket Connection
+      const toggleWSConnection = () => {
+        setIsWSConnected((prev) => !prev);
+      };
+
+      // Recording & Batch Diarization Workflow
+      const handleToggleRecording = () => {
+        if (!isRecording) {
+          setIsRecording(true);
+        } else {
+          // 녹음 종료 시: 일괄 화자 분석(Batch Diarization) 트리거
+          setIsRecording(false);
+          setIsAnalyzing(true);
+
+          setTimeout(() => {
+            const newTranscript = [
+              ...transcript,
+              { id: '3', speaker: '화자 A (이팀장)', text: '네, IndexedDB를 통해 보안성을 높였고 백엔드 분석도 배치 방식으로 완료했습니다.', timestamp: 9 },
+              { id: '4', speaker: '화자 B (김수석)', text: '좋습니다. 내보내기 기능 및 사용자 테마도 정상 동작하는군요.', timestamp: 14 }
+            ];
+            setTranscript(newTranscript);
+            setSummary('1. AI 회의록 시스템 배포 아키텍처 확정 (Local First, IndexedDB 적용)\n2. 녹음 종료 후 일괄 화자 분석(Batch Diarization) 정상 동작 검증 완료');
+            setIsAnalyzing(false);
+
+            // IndexedDB에 최종 데이터 자동 저장
+            saveMeetingLocal({
+              id: Date.now().toString(),
+              title: 'AI 사업 기획 회의',
+              date: new Date().toISOString(),
+              transcript: newTranscript,
+              summary: '1. AI 회의록 시스템 배포 아키텍처 확정...'
+            });
+          }, 2500);
+        }
+      };
+
+      // Speaker Name Edit Helper
+      const handleUpdateSpeaker = (id, newSpeaker) => {
+        setTranscript((prev) =>
+          prev.map((item) => (item.id === id ? { ...item, speaker: newSpeaker } : item))
+        );
+      };
+
+      return (
+        <div className="flex-1 flex flex-col max-w-7xl w-full mx-auto p-4 md:p-6 gap-6">
+          
+          <!-- Header & Theme Selector -->
+          <header className="app-card p-4 rounded-2xl flex flex-wrap items-center justify-between gap-4 shadow-sm">
+            <div className="flex items-center gap-3">
+              <div className="p-2.5 rounded-xl bg-[var(--primary)] text-white">
+                <i data-lucide="mic" class="w-6 h-6"></i>
+              </div>
+              <div>
+                <h1 className="text-lg font-bold">AI Meeting Minutes Studio</h1>
+                <p className="text-xs text-[var(--text-muted)]">Enterprise Hybrid Client (.exe / iOS ready)</p>
+              </div>
+            </div>
+
+            <!-- Theme Selector Buttons -->
+            <div className="flex items-center gap-1.5 p-1 bg-black/5 rounded-xl">
+              {[
+                { id: 'corporate', label: 'Corporate' },
+                { id: 'dark-pro', label: 'Dark Pro' },
+                { id: 'soft-neutral', label: 'Soft Neutral' }
+              ].map((t) => (
+                <button
+                  key={t.id}
+                  onClick={() => setCurrentTheme(t.id)}
+                  className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all ${
+                    currentTheme === t.id
+                      ? 'bg-[var(--bg-card)] shadow-sm text-[var(--text-main)]'
+                      : 'text-[var(--text-muted)] hover:text-[var(--text-main)]'
+                  }`}
+                >
+                  {t.label}
+                </button>
+              ))}
+            </div>
+          </header>
+
+          <!-- Control Bar & Network Status -->
+          <div className="app-card p-4 rounded-2xl flex flex-wrap items-center justify-between gap-4 shadow-sm">
+            <div className="flex items-center gap-4">
+              <!-- WebSocket Status Badge -->
+              <button
+                onClick={toggleWSConnection}
+                className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-semibold border transition-all ${
+                  isWSConnected
+                    ? 'bg-emerald-500/10 text-emerald-600 border-emerald-500/30'
+                    : 'bg-rose-500/10 text-rose-500 border-rose-500/30'
+                }`}
+              >
+                <span className={`w-2 h-2 rounded-full ${isWSConnected ? 'bg-emerald-500 animate-pulse' : 'bg-rose-500'}`}></span>
+                {isWSConnected ? 'WebSocket 연결됨 (Server LAN)' : 'WebSocket 끊김 (클릭하여 재연결)'}
+              </button>
+
+              <span className="text-xs text-[var(--text-muted)]">| 저장소: IndexedDB (Local PC)</span>
+            </div>
+
+            <!-- Record Control Button -->
+            <button
+              onClick={handleToggleRecording}
+              disabled={isAnalyzing}
+              className={`flex items-center gap-2 px-5 py-2.5 rounded-xl font-semibold text-sm transition-all shadow-md active:scale-95 ${
+                isRecording
+                  ? 'bg-rose-600 hover:bg-rose-700 text-white animate-pulse'
+                  : 'bg-[var(--primary)] hover:opacity-90 text-white'
+              } disabled:opacity-50`}
+            >
+              <i data-lucide={isRecording ? "square" : "mic"} class="w-4 h-4"></i>
+              {isRecording ? '녹음 중지 및 화자 분석 요청' : '회의 녹음 시작'}
+            </button>
+          </div>
+
+          <!-- Main Content Grid -->
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 flex-1">
+            
+            <!-- Left Panel: Realtime & Batch Transcript Area (7 cols) -->
+            <div className="lg:col-span-7 app-card rounded-2xl p-5 flex flex-col shadow-sm">
+              <div className="flex items-center justify-between pb-4 mb-4 border-b border-[var(--border-color)]">
+                <h2 className="text-base font-bold flex items-center gap-2">
+                  <i data-lucide="file-text" class="w-4 h-4 text-[var(--primary)]"></i>
+                  회의록 발언 대화록 (Transcript)
+                </h2>
+                {isAnalyzing && (
+                  <span className="text-xs text-[var(--primary)] font-semibold animate-pulse flex items-center gap-1">
+                    <i data-lucide="loader" class="w-3 h-3 animate-spin"></i>
+                    일괄 화자 분석 중...
+                  </span>
+                )}
+              </div>
+
+              <!-- Transcript List -->
+              <div className="flex-1 space-y-3 overflow-y-auto max-h-[500px] pr-2">
+                {transcript.map((item) => (
+                  <div key={item.id} className="p-3.5 rounded-xl bg-black/5 flex flex-col gap-1.5 border border-transparent hover:border-[var(--border-color)] transition-all">
+                    <div className="flex items-center justify-between">
+                      <input
+                        type="text"
+                        value={item.speaker}
+                        onChange={(e) => handleUpdateSpeaker(item.id, e.target.value)}
+                        className="text-xs font-bold bg-transparent border-b border-transparent hover:border-[var(--border-color)] focus:border-[var(--primary)] focus:outline-none px-0.5"
+                      />
+                      <span className="text-[11px] font-mono text-[var(--primary)] cursor-pointer hover:underline">
+                        [{new Date(item.timestamp * 1000).toISOString().substr(14, 5)}]
+                      </span>
+                    </div>
+                    <p className="text-sm leading-relaxed">{item.text}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <!-- Right Panel: Summary & Export Area (5 cols) -->
+            <div className="lg:col-span-5 app-card rounded-2xl p-5 flex flex-col shadow-sm">
+              <div className="flex items-center justify-between pb-4 mb-4 border-b border-[var(--border-color)]">
+                <h2 className="text-base font-bold flex items-center gap-2">
+                  <i data-lucide="sparkles" class="w-4 h-4 text-[var(--accent)]"></i>
+                  AI 요약 결과
+                </h2>
+                <div className="flex items-center gap-2">
+                  <button onClick={() => alert('Word 문서로 내보냅니다.')} className="p-1.5 rounded-lg hover:bg-black/5 text-xs font-semibold">Word</button>
+                  <button onClick={() => alert('PDF로 내보냅니다.')} className="p-1.5 rounded-lg hover:bg-black/5 text-xs font-semibold">PDF</button>
+                </div>
+              </div>
+
+              <textarea
+                value={summary}
+                onChange={(e) => setSummary(e.target.value)}
+                className="flex-1 w-full p-4 rounded-xl bg-black/5 border border-transparent focus:border-[var(--primary)] focus:outline-none text-sm leading-relaxed resize-none min-h-[250px]"
+                placeholder="녹음이 완료되면 회의 요약문이 여기에 생성됩니다..."
+              />
+
+              <div className="mt-4 pt-4 border-t border-[var(--border-color)] flex justify-end">
+                <button
+                  onClick={() => alert('로컬 IndexedDB 저장 완료')}
+                  className="px-4 py-2 rounded-xl border border-[var(--border-color)] text-xs font-semibold hover:bg-black/5 flex items-center gap-1.5"
+                >
+                  <i data-lucide="save" class="w-3.5 h-3.5"></i>
+                  로컬 수동 저장
+                </button>
+              </div>
+            </div>
+
+          </div>
+        </div>
+      );
+    }
+
+    // Render App
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<App />);
+  </script>
+</body>
+</html>

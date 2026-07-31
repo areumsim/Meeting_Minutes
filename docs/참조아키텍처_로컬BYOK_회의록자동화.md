@@ -5,7 +5,7 @@
 > 코드 구조는 [`ARCHITECTURE.md`](ARCHITECTURE.md)를 보세요.
 > 아키텍처를 바꿀 때는 이 문서와 `SETUP_NEW_TEAM.md`를 함께 고칩니다(유지 지점 단일화).
 
-작성일: 2026-07-30 · 근거 PRD: `PRD_Natively_적용_20260730.md` 트랙 C
+작성일: 2026-07-30 · 근거 PRD: [`prd/PRD_Natively_적용_20260730.md`](prd/PRD_Natively_적용_20260730.md) 트랙 C
 
 ---
 

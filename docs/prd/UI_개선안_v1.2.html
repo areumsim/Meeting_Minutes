@@ -1,0 +1,1536 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<!-- 개선: maximum-scale / user-scalable 제거 (WCAG 2.2 AA · 1.4.4 텍스트 크기 조정) -->
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<!-- 개선: 로컬 전용 경계에 맞춘 CSP.
+     - connect-src 는 자기 자신(loopback)만 허용. 외부 AI API 직접 호출 금지(SEC-006).
+     - script-src 에서 unsafe-inline / unsafe-eval 제거를 전제로 함(빌드 시 nonce 사용).
+     이 목업 파일은 정적 시연용이라 style/script 인라인을 사용하지만,
+     실제 제품 index.html 의 목표 정책은 아래 주석과 같다.
+
+     default-src 'self';
+     connect-src 'self' http://127.0.0.1:* ws://127.0.0.1:*;
+     script-src 'self' 'nonce-{빌드시생성}';
+     style-src  'self' 'nonce-{빌드시생성}';
+     font-src   'self'; img-src 'self' data: blob:;
+     media-src  'self' blob: mediastream:;
+     object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none';
+-->
+<title>AI Minutes · UI 개선안 프로토타입 v1.2</title>
+<style>
+/* ============================================================
+   1. 디자인 토큰
+   폰트: 외부 폰트 의존 없음(오프라인 사내망 전제). 숫자는 등폭 + tabular-nums.
+   색: 상태색은 배경/전경 쌍으로만 사용하고 본문 대비 4.5:1 이상을 만족시킨다.
+   ============================================================ */
+:root{
+  --font-sans:"Pretendard","Malgun Gothic",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --font-num:ui-monospace,"Cascadia Mono","Consolas","D2Coding",monospace;
+
+  --bg:#f2f5f7;
+  --surface:#ffffff;
+  --surface-sunken:#f7f9fa;
+  --line:#dde3e8;
+  --line-strong:#c4ccd4;
+
+  --ink:#12171c;        /* 본문 · 대비 15:1 */
+  --ink-2:#3d4750;      /* 보조 · 대비 9:1  */
+  --ink-3:#5d6873;      /* 캡션 · 대비 5.6:1 (기존 brand-400 대비 미달 대체) */
+
+  --accent:#0d6b60;     /* 로컬 실행 · 포커스 · 활성 표식에만 사용 */
+  --accent-weak:#e3f2ef;
+
+  --ok:#0b6b45;   --ok-bg:#e6f4ec;
+  --run:#8a5200;  --run-bg:#fdf1de;
+  --err:#b3261e;  --err-bg:#fdeceb;
+  --info:#1a4fa0; --info-bg:#e9f0fb;
+  --idle:#4d5761; --idle-bg:#eef1f4;
+
+  --r-card:10px; --r-ctl:8px; --r-pill:999px;
+  --shadow:0 1px 2px rgba(16,24,32,.06),0 6px 16px -8px rgba(16,24,32,.18);
+  --tap:44px; /* 최소 터치 타깃 */
+}
+
+*,*::before,*::after{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{
+  background:var(--bg);color:var(--ink);
+  font-family:var(--font-sans);font-size:14px;line-height:1.55;
+  -webkit-font-smoothing:antialiased;
+}
+h1,h2,h3,h4,p,ul,ol{margin:0}
+ul{list-style:none;padding:0}
+button,input,select,textarea{font:inherit;color:inherit}
+.num{font-family:var(--font-num);font-variant-numeric:tabular-nums;letter-spacing:-.01em}
+
+/* 포커스: 모든 조작 요소에서 항상 보이게 */
+:where(a,button,input,select,summary,[tabindex]):focus-visible{
+  outline:2px solid var(--accent);outline-offset:2px;border-radius:6px;
+}
+
+/* 건너뛰기 링크 */
+.skip{position:absolute;left:8px;top:-48px;z-index:99;background:var(--ink);color:#fff;
+  padding:10px 14px;border-radius:var(--r-ctl);transition:top .15s}
+.skip:focus{top:8px}
+
+.sr{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;
+  clip:rect(0 0 0 0);white-space:nowrap;border:0}
+
+@media (prefers-reduced-motion:reduce){
+  *{animation-duration:.001ms!important;animation-iteration-count:1!important;transition-duration:.001ms!important}
+}
+
+/* ============================================================
+   2. 프로토타입 껍데기 (제품 UI 아님)
+   ============================================================ */
+.proto{max-width:1240px;margin:0 auto;padding:20px 16px 64px}
+.proto-head{display:flex;flex-wrap:wrap;gap:12px;align-items:baseline;margin-bottom:14px}
+.proto-head h1{font-size:18px;font-weight:700;letter-spacing:-.02em}
+.proto-head p{color:var(--ink-3);font-size:13px}
+.proto-tabs{display:flex;flex-wrap:wrap;gap:6px;margin-bottom:18px;
+  border-bottom:1px solid var(--line);padding-bottom:10px}
+.proto-tabs button{
+  background:var(--surface);border:1px solid var(--line);color:var(--ink-2);
+  padding:8px 13px;border-radius:var(--r-pill);cursor:pointer;font-size:13px;font-weight:600;
+}
+.proto-tabs button[aria-selected="true"]{background:var(--ink);border-color:var(--ink);color:#fff}
+.proto-note{background:#fffbe8;border:1px solid #f0e2b0;border-radius:var(--r-card);
+  padding:10px 14px;font-size:12.5px;color:#6b5613;margin-bottom:18px}
+.screen[hidden]{display:none}
+.caption{font-size:12px;color:var(--ink-3);margin:18px 0 8px;font-weight:600;letter-spacing:.02em}
+
+/* ============================================================
+   3. 앱 셸
+   ============================================================ */
+.app{background:var(--surface);border:1px solid var(--line);border-radius:14px;
+  overflow:hidden;box-shadow:var(--shadow)}
+.app-body{display:flex;min-height:620px}
+
+/* --- 3.1 시스템 상태 바 (신규 · UX-006)
+       "이 앱이 지금 어떤 상태인지"를 항상 한 줄로 보여준다. --- */
+.statusbar{display:flex;align-items:center;gap:14px;flex-wrap:wrap;
+  padding:0 14px;height:40px;background:var(--surface-sunken);
+  border-bottom:1px solid var(--line);font-size:12.5px;color:var(--ink-2)}
+.statusbar .dot{width:8px;height:8px;border-radius:50%;background:var(--ok);display:inline-block;
+  margin-right:6px;box-shadow:0 0 0 3px rgba(11,107,69,.14)}
+.statusbar .dot.warn{background:var(--run);box-shadow:0 0 0 3px rgba(138,82,0,.14)}
+.statusbar .dot.off{background:var(--err);box-shadow:0 0 0 3px rgba(179,38,30,.14)}
+.statusbar .sep{width:1px;height:14px;background:var(--line-strong)}
+.statusbar .grow{margin-left:auto}
+.statusbar button{background:none;border:0;color:var(--ink-2);cursor:pointer;
+  padding:6px 8px;border-radius:6px;font-size:12.5px}
+.statusbar button:hover{background:#e9edf1;color:var(--ink)}
+
+/* --- 3.2 사이드바: 평면 10개 → 3개 그룹 --- */
+.side{width:236px;flex:none;background:var(--surface);border-right:1px solid var(--line);
+  display:flex;flex-direction:column;padding:14px 12px}
+.brand{display:flex;align-items:center;gap:9px;padding:6px 8px 16px}
+.brand .mark{width:30px;height:30px;border-radius:8px;background:var(--ink);color:#fff;
+  display:grid;place-items:center}
+.brand b{font-size:15px;letter-spacing:-.02em}
+.navgroup{margin-bottom:14px}
+.navgroup>.lbl{font-size:11px;font-weight:700;color:var(--ink-3);letter-spacing:.06em;
+  padding:0 10px 6px}
+.navgroup a{display:flex;align-items:center;gap:10px;padding:9px 10px;border-radius:var(--r-ctl);
+  color:var(--ink-2);text-decoration:none;font-size:13.5px;font-weight:500;min-height:38px}
+.navgroup a:hover{background:var(--surface-sunken);color:var(--ink)}
+.navgroup a[aria-current="page"]{background:var(--accent-weak);color:#0a4b43;font-weight:700;
+  box-shadow:inset 2px 0 0 var(--accent)}
+.navgroup a .badge{margin-left:auto;font-size:11px;font-weight:700;color:var(--run);
+  background:var(--run-bg);border-radius:var(--r-pill);padding:1px 7px}
+.navgroup a[aria-disabled="true"]{color:var(--ink-3);opacity:.75;cursor:default}
+.navgroup a[aria-disabled="true"] .why{margin-left:auto;font-size:11px;color:var(--ink-3)}
+.side .foot{margin-top:auto;border-top:1px solid var(--line);padding-top:10px}
+
+/* --- 3.3 본문 --- */
+.main{flex:1;min-width:0;padding:22px 26px 34px;background:var(--bg)}
+.page-head{display:flex;align-items:flex-start;gap:16px;flex-wrap:wrap;margin-bottom:16px}
+.page-head h2{font-size:20px;font-weight:700;letter-spacing:-.02em}
+.page-head p{color:var(--ink-3);font-size:13px;margin-top:2px}
+.page-head .actions{margin-left:auto;display:flex;gap:8px}
+.wrap{max-width:860px}
+
+/* ============================================================
+   4. 공통 컴포넌트
+   ============================================================ */
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:7px;
+  min-height:38px;padding:8px 14px;border-radius:var(--r-ctl);cursor:pointer;
+  font-size:13.5px;font-weight:600;border:1px solid transparent;background:var(--surface);
+  color:var(--ink);border-color:var(--line-strong);transition:background .12s,border-color .12s}
+.btn:hover{background:var(--surface-sunken)}
+.btn.primary{background:var(--ink);color:#fff;border-color:var(--ink)}
+.btn.primary:hover{background:#252d35}
+.btn.danger{color:var(--err);border-color:#f0c4c1;background:var(--surface)}
+.btn.danger:hover{background:var(--err-bg)}
+.btn.ghost{border-color:transparent;background:transparent;color:var(--ink-2)}
+.btn.ghost:hover{background:var(--surface-sunken)}
+.btn.lg{min-height:46px;padding:12px 18px;font-size:14.5px}
+.btn[disabled]{opacity:.45;cursor:not-allowed}
+.btn .ico{width:16px;height:16px;flex:none}
+
+.card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r-card);padding:16px}
+.card+.card{margin-top:12px}
+.card>h3{font-size:14px;font-weight:700;margin-bottom:4px}
+.card .sub{font-size:12.5px;color:var(--ink-3)}
+
+/* 상태 칩: 색 + 아이콘 + 글자. 색만으로 구분하지 않는다(UX-005) */
+.chip{display:inline-flex;align-items:center;gap:5px;padding:2px 9px;border-radius:var(--r-pill);
+  font-size:11.5px;font-weight:700;line-height:1.7;white-space:nowrap}
+.chip svg{width:12px;height:12px}
+.chip.ok{background:var(--ok-bg);color:var(--ok)}
+.chip.run{background:var(--run-bg);color:var(--run)}
+.chip.err{background:var(--err-bg);color:var(--err)}
+.chip.info{background:var(--info-bg);color:var(--info)}
+.chip.idle{background:var(--idle-bg);color:var(--idle)}
+
+.banner{display:flex;gap:11px;padding:12px 14px;border-radius:var(--r-card);
+  border:1px solid;font-size:13px;align-items:flex-start}
+.banner .ico{flex:none;margin-top:1px}
+.banner b{display:block;font-size:13.5px;margin-bottom:2px}
+.banner.warn{background:var(--run-bg);border-color:#eccf9a;color:#6d4200}
+.banner.err{background:var(--err-bg);border-color:#f0bcb8;color:#8c1e17}
+.banner.info{background:var(--info-bg);border-color:#c3d6f2;color:#153f80}
+.banner .acts{margin-left:auto;display:flex;gap:8px;flex:none}
+
+.field{margin-bottom:14px}
+.field label{display:block;font-size:12.5px;font-weight:700;color:var(--ink-2);margin-bottom:5px}
+.field .hint{font-size:12px;color:var(--ink-3);margin-top:5px}
+.field .err-msg{font-size:12px;color:var(--err);margin-top:5px;display:flex;gap:5px;align-items:center}
+.input,select.input{width:100%;min-height:40px;padding:9px 12px;border:1px solid var(--line-strong);
+  border-radius:var(--r-ctl);background:var(--surface)}
+.input[aria-invalid="true"]{border-color:var(--err);background:#fffafa}
+
+kbd{font-family:var(--font-num);font-size:11px;background:var(--surface-sunken);
+  border:1px solid var(--line-strong);border-bottom-width:2px;border-radius:5px;padding:1px 5px}
+
+/* ============================================================
+   5. 시그니처 컴포넌트 : 처리 파이프라인 스텝바
+   준비 → 업로드 → 음성 인식 → 회의록 생성 → 저장
+   단계별 상태(완료/진행/대기/실패/건너뜀)와 "여기서부터 과금" 지점을 함께 보여준다.
+   ============================================================ */
+.pipe{display:flex;gap:6px;margin:14px 0 10px}
+.pipe .step{flex:1;min-width:0}
+.pipe .bar{height:6px;border-radius:var(--r-pill);background:var(--line);overflow:hidden}
+.pipe .bar i{display:block;height:100%;background:var(--ink-3);border-radius:inherit}
+.pipe .step[data-state="done"] .bar i{width:100%;background:var(--ok)}
+.pipe .step[data-state="run"]  .bar i{width:62%;background:var(--run);
+  background-image:linear-gradient(90deg,rgba(255,255,255,.45) 25%,transparent 25%,transparent 50%,rgba(255,255,255,.45) 50%,rgba(255,255,255,.45) 75%,transparent 75%);
+  background-size:14px 14px;animation:march 1s linear infinite}
+.pipe .step[data-state="wait"] .bar i{width:0}
+.pipe .step[data-state="fail"] .bar i{width:100%;background:var(--err)}
+.pipe .step[data-state="skip"] .bar{background:repeating-linear-gradient(90deg,var(--line),var(--line) 4px,transparent 4px,transparent 8px)}
+@keyframes march{to{background-position:14px 0}}
+.pipe .lbl{display:flex;align-items:center;gap:4px;font-size:11.5px;color:var(--ink-3);margin-top:6px}
+.pipe .step[data-state="run"] .lbl{color:var(--run);font-weight:700}
+.pipe .step[data-state="done"] .lbl{color:var(--ink-2)}
+.pipe .step[data-state="fail"] .lbl{color:var(--err);font-weight:700}
+.pipe .lbl .cost{font-size:10px;border:1px solid currentColor;border-radius:4px;padding:0 3px;opacity:.75}
+
+.jobmeta{display:flex;flex-wrap:wrap;gap:6px 18px;font-size:12.5px;color:var(--ink-2)}
+.jobmeta b{font-family:var(--font-num);font-variant-numeric:tabular-nums;font-weight:700;color:var(--ink)}
+
+/* ============================================================
+   6. 세션 행 — 카드 전체 클릭(div) → 링크 + 액션 분리
+   ============================================================ */
+.slist{display:flex;flex-direction:column;gap:8px}
+.srow{display:flex;align-items:stretch;background:var(--surface);border:1px solid var(--line);
+  border-radius:var(--r-card)}
+.srow:has(.slink:hover),.srow:has(.slink:focus-visible){border-color:var(--line-strong);box-shadow:var(--shadow)}
+.slink{flex:1;min-width:0;display:block;padding:12px 14px;text-decoration:none;color:inherit;
+  border-radius:var(--r-card) 0 0 var(--r-card)}
+.slink .t{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.slink .t h3{font-size:14px;font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:100%}
+.slink .m{display:flex;flex-wrap:wrap;gap:4px 14px;font-size:12px;color:var(--ink-3);margin-top:4px}
+.slink .m .num{color:var(--ink-2)}
+.srow .row-acts{display:flex;align-items:center;gap:2px;padding:6px 8px 6px 0;flex:none}
+.iconbtn{width:var(--tap);height:var(--tap);display:grid;place-items:center;background:none;
+  border:0;border-radius:var(--r-ctl);color:var(--ink-3);cursor:pointer}
+.iconbtn:hover{background:var(--surface-sunken);color:var(--ink)}
+.iconbtn.danger:hover{background:var(--err-bg);color:var(--err)}
+.srow .fix{flex-basis:100%;margin:0 14px 12px;padding:10px 12px;background:var(--err-bg);
+  border-radius:var(--r-ctl);font-size:12.5px;color:#8c1e17}
+.srow.has-fix{flex-wrap:wrap}
+.srow.has-fix .slink{flex-basis:calc(100% - 100px)}
+.srow .fix .acts{display:flex;gap:8px;margin-top:9px;flex-wrap:wrap}
+.errcode{font-family:var(--font-num);font-size:11px;background:#fff;border:1px solid #f0bcb8;
+  border-radius:4px;padding:0 5px;color:#8c1e17}
+
+/* 선택 모드 툴바 */
+.selbar{display:flex;align-items:center;gap:10px;padding:9px 12px;background:var(--ink);
+  color:#fff;border-radius:var(--r-card);font-size:13px;margin-bottom:10px}
+.selbar .grow{margin-left:auto;display:flex;gap:8px}
+.selbar .btn{background:transparent;border-color:#4b555f;color:#fff}
+.selbar .btn:hover{background:#2a333c}
+.selbar .btn.danger{color:#ffb4ae;border-color:#7a3b37}
+
+/* 필터 줄 */
+.filters{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}
+.filters .search{position:relative;flex:1;min-width:220px}
+.filters .search .input{padding-left:36px}
+.filters .search svg{position:absolute;left:11px;top:50%;transform:translateY(-50%);color:var(--ink-3)}
+.filters select.input{width:auto;min-width:130px}
+
+/* ============================================================
+   7. 상태(빈/로딩/오류) · 다이얼로그 · 토스트
+   ============================================================ */
+.empty{text-align:center;padding:46px 20px;border:1px dashed var(--line-strong);
+  border-radius:var(--r-card);background:var(--surface)}
+.empty .mark{width:44px;height:44px;border-radius:12px;background:var(--surface-sunken);
+  display:grid;place-items:center;margin:0 auto 12px;color:var(--ink-3)}
+.empty h3{font-size:15px;font-weight:700;margin-bottom:4px}
+.empty p{color:var(--ink-3);font-size:13px;margin-bottom:14px}
+.empty .acts{display:flex;gap:8px;justify-content:center}
+
+.sk{background:linear-gradient(90deg,#eef1f4 25%,#e4e9ee 37%,#eef1f4 63%);
+  background-size:400% 100%;animation:sk 1.4s ease infinite;border-radius:6px}
+@keyframes sk{0%{background-position:100% 50%}100%{background-position:0 50%}}
+
+.dlg{background:var(--surface);border:1px solid var(--line-strong);border-radius:12px;
+  box-shadow:0 12px 40px -12px rgba(16,24,32,.35);max-width:480px;padding:20px}
+.dlg h3{font-size:16px;font-weight:700;letter-spacing:-.01em}
+.dlg .body{font-size:13.5px;color:var(--ink-2);margin-top:8px}
+.dlg .foot{display:flex;gap:8px;justify-content:flex-end;margin-top:18px;flex-wrap:wrap}
+.dlg .foot .left{margin-right:auto}
+.kv{border:1px solid var(--line);border-radius:var(--r-ctl);overflow:hidden;margin-top:12px}
+.kv div{display:flex;justify-content:space-between;gap:12px;padding:8px 12px;font-size:12.5px}
+.kv div+div{border-top:1px solid var(--line)}
+.kv dt{color:var(--ink-3)}
+.kv dd{margin:0;font-family:var(--font-num);font-variant-numeric:tabular-nums;font-weight:600}
+.dlggrid{display:grid;gap:16px;grid-template-columns:repeat(auto-fit,minmax(430px,1fr))}
+
+.toast{display:flex;align-items:center;gap:10px;background:var(--ink);color:#fff;
+  border-radius:10px;padding:11px 14px;font-size:13px;max-width:460px}
+.toast .btn{background:transparent;border-color:#4b555f;color:#fff;min-height:30px;padding:4px 10px;margin-left:auto}
+
+/* 설정: 빠른/고급 분리 */
+.setgroup{border:1px solid var(--line);border-radius:var(--r-card);background:var(--surface);
+  overflow:hidden;margin-bottom:12px}
+.setgroup>summary{list-style:none;cursor:pointer;padding:13px 16px;display:flex;
+  align-items:center;gap:9px;font-weight:700;font-size:13.5px}
+.setgroup>summary::-webkit-details-marker{display:none}
+.setgroup>summary .tag{margin-left:auto;font-size:11.5px;font-weight:600;color:var(--ink-3)}
+.setgroup .inner{padding:4px 16px 16px;border-top:1px solid var(--line)}
+.row2{display:grid;gap:14px;grid-template-columns:1fr 1fr}
+.secretline{display:flex;align-items:center;gap:10px;padding:11px 12px;border:1px solid var(--line);
+  border-radius:var(--r-ctl);background:var(--surface-sunken);font-size:13px}
+.secretline .mask{font-family:var(--font-num);color:var(--ink-2)}
+
+/* 온보딩 */
+.onb{max-width:560px;margin:0 auto;padding:8px 0 20px}
+.steps{display:flex;gap:8px;margin-bottom:20px;font-size:12px;color:var(--ink-3)}
+.steps .s{flex:1;padding-top:8px;border-top:3px solid var(--line)}
+.steps .s[data-on="1"]{border-color:var(--accent);color:var(--accent);font-weight:700}
+.steps .s[data-on="done"]{border-color:var(--ok);color:var(--ok)}
+
+/* 모바일 프레임(하단 탭 · 더보기) */
+.phone{width:380px;border:1px solid var(--line-strong);border-radius:22px;overflow:hidden;
+  background:var(--surface);box-shadow:var(--shadow)}
+.phone .top{padding:14px 16px;border-bottom:1px solid var(--line)}
+.phone .content{padding:14px 16px;min-height:210px;background:var(--bg)}
+.tabbar{display:flex;border-top:1px solid var(--line);background:var(--surface)}
+.tabbar a{flex:1;min-height:56px;display:flex;flex-direction:column;align-items:center;
+  justify-content:center;gap:3px;text-decoration:none;color:var(--ink-3);font-size:10.5px;font-weight:600}
+.tabbar a[aria-current="page"]{color:var(--accent)}
+.tabbar a[aria-current="page"] .ic{background:var(--accent-weak);border-radius:8px}
+.tabbar .ic{padding:4px 9px}
+
+/* 반응형: 좁은 폭에서는 사이드바 대신 하단 탭 */
+@media (max-width:840px){
+  .app-body{flex-direction:column}
+  .side{width:auto;border-right:0;border-bottom:1px solid var(--line)}
+  .row2{grid-template-columns:1fr}
+  .main{padding:18px 16px 28px}
+}
+
+/* ============================================================
+   8. 추가 화면용 컴포넌트 (v1.2 — 전체 탭 검토 반영)
+   ============================================================ */
+/* 회의록 상세: 전사 / 결과 2단 */
+.split{display:grid;grid-template-columns:1.15fr .85fr;gap:14px;align-items:start}
+@media (max-width:960px){.split{grid-template-columns:1fr}}
+.panel{background:var(--surface);border:1px solid var(--line);border-radius:var(--r-card);
+  display:flex;flex-direction:column;min-width:0}
+.panel>header{display:flex;align-items:center;gap:9px;padding:12px 14px;border-bottom:1px solid var(--line)}
+.panel>header h3{font-size:13.5px;font-weight:700}
+.panel>header .r{margin-left:auto;display:flex;gap:6px;align-items:center}
+.panel .scroll{padding:12px 14px;max-height:420px;overflow:auto}
+
+.utt{display:grid;grid-template-columns:auto 1fr;gap:4px 10px;padding:9px 10px;border-radius:var(--r-ctl)}
+.utt:hover{background:var(--surface-sunken)}
+.utt .spk{display:inline-flex;align-items:center;gap:5px;font-size:12px;font-weight:700;
+  border:1px dashed var(--line-strong);border-radius:var(--r-pill);padding:1px 9px;background:var(--surface);
+  cursor:text}
+.utt .spk:hover{border-color:var(--accent);border-style:solid}
+.utt .ts{font-family:var(--font-num);font-size:11.5px;color:var(--accent);
+  background:none;border:0;cursor:pointer;padding:0;justify-self:start}
+.utt .ts:hover{text-decoration:underline}
+.utt p{grid-column:1/-1;font-size:13.5px;line-height:1.62}
+.utt.low{background:#fffdf5}
+.utt .flag{font-size:10.5px;font-weight:700;color:var(--run);background:var(--run-bg);
+  border-radius:4px;padding:0 5px}
+
+.sw{display:inline-flex;align-items:center;gap:9px;cursor:pointer;font-size:13px}
+.sw i{width:36px;height:20px;border-radius:var(--r-pill);background:var(--line-strong);
+  position:relative;flex:none;transition:background .15s}
+.sw i::after{content:"";position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;
+  background:#fff;transition:transform .15s}
+.sw[data-on="1"] i{background:var(--accent)}
+.sw[data-on="1"] i::after{transform:translateX(16px)}
+
+.chain{display:flex;flex-wrap:wrap;align-items:center;gap:6px;font-size:12.5px}
+.chain .n{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line-strong);
+  border-radius:var(--r-pill);padding:3px 10px;background:var(--surface)}
+.chain .n b{font-weight:700}
+.chain .n.off{opacity:.5;text-decoration:line-through}
+.chain .arw{color:var(--ink-3)}
+
+.tri{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+@media (max-width:760px){.tri{grid-template-columns:1fr}}
+.seg{display:flex;border:1px solid var(--line-strong);border-radius:var(--r-ctl);overflow:hidden}
+.seg button{flex:1;min-height:38px;border:0;background:var(--surface);cursor:pointer;font-size:13px;
+  font-weight:600;color:var(--ink-2)}
+.seg button+button{border-left:1px solid var(--line-strong)}
+.seg button[aria-pressed="true"]{background:var(--accent-weak);color:#0a4b43}
+
+.tree{font-size:13px}
+.tree>li{border-bottom:1px solid var(--line)}
+.tree>li:last-child{border-bottom:0}
+.tree .l1{display:flex;align-items:center;gap:9px;padding:11px 12px;font-weight:700}
+.tree .l1 .cnt{margin-left:auto;font-size:11.5px;color:var(--ink-3);font-weight:600}
+.tree .l2{padding:0 12px 11px 33px;display:flex;flex-wrap:wrap;gap:6px}
+.tree .l2 span{font-size:12px;color:var(--ink-2);background:var(--surface-sunken);
+  border:1px solid var(--line);border-radius:var(--r-pill);padding:2px 9px}
+.danger-zone{border:1px solid #f0bcb8;border-radius:var(--r-card);background:#fffafa;padding:14px}
+.danger-zone h3{color:var(--err);font-size:13.5px;font-weight:700;margin-bottom:4px}
+</style>
+</head>
+<body>
+<a class="skip" href="#main">본문으로 건너뛰기</a>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false"><defs>
+<g id="i-mic" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><path d="M12 19v3"/></g>
+<g id="i-file" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M9 15h6"/></g>
+<g id="i-list" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h.01M3 12h.01M3 18h.01M8 6h13M8 12h13M8 18h13"/></g>
+<g id="i-home" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.5V21h14V9.5"/></g>
+<g id="i-check" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></g>
+<g id="i-alert" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 8v5M12 16.5h.01"/></g>
+<g id="i-loader" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M21 12a9 9 0 1 1-6.2-8.55"/></g>
+<g id="i-pause" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M9 5v14M15 5v14"/></g>
+<g id="i-cog" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-2.87 1.2V21a2 2 0 1 1-4 0v-.09A1.7 1.7 0 0 0 7.1 19.4a1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 3 15a1.7 1.7 0 0 0-1.55-1H1.3a2 2 0 1 1 0-4h.09A1.7 1.7 0 0 0 3 9a1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 7.36 4.6h.08A1.7 1.7 0 0 0 9 3.05V3a2 2 0 1 1 4 0v.09A1.7 1.7 0 0 0 15 4.6a1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.4 9v.08a1.7 1.7 0 0 0 1.55 1.02h.09a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.55 1Z"/></g>
+<g id="i-folder" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 20a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h5l2 3h7a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2Z"/></g>
+<g id="i-power" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v9"/><path d="M18.4 6.6a9 9 0 1 1-12.8 0"/></g>
+<g id="i-search" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></g>
+<g id="i-trash" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18M8 6V4h8v2M6 6v14a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V6"/></g>
+<g id="i-refresh" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 0 1 15.5-6.2L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-15.5 6.2L3 16"/><path d="M3 21v-5h5"/></g>
+<g id="i-copy" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></g>
+<g id="i-shield" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3 4 6v6c0 5 3.4 8.3 8 9 4.6-.7 8-4 8-9V6Z"/><path d="m9 12 2 2 4-4"/></g>
+<g id="i-book" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4.5A2.5 2.5 0 0 1 6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5Z"/><path d="M4 17.5h16"/></g>
+<g id="i-net" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="6" rx="1"/><rect x="2" y="16" width="6" height="6" rx="1"/><rect x="16" y="16" width="6" height="6" rx="1"/><path d="M5 16v-3h14v3M12 12V8"/></g>
+<g id="i-help" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M9.5 9a2.6 2.6 0 0 1 5 1c0 1.8-2.5 2.3-2.5 3.6"/><path d="M12 17h.01"/></g>
+<g id="i-x" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 6l12 12M18 6 6 18"/></g>
+<g id="i-plus" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 5v14M5 12h14"/></g>
+<g id="i-more" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 12h.01M12 12h.01M19 12h.01"/></g>
+<g id="i-pulse" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12h4l2.5-7 4 14L16 12h5"/></g>
+</defs></svg>
+
+<div class="proto">
+  <div class="proto-head">
+    <h1>AI Minutes · UI 개선안 프로토타입</h1>
+    <p>v1.2 제안 · 정적 목업(실제 데이터 없음) · 현재 스냅샷(2026-07-31)과 PRD v1.0 대조 반영</p>
+  </div>
+
+  <div class="proto-note">
+    이 파일은 <b>구현이 아니라 UI 명세용 목업</b>이다. 각 화면은 PRD의 UX-001~UX-005 및 이번에 추가 제안하는
+    UX-006~UX-014 수용 기준을 시각화한 것이다. 아래 탭 번호는 통합 PRD의 「화면별 사양」 표와 1:1 대응한다.
+    상세 근거와 작업 목록은 같은 폴더의 <span class="num">PRD_v1.0.0.md</span> 문서를 참조한다.
+  </div>
+
+  <div class="proto-tabs" role="tablist" aria-label="화면 선택">
+    <button role="tab" aria-selected="true"  aria-controls="s-home"    id="t-home">1 · 홈</button>
+    <button role="tab" aria-selected="false" aria-controls="s-hist"    id="t-hist">2 · 이력</button>
+    <button role="tab" aria-selected="false" aria-controls="s-job"     id="t-job">3 · 처리 상세</button>
+    <button role="tab" aria-selected="false" aria-controls="s-dialog"  id="t-dialog">4 · 확인 대화상자</button>
+    <button role="tab" aria-selected="false" aria-controls="s-onb"     id="t-onb">5 · 최초 실행</button>
+    <button role="tab" aria-selected="false" aria-controls="s-set"     id="t-set">6 · 설정</button>
+    <button role="tab" aria-selected="false" aria-controls="s-state"   id="t-state">7 · 상태 카탈로그</button>
+    <button role="tab" aria-selected="false" aria-controls="s-doc"      id="t-doc">8 · 회의록 상세 <b>NEW</b></button>
+    <button role="tab" aria-selected="false" aria-controls="s-setia"    id="t-setia">9 · 설정 구조 <b>NEW</b></button>
+    <button role="tab" aria-selected="false" aria-controls="s-auto"     id="t-auto">10 · 자동 실행 <b>NEW</b></button>
+    <button role="tab" aria-selected="false" aria-controls="s-mode"     id="t-mode">11 · 처리 모드 <b>NEW</b></button>
+  </div>
+
+<!-- ==========================================================
+     화면 1 · 홈
+     ========================================================== -->
+<section class="screen" id="s-home" role="tabpanel" aria-labelledby="t-home" tabindex="0">
+  <div class="app">
+    <!-- 시스템 상태 바: 로컬 실행/버전/작업/종료를 항상 노출 (UX-006, OPS-001, OPS-003) -->
+    <div class="statusbar">
+      <span><span class="dot"></span>이 PC에서만 실행 중</span>
+      <span class="sep" aria-hidden="true"></span>
+      <span class="num">127.0.0.1:8765</span>
+      <span class="sep" aria-hidden="true"></span>
+      <span>작업 <b class="num">1</b>건 진행 중</span>
+      <span class="grow"></span>
+      <span class="num" title="빌드 커밋">v1.0.0 · a1b2c3d</span>
+      <button type="button"><svg width="14" height="14" aria-hidden="true"><use href="#i-folder"/></svg> 저장 폴더 열기</button>
+      <button type="button"><svg width="14" height="14" aria-hidden="true"><use href="#i-power"/></svg> 안전하게 종료</button>
+    </div>
+
+    <div class="app-body">
+      <!-- 사이드바: 평면 10개 → 핵심 5 / 지식 도구 / 시스템 3그룹 (UX-002 개정) -->
+      <nav class="side" aria-label="주요 메뉴">
+        <div class="brand">
+          <span class="mark"><svg width="17" height="17" aria-hidden="true"><use href="#i-mic"/></svg></span>
+          <b>AI Minutes</b>
+        </div>
+
+        <div class="navgroup">
+          <div class="lbl" id="g-core">핵심</div>
+          <ul aria-labelledby="g-core">
+            <li><a href="#" aria-current="page"><svg width="17" height="17" aria-hidden="true"><use href="#i-home"/></svg>홈</a></li>
+            <li><a href="#"><svg width="17" height="17" aria-hidden="true"><use href="#i-mic"/></svg>녹음</a></li>
+            <li><a href="#"><svg width="17" height="17" aria-hidden="true"><use href="#i-file"/></svg>파일</a></li>
+            <li><a href="#"><svg width="17" height="17" aria-hidden="true"><use href="#i-list"/></svg>이력<span class="badge">1</span></a></li>
+          </ul>
+        </div>
+
+        <div class="navgroup">
+          <div class="lbl" id="g-know">지식 도구</div>
+          <ul aria-labelledby="g-know">
+            <li><a href="#"><svg width="17" height="17" aria-hidden="true"><use href="#i-book"/></svg>위키 질문</a></li>
+            <li><a href="#"><svg width="17" height="17" aria-hidden="true"><use href="#i-list"/></svg>회의 준비</a></li>
+            <li><a href="#" aria-disabled="true" title="Obsidian 저장소를 설정하면 사용할 수 있습니다">
+                <svg width="17" height="17" aria-hidden="true"><use href="#i-net"/></svg>지식그래프
+                <span class="why">설정 필요</span></a></li>
+          </ul>
+        </div>
+
+        <div class="foot navgroup">
+          <ul>
+            <li><a href="#"><svg width="17" height="17" aria-hidden="true"><use href="#i-cog"/></svg>설정</a></li>
+            <li><a href="#"><svg width="17" height="17" aria-hidden="true"><use href="#i-pulse"/></svg>진단</a></li>
+            <li><a href="#"><svg width="17" height="17" aria-hidden="true"><use href="#i-help"/></svg>도움말</a></li>
+          </ul>
+        </div>
+      </nav>
+
+      <main class="main" id="main">
+        <div class="wrap">
+          <div class="page-head">
+            <div>
+              <h2>홈</h2>
+              <p>회의를 녹음하거나 이미 있는 파일을 회의록으로 만듭니다.</p>
+            </div>
+          </div>
+
+          <!-- 준비 상태 경고: readiness 실패는 작업 시작 전에 막는다 (OPS-001) -->
+          <div class="banner warn" role="status" style="margin-bottom:12px">
+            <span class="ico"><svg width="18" height="18" aria-hidden="true"><use href="#i-alert"/></svg></span>
+            <div>
+              <b>저장 공간이 4.1 GB 남았습니다</b>
+              새 회의 처리를 시작하려면 5 GB 이상이 필요합니다. 오래된 녹음 원본을 정리하면 약 2.6 GB를 확보할 수 있습니다.
+            </div>
+            <span class="acts"><button class="btn" type="button">정리할 항목 보기</button></span>
+          </div>
+
+          <!-- 두 번 안에 핵심 흐름 시작 (UX-002 수용 기준) -->
+          <div class="card" style="display:flex;gap:12px;flex-wrap:wrap;align-items:center">
+            <button class="btn primary lg" type="button" style="flex:1;min-width:200px">
+              <svg class="ico" aria-hidden="true"><use href="#i-mic"/></svg>녹음 시작
+            </button>
+            <button class="btn lg" type="button" style="flex:1;min-width:200px">
+              <svg class="ico" aria-hidden="true"><use href="#i-file"/></svg>회의 파일 선택
+            </button>
+            <p class="sub" style="flex-basis:100%">
+              지원 형식 mp3 · m4a · wav · mp4 / 최대 2 GB · 8시간 · 파일은 이 PC에만 저장됩니다.
+            </p>
+          </div>
+
+          <!-- 진행 중 작업: 단계 · 남은 시간 · 비용 · 취소 (UX-003) -->
+          <div class="card">
+            <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+              <h3 style="margin:0">AI 활용 전략 세미나</h3>
+              <span class="chip run"><svg aria-hidden="true"><use href="#i-loader"/></svg>음성 인식 중</span>
+              <span style="margin-left:auto;display:flex;gap:8px">
+                <button class="btn" type="button">자세히</button>
+                <button class="btn danger" type="button">취소</button>
+              </span>
+            </div>
+
+            <div class="pipe" role="img"
+                 aria-label="처리 단계 5개 중 3단계 진행 중. 준비 완료, 업로드 완료, 음성 인식 진행 중 62퍼센트, 회의록 생성 대기, 저장 대기.">
+              <div class="step" data-state="done"><div class="bar"><i></i></div><div class="lbl">준비</div></div>
+              <div class="step" data-state="done"><div class="bar"><i></i></div><div class="lbl">업로드</div></div>
+              <div class="step" data-state="run"><div class="bar"><i></i></div><div class="lbl">음성 인식 <span class="cost">과금</span></div></div>
+              <div class="step" data-state="wait"><div class="bar"><i></i></div><div class="lbl">회의록 생성 <span class="cost">과금</span></div></div>
+              <div class="step" data-state="wait"><div class="bar"><i></i></div><div class="lbl">저장</div></div>
+            </div>
+
+            <div class="jobmeta" aria-live="polite">
+              <span>남은 시간 약 <b>4분 20초</b></span>
+              <span>지금까지 <b>$0.21</b></span>
+              <span>완료 시 예상 <b>$0.38</b></span>
+              <span>지금 취소하면 <b>$0.21</b>은 청구됩니다</span>
+            </div>
+          </div>
+
+          <h3 class="caption" style="margin-top:22px">최근 회의</h3>
+          <div class="slist">
+            <div class="srow">
+              <a class="slink" href="#">
+                <span class="t"><h3>주간 제품 회의</h3>
+                  <span class="chip ok"><svg aria-hidden="true"><use href="#i-check"/></svg>완료</span>
+                  <span class="chip idle">회의</span></span>
+                <span class="m"><span class="num">2026-07-31 09:30</span><span class="num">48분 12초</span>
+                  <span>결정 4 · 액션 7</span></span>
+              </a>
+              <div class="row-acts">
+                <button class="iconbtn" type="button" aria-label="주간 제품 회의 폴더 열기" title="폴더 열기"><svg width="17" height="17" aria-hidden="true"><use href="#i-folder"/></svg></button>
+                <button class="iconbtn" type="button" aria-label="주간 제품 회의 추가 작업" title="추가 작업"><svg width="17" height="17" aria-hidden="true"><use href="#i-more"/></svg></button>
+              </div>
+            </div>
+
+            <div class="srow has-fix">
+              <a class="slink" href="#">
+                <span class="t"><h3>협력사 정기 미팅</h3>
+                  <span class="chip err"><svg aria-hidden="true"><use href="#i-alert"/></svg>실패</span>
+                  <span class="chip idle">회의</span></span>
+                <span class="m"><span class="num">2026-07-28 11:00</span><span class="num">32분 48초</span></span>
+              </a>
+              <div class="row-acts">
+                <button class="iconbtn" type="button" aria-label="협력사 정기 미팅 추가 작업" title="추가 작업"><svg width="17" height="17" aria-hidden="true"><use href="#i-more"/></svg></button>
+              </div>
+              <!-- 실패는 '무엇을 하면 되는지'까지 (UX-003 · OPS-004 오류 코드) -->
+              <div class="fix">
+                <b>음성 파일을 열지 못했습니다.</b> 파일이 손상되었거나 지원하지 않는 코덱입니다.
+                원본을 다시 내보낸 뒤 시도하세요. <span class="errcode">MM-AUD-0031</span>
+                <div class="acts">
+                  <button class="btn" type="button"><svg class="ico" aria-hidden="true"><use href="#i-refresh"/></svg>다시 시도 · 예상 $0.24</button>
+                  <button class="btn" type="button"><svg class="ico" aria-hidden="true"><use href="#i-folder"/></svg>원본 위치 열기</button>
+                  <button class="btn ghost" type="button"><svg class="ico" aria-hidden="true"><use href="#i-copy"/></svg>진단 정보 복사</button>
+                </div>
+              </div>
+            </div>
+          </div>
+          <p style="margin-top:12px"><a href="#" style="font-size:13px;color:var(--accent);font-weight:600">이력 전체 보기 (4건)</a></p>
+        </div>
+      </main>
+    </div>
+  </div>
+</section>
+
+<!-- ==========================================================
+     화면 2 · 이력
+     ========================================================== -->
+<section class="screen" id="s-hist" role="tabpanel" aria-labelledby="t-hist" tabindex="0" hidden>
+  <div class="app"><div class="app-body"><div class="main" style="width:100%">
+    <div class="wrap">
+      <div class="page-head">
+        <div><h2>이력</h2><p>세션 4건 · 이번 달 처리 <span class="num">6</span>건</p></div>
+        <div class="actions">
+          <button class="btn" type="button"><svg class="ico" aria-hidden="true"><use href="#i-refresh"/></svg>새로고침</button>
+          <button class="btn primary" type="button"><svg class="ico" aria-hidden="true"><use href="#i-plus"/></svg>새 회의</button>
+        </div>
+      </div>
+
+      <!-- 비용: 월 한도까지 함께 (신규 FR-008) -->
+      <div class="card" style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;padding:13px 16px">
+        <span style="font-weight:700;font-size:13px">이번 달 사용액</span>
+        <span class="num" style="font-weight:700">$3.84</span>
+        <span style="font-size:12.5px;color:var(--ink-3)">/ 한도 <span class="num">$20.00</span> · 8월 1일 초기화</span>
+        <span style="flex:1;min-width:120px;max-width:220px;height:6px;background:var(--line);border-radius:var(--r-pill);overflow:hidden">
+          <span style="display:block;height:100%;width:19.2%;background:var(--accent);border-radius:inherit"></span>
+        </span>
+        <span class="sr">한도의 19.2퍼센트 사용</span>
+        <button class="btn ghost" type="button" style="margin-left:auto">사용 내역</button>
+      </div>
+
+      <div class="filters" style="margin-top:14px">
+        <div class="search">
+          <svg width="16" height="16" aria-hidden="true"><use href="#i-search"/></svg>
+          <label class="sr" for="q">회의 제목 검색</label>
+          <input class="input" id="q" type="search" placeholder="회의 제목 검색">
+        </div>
+        <label class="sr" for="ftype">유형 필터</label>
+        <select class="input" id="ftype"><option>전체 유형</option><option>회의</option><option>세미나</option><option>강의</option></select>
+        <label class="sr" for="fstat">상태 필터</label>
+        <select class="input" id="fstat"><option>전체 상태</option><option>완료</option><option>진행 중</option><option>중단됨</option><option>실패</option></select>
+        <button class="btn" type="button">선택</button>
+      </div>
+
+      <!-- '전체 삭제' 단일 버튼 제거 → 선택 후 휴지통 이동 (FR-001) -->
+      <div class="selbar">
+        <svg width="16" height="16" aria-hidden="true"><use href="#i-check"/></svg>
+        <span><b class="num">2</b>건 선택됨</span>
+        <span class="grow">
+          <button class="btn" type="button">선택 해제</button>
+          <button class="btn danger" type="button"><svg class="ico" aria-hidden="true"><use href="#i-trash"/></svg>휴지통으로 이동</button>
+        </span>
+      </div>
+
+      <div class="slist">
+        <div class="srow">
+          <a class="slink" href="#">
+            <span class="t"><h3>주간 제품 회의</h3>
+              <span class="chip ok"><svg aria-hidden="true"><use href="#i-check"/></svg>완료</span>
+              <span class="chip idle">회의</span></span>
+            <span class="m"><span class="num">2026-07-31 09:30</span><span class="num">48분 12초</span><span>결정 4 · 액션 7</span><span class="num">$0.31</span></span>
+          </a>
+          <div class="row-acts">
+            <button class="iconbtn" type="button" aria-label="주간 제품 회의 폴더 열기" title="폴더 열기"><svg width="17" height="17" aria-hidden="true"><use href="#i-folder"/></svg></button>
+            <button class="iconbtn danger" type="button" aria-label="주간 제품 회의를 휴지통으로 이동" title="휴지통으로 이동"><svg width="17" height="17" aria-hidden="true"><use href="#i-trash"/></svg></button>
+          </div>
+        </div>
+
+        <div class="srow">
+          <a class="slink" href="#">
+            <span class="t"><h3>AI 활용 전략 세미나</h3>
+              <span class="chip run"><svg aria-hidden="true"><use href="#i-loader"/></svg>음성 인식 중 62%</span>
+              <span class="chip idle">세미나</span>
+              <span class="chip info">영어 → 한국어</span></span>
+            <span class="m"><span class="num">2026-07-30 14:10</span><span class="num">86분 00초</span><span>남은 시간 약 4분</span></span>
+          </a>
+          <div class="row-acts">
+            <button class="iconbtn" type="button" aria-label="AI 활용 전략 세미나 처리 취소" title="처리 취소"><svg width="17" height="17" aria-hidden="true"><use href="#i-x"/></svg></button>
+          </div>
+        </div>
+
+        <!-- 신규 상태: 중단됨 (FR-005 interrupted) -->
+        <div class="srow has-fix">
+          <a class="slink" href="#">
+            <span class="t"><h3>데이터 분석 특강</h3>
+              <span class="chip run"><svg aria-hidden="true"><use href="#i-pause"/></svg>중단됨</span>
+              <span class="chip idle">강의</span>
+              <span class="chip idle">CLI로 생성</span></span>
+            <span class="m"><span class="num">2026-07-29 16:00</span><span class="num">57분 03초</span></span>
+          </a>
+          <div class="row-acts">
+            <button class="iconbtn danger" type="button" aria-label="데이터 분석 특강을 휴지통으로 이동" title="휴지통으로 이동"><svg width="17" height="17" aria-hidden="true"><use href="#i-trash"/></svg></button>
+          </div>
+          <div class="fix" style="background:var(--run-bg);color:#6d4200">
+            <b>앱이 종료되어 회의록 생성 단계에서 멈췄습니다.</b>
+            음성 인식 결과는 저장되어 있습니다. 이어서 진행하면 회의록 생성 비용만 발생합니다.
+            <div class="acts">
+              <button class="btn" type="button">이어서 진행 · 예상 $0.09</button>
+              <button class="btn ghost" type="button">저장된 스크립트 보기</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="srow">
+          <a class="slink" href="#">
+            <span class="t"><h3>협력사 정기 미팅</h3>
+              <span class="chip err"><svg aria-hidden="true"><use href="#i-alert"/></svg>실패</span>
+              <span class="chip idle">회의</span></span>
+            <span class="m"><span class="num">2026-07-28 11:00</span><span class="num">32분 48초</span><span>MM-AUD-0031</span></span>
+          </a>
+          <div class="row-acts">
+            <button class="iconbtn" type="button" aria-label="협력사 정기 미팅 다시 시도" title="다시 시도"><svg width="17" height="17" aria-hidden="true"><use href="#i-refresh"/></svg></button>
+            <button class="iconbtn danger" type="button" aria-label="협력사 정기 미팅을 휴지통으로 이동" title="휴지통으로 이동"><svg width="17" height="17" aria-hidden="true"><use href="#i-trash"/></svg></button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div></div></div>
+</section>
+
+<!-- ==========================================================
+     화면 3 · 처리 상세
+     ========================================================== -->
+<section class="screen" id="s-job" role="tabpanel" aria-labelledby="t-job" tabindex="0" hidden>
+  <div class="app"><div class="app-body"><div class="main" style="width:100%">
+    <div class="wrap">
+      <div class="page-head">
+        <div>
+          <p class="sub"><a href="#" style="color:var(--accent);font-weight:600">이력</a> / 처리 상세</p>
+          <h2>AI 활용 전략 세미나</h2>
+          <p>2026-07-30 14:10 · <span class="num">86분 00초</span> · seminar_recording.m4a (412 MB)</p>
+        </div>
+        <div class="actions">
+          <button class="btn danger" type="button">처리 취소</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+          <span class="chip run"><svg aria-hidden="true"><use href="#i-loader"/></svg>음성 인식 중</span>
+          <span class="sub">3단계 / 5단계 · 62% 완료</span>
+          <span class="sub" style="margin-left:auto">취소는 현재 단계가 끝난 뒤 적용됩니다</span>
+        </div>
+
+        <div class="pipe">
+          <div class="step" data-state="done"><div class="bar"><i></i></div><div class="lbl">준비</div></div>
+          <div class="step" data-state="done"><div class="bar"><i></i></div><div class="lbl">업로드</div></div>
+          <div class="step" data-state="run"><div class="bar"><i></i></div><div class="lbl">음성 인식 <span class="cost">과금</span></div></div>
+          <div class="step" data-state="wait"><div class="bar"><i></i></div><div class="lbl">회의록 생성 <span class="cost">과금</span></div></div>
+          <div class="step" data-state="wait"><div class="bar"><i></i></div><div class="lbl">저장</div></div>
+        </div>
+
+        <ul style="font-size:12.5px;color:var(--ink-2);display:grid;gap:6px;margin-top:14px" aria-label="단계 기록">
+          <li><span class="num" style="color:var(--ink-3)">14:12:02</span> · 준비 완료 — 형식 검증, 재생 시간 86분 00초 확인</li>
+          <li><span class="num" style="color:var(--ink-3)">14:12:09</span> · 업로드 완료 — 로컬 저장 <span class="num">a7f3…c91.m4a</span></li>
+          <li><span class="num" style="color:var(--ink-3)">14:12:11</span> · 음성 인식 시작 — 모델 <span class="num">whisper-1</span> (2026-07-01 기준 단가)</li>
+        </ul>
+      </div>
+
+      <div class="card">
+        <h3>비용</h3>
+        <div class="kv">
+          <div><dt>지금까지 청구된 금액</dt><dd>$0.21</dd></div>
+          <div><dt>완료 시 예상</dt><dd>$0.38 ± 15%</dd></div>
+          <div><dt>이번 달 사용액 / 한도</dt><dd>$3.84 / $20.00</dd></div>
+        </div>
+        <p class="sub" style="margin-top:9px">
+          예상 금액은 2026-07-01 기준 공개 단가로 계산한 추정치입니다. 실제 청구액은 제공사 정산 기준을 따릅니다.
+        </p>
+      </div>
+
+      <div class="banner info" style="margin-top:12px">
+        <span class="ico"><svg width="18" height="18" aria-hidden="true"><use href="#i-shield"/></svg></span>
+        <div><b>지금 앱을 종료해도 됩니다</b>
+          진행 상태는 이 PC에 저장됩니다. 다시 실행하면 중단된 지점부터 이어서 진행할지 물어봅니다.</div>
+      </div>
+    </div>
+  </div></div></div>
+</section>
+
+<!-- ==========================================================
+     화면 4 · 확인 대화상자
+     ========================================================== -->
+<section class="screen" id="s-dialog" role="tabpanel" aria-labelledby="t-dialog" tabindex="0" hidden>
+  <div class="dlggrid">
+
+    <div>
+      <h3 class="caption">4-A. 비용 확인 — $0.50 이상이거나 길이를 알 수 없을 때만 (UX-003)</h3>
+      <div class="dlg" role="dialog" aria-modal="true" aria-labelledby="d1t">
+        <h3 id="d1t">이 회의를 처리하면 약 $0.72가 발생합니다</h3>
+        <div class="body">2시간 14분 분량입니다. 시작하면 음성 인식 단계부터 비용이 발생하며, 중간에 취소해도 진행된 만큼은 청구됩니다.</div>
+        <div class="kv">
+          <div><dt>음성 인식</dt><dd>$0.54</dd></div>
+          <div><dt>회의록 생성</dt><dd>$0.18</dd></div>
+          <div><dt>이번 달 사용액 (처리 후)</dt><dd>$4.56 / $20.00</dd></div>
+        </div>
+        <div class="foot">
+          <button class="btn ghost left" type="button">비용 계산 방식</button>
+          <button class="btn" type="button">취소</button>
+          <button class="btn primary" type="button">처리 시작</button>
+        </div>
+      </div>
+    </div>
+
+    <div>
+      <h3 class="caption">4-B. 삭제 — 휴지통 이동이 기본, 결과물 범위를 명시 (FR-001)</h3>
+      <div class="dlg" role="alertdialog" aria-modal="true" aria-labelledby="d2t">
+        <h3 id="d2t">회의 2건을 휴지통으로 옮길까요?</h3>
+        <div class="body">
+          <ul style="display:grid;gap:4px;margin-top:4px">
+            <li>· 주간 제품 회의 <span class="num" style="color:var(--ink-3)">(파일 6개 · 18 MB)</span></li>
+            <li>· 협력사 정기 미팅 <span class="num" style="color:var(--ink-3)">(파일 3개 · 41 MB)</span></li>
+          </ul>
+          <p style="margin-top:10px">Windows 휴지통에서 되돌릴 수 있습니다.
+            <b>Obsidian에 만들어진 노트는 지워지지 않습니다.</b></p>
+        </div>
+        <div class="foot">
+          <button class="btn" type="button">취소</button>
+          <button class="btn danger" type="button">휴지통으로 이동</button>
+        </div>
+      </div>
+
+      <h3 class="caption">4-B-2. 부분 실패 결과 — 무엇이 되고 무엇이 안 됐는지</h3>
+      <div class="dlg" role="dialog" aria-modal="true" aria-labelledby="d2bt">
+        <h3 id="d2bt">1건만 휴지통으로 옮겼습니다</h3>
+        <div class="body">
+          <p><b>협력사 정기 미팅</b>은 옮기지 못했습니다. 저장 위치가 네트워크 공유 폴더라 휴지통을 쓸 수 없습니다.
+            <span class="errcode">MM-DEL-0012</span></p>
+          <p style="margin-top:8px">회의 기록은 그대로 남아 있습니다. 영구 삭제할지 선택하세요.</p>
+        </div>
+        <div class="foot">
+          <button class="btn ghost left" type="button">폴더 열기</button>
+          <button class="btn" type="button">그대로 두기</button>
+          <button class="btn danger" type="button">영구 삭제</button>
+        </div>
+      </div>
+    </div>
+
+    <div>
+      <h3 class="caption">4-C. 처리 중 종료 — 작업 목록과 영향 범위 (UX-004)</h3>
+      <div class="dlg" role="alertdialog" aria-modal="true" aria-labelledby="d3t">
+        <h3 id="d3t">진행 중인 작업이 1건 있습니다</h3>
+        <div class="body">
+          <div class="kv">
+            <div><dt>AI 활용 전략 세미나 · 음성 인식 62%</dt><dd>약 4분 20초 남음</dd></div>
+          </div>
+          <p style="margin-top:10px">지금 종료하면 이 단계는 중단되고, 이미 진행된 <span class="num">$0.21</span>은 청구됩니다.
+            다음 실행 때 이어서 진행할 수 있습니다.</p>
+        </div>
+        <div class="foot">
+          <button class="btn ghost left" type="button">돌아가기</button>
+          <button class="btn" type="button">끝날 때까지 기다린 뒤 종료</button>
+          <button class="btn danger" type="button">지금 종료</button>
+        </div>
+      </div>
+
+      <h3 class="caption">4-D. 종료 안내 토스트 — 최초 1회 (UX-004)</h3>
+      <div class="toast" role="status">
+        <svg width="16" height="16" aria-hidden="true" style="flex:none"><use href="#i-shield"/></svg>
+        <span>창을 닫아도 앱은 계속 실행됩니다. 완전히 끄려면 트레이 아이콘에서 <b>안전하게 종료</b>를 선택하세요.</span>
+        <button class="btn" type="button">알겠습니다</button>
+      </div>
+
+      <h3 class="caption">4-E. 실행 취소 가능한 알림 — 삭제 직후 (UX-005)</h3>
+      <div class="toast" role="status">
+        <svg width="16" height="16" aria-hidden="true" style="flex:none"><use href="#i-trash"/></svg>
+        <span>회의 2건을 휴지통으로 옮겼습니다.</span>
+        <button class="btn" type="button">되돌리기</button>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ==========================================================
+     화면 5 · 최초 실행
+     ========================================================== -->
+<section class="screen" id="s-onb" role="tabpanel" aria-labelledby="t-onb" tabindex="0" hidden>
+  <div class="app"><div class="app-body"><div class="main" style="width:100%">
+    <div class="onb">
+      <div class="steps" aria-label="설정 진행 2단계 중 1단계">
+        <div class="s" data-on="1">1 · 회사에서 받은 키 입력</div>
+        <div class="s">2 · 저장 위치 확인</div>
+      </div>
+
+      <h2 style="font-size:20px;font-weight:700;letter-spacing:-.02em">회사에서 받은 키를 입력하세요</h2>
+      <p style="color:var(--ink-3);font-size:13.5px;margin-top:6px;margin-bottom:18px">
+        회의 내용을 글로 바꾸고 회의록을 만들 때 사용합니다. 키는 이 PC의 Windows 자격 증명 관리자에 저장되며,
+        입력한 뒤에는 다시 표시되지 않습니다.
+      </p>
+
+      <div class="card">
+        <div class="field">
+          <label for="k1">API 키</label>
+          <input class="input num" id="k1" type="password" value="sk-proj-••••••••••••••••" aria-describedby="k1h k1e" aria-invalid="true">
+          <p class="err-msg" id="k1e"><svg width="13" height="13" aria-hidden="true"><use href="#i-alert"/></svg>
+            키가 확인되지 않았습니다. 앞뒤 공백이 포함되지 않았는지 확인하세요. <span class="errcode">MM-KEY-0002</span></p>
+          <p class="hint" id="k1h">키를 발급받는 방법은 사내 포털 &gt; IT 서비스 &gt; AI Minutes 안내를 참고하세요.</p>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <button class="btn" type="button"><svg class="ico" aria-hidden="true"><use href="#i-refresh"/></svg>연결 확인</button>
+          <span class="chip err"><svg aria-hidden="true"><use href="#i-alert"/></svg>확인 실패</span>
+          <span class="sub" style="margin-left:auto">확인에 성공해야 다음으로 넘어갈 수 있습니다.</span>
+        </div>
+      </div>
+
+      <div class="banner info" style="margin-top:12px">
+        <span class="ico"><svg width="18" height="18" aria-hidden="true"><use href="#i-shield"/></svg></span>
+        <div><b>이 앱은 이 PC에서만 동작합니다</b>
+          회의 파일과 회의록은 내 PC에만 저장됩니다. 회의 음성과 글자는 회의록을 만드는 동안에만 회사가 승인한
+          AI 서비스로 전송됩니다. 다른 PC로 옮기면 키를 다시 입력해야 합니다.</div>
+      </div>
+
+      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:18px">
+        <button class="btn ghost" type="button">나중에 하기</button>
+        <button class="btn primary" type="button" disabled>다음</button>
+      </div>
+      <p class="sub" style="text-align:right;margin-top:6px">Obsidian 연동, 모델 선택 같은 설정은 나중에 설정 화면에서 할 수 있습니다.</p>
+    </div>
+  </div></div></div>
+</section>
+
+<!-- ==========================================================
+     화면 6 · 설정
+     ========================================================== -->
+<section class="screen" id="s-set" role="tabpanel" aria-labelledby="t-set" tabindex="0" hidden>
+  <div class="app"><div class="app-body"><div class="main" style="width:100%">
+    <div class="wrap">
+      <div class="page-head">
+        <div><h2>설정</h2><p>자주 쓰는 설정만 먼저 보이고, 나머지는 고급 설정에 있습니다.</p></div>
+      </div>
+
+      <details class="setgroup" open>
+        <summary><svg width="16" height="16" aria-hidden="true"><use href="#i-cog"/></svg>빠른 설정<span class="tag">대부분 이대로 두면 됩니다</span></summary>
+        <div class="inner">
+          <div class="row2" style="margin-top:14px">
+            <div class="field">
+              <label for="s-type">회의 유형 기본값</label>
+              <select class="input" id="s-type"><option>회의</option><option>세미나</option><option>강의</option></select>
+            </div>
+            <div class="field">
+              <label for="s-lang">회의 언어</label>
+              <select class="input" id="s-lang"><option>한국어</option><option>영어</option><option>자동 감지</option></select>
+            </div>
+          </div>
+
+          <div class="field">
+            <label>API 키</label>
+            <div class="secretline">
+              <span class="chip ok"><svg aria-hidden="true"><use href="#i-check"/></svg>저장됨</span>
+              <span class="mask">sk-proj-••••••••••••4f2a</span>
+              <span class="sub">Windows 자격 증명 관리자 · 2026-07-14 확인</span>
+              <span style="margin-left:auto;display:flex;gap:6px">
+                <button class="btn" type="button">키 교체</button>
+                <button class="btn danger" type="button">삭제</button>
+              </span>
+            </div>
+            <p class="hint">보안을 위해 저장된 키는 앱에서 다시 볼 수 없습니다. 원본이 필요하면 발급처에서 새로 받으세요.</p>
+          </div>
+
+          <div class="field">
+            <label>저장 위치</label>
+            <div class="secretline">
+              <span class="num" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap">D:\업무\MeetingMinutesData</span>
+              <span class="sub" style="flex:none">여유 <span class="num">4.1 GB</span></span>
+              <span style="margin-left:auto;display:flex;gap:6px">
+                <button class="btn" type="button">폴더 열기</button>
+                <button class="btn" type="button">위치 변경</button>
+              </span>
+            </div>
+          </div>
+
+          <div class="field">
+            <label for="s-cap">이번 달 사용 한도 (USD)</label>
+            <input class="input num" id="s-cap" type="text" value="20.00" style="max-width:160px" aria-describedby="s-caph">
+            <p class="hint" id="s-caph">한도의 80%를 넘으면 알리고, 100%를 넘으면 새 처리를 시작하기 전에 확인을 받습니다.</p>
+          </div>
+        </div>
+      </details>
+
+      <details class="setgroup">
+        <summary><svg width="16" height="16" aria-hidden="true"><use href="#i-folder"/></svg>보관과 정리<span class="tag">정리 예정 1.2 GB</span></summary>
+        <div class="inner">
+          <div class="kv" style="margin-top:14px">
+            <div><dt>실패한 처리의 원본</dt><dd>7일 · 3건 · 640 MB</dd></div>
+            <div><dt>녹음 원본과 백업</dt><dd>7일 · 4건 · 520 MB</dd></div>
+            <div><dt>앱 로그</dt><dd>14일 · 10 MB × 최대 10개</dd></div>
+            <div><dt>회의록 결과</dt><dd>직접 지울 때까지 보관</dd></div>
+          </div>
+          <div style="display:flex;gap:8px;margin-top:12px">
+            <button class="btn" type="button">정리 예정 목록 보기</button>
+            <button class="btn" type="button">지금 정리</button>
+          </div>
+        </div>
+      </details>
+
+      <details class="setgroup">
+        <summary><svg width="16" height="16" aria-hidden="true"><use href="#i-net"/></svg>고급 설정<span class="tag">모델 · Obsidian · 사용자 사전</span></summary>
+        <div class="inner">
+          <div class="field" style="margin-top:14px">
+            <label for="s-model">회의록 생성 모델</label>
+            <select class="input" id="s-model" aria-describedby="s-modelh">
+              <option>기본 · gpt-4.1-mini (검증됨 2026-07-01)</option>
+              <option>고품질 · gpt-4.1 (검증됨 2026-07-01 · 약 3배 비용)</option>
+            </select>
+            <p class="hint" id="s-modelh">사내 평가 세트를 통과한 모델만 보입니다. 표시 단가는 2026-07-01 기준 추정치입니다.</p>
+          </div>
+          <div class="field">
+            <label for="s-vault">Obsidian 저장소 폴더</label>
+            <input class="input" id="s-vault" type="text" placeholder="선택하지 않음 — 지식그래프와 위키 질문이 비활성화됩니다">
+          </div>
+        </div>
+      </details>
+
+      <details class="setgroup">
+        <summary><svg width="16" height="16" aria-hidden="true"><use href="#i-pulse"/></svg>진단과 지원<span class="tag">v1.0.0 · a1b2c3d</span></summary>
+        <div class="inner">
+          <p class="sub" style="margin:14px 0 10px">
+            문제가 있으면 진단 결과를 만들어 IT 담당자에게 보내세요. 회의 내용과 키는 포함되지 않습니다.
+          </p>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button class="btn" type="button">진단 실행</button>
+            <button class="btn" type="button">포함될 파일 확인 후 진단 파일 만들기</button>
+            <button class="btn ghost" type="button">로그 폴더 열기</button>
+          </div>
+        </div>
+      </details>
+    </div>
+  </div></div></div>
+</section>
+
+<!-- ==========================================================
+     화면 7 · 상태 카탈로그
+     ========================================================== -->
+<section class="screen" id="s-state" role="tabpanel" aria-labelledby="t-state" tabindex="0" hidden>
+
+  <h3 class="caption">7-A. 로딩 — 자리 유지 스켈레톤(레이아웃 흔들림 없음)</h3>
+  <div class="slist" aria-busy="true" aria-live="polite" aria-label="세션 목록을 불러오는 중">
+    <div class="srow"><div class="slink">
+      <div class="sk" style="width:190px;height:15px"></div>
+      <div class="sk" style="width:300px;height:11px;margin-top:9px"></div></div></div>
+    <div class="srow"><div class="slink">
+      <div class="sk" style="width:150px;height:15px"></div>
+      <div class="sk" style="width:260px;height:11px;margin-top:9px"></div></div></div>
+  </div>
+
+  <h3 class="caption">7-B. 처음 사용 — 빈 화면은 다음 행동을 제안한다</h3>
+  <div class="empty">
+    <div class="mark"><svg width="22" height="22" aria-hidden="true"><use href="#i-mic"/></svg></div>
+    <h3>아직 회의가 없습니다</h3>
+    <p>회의를 녹음하거나 이미 있는 파일을 올리면 여기에 회의록이 쌓입니다.</p>
+    <div class="acts">
+      <button class="btn primary" type="button">녹음 시작</button>
+      <button class="btn" type="button">회의 파일 선택</button>
+    </div>
+  </div>
+
+  <h3 class="caption">7-C. 검색 결과 없음 — 필터를 되돌릴 수 있게</h3>
+  <div class="empty">
+    <div class="mark"><svg width="22" height="22" aria-hidden="true"><use href="#i-search"/></svg></div>
+    <h3>‘분기 리뷰’와 일치하는 회의가 없습니다</h3>
+    <p>상태 필터가 <b>실패</b>로 걸려 있습니다. 필터를 지우면 4건이 보입니다.</p>
+    <div class="acts"><button class="btn" type="button">필터 지우기</button></div>
+  </div>
+
+  <h3 class="caption">7-D. 백엔드 연결 끊김 — 앱은 살아 있고 무엇을 하면 되는지 알린다</h3>
+  <div class="app" style="border-radius:12px">
+    <div class="statusbar">
+      <span><span class="dot off"></span>앱과 연결이 끊겼습니다</span>
+      <span class="sep" aria-hidden="true"></span>
+      <span>2초 뒤 다시 시도합니다 (3/10)</span>
+      <span class="grow"></span>
+      <button type="button">지금 다시 시도</button>
+    </div>
+    <div style="padding:18px">
+      <div class="banner err" role="alert">
+        <span class="ico"><svg width="18" height="18" aria-hidden="true"><use href="#i-alert"/></svg></span>
+        <div><b>회의 데이터는 안전합니다</b>
+          이 PC에서 실행 중인 AI Minutes 프로그램이 응답하지 않습니다. 진행 중이던 작업은 저장되어 있으며,
+          앱을 다시 시작하면 이어서 진행할 수 있습니다. <span class="errcode">MM-NET-0001</span></div>
+        <span class="acts"><button class="btn" type="button">진단 정보 복사</button></span>
+      </div>
+    </div>
+  </div>
+
+  <h3 class="caption">7-E. 권한 거부 — 마이크</h3>
+  <div class="banner warn" style="max-width:720px">
+    <span class="ico"><svg width="18" height="18" aria-hidden="true"><use href="#i-alert"/></svg></span>
+    <div><b>마이크를 사용할 수 없습니다</b>
+      Windows 설정 &gt; 개인 정보 &gt; 마이크에서 이 앱의 사용을 허용하세요. 대신 이미 녹음된 파일을 올릴 수도 있습니다.
+      <span class="errcode">MM-MIC-0004</span></div>
+    <span class="acts">
+      <button class="btn" type="button">Windows 설정 열기</button>
+      <button class="btn" type="button">파일 올리기</button>
+    </span>
+  </div>
+
+  <h3 class="caption">7-F. 좁은 화면 — 하단 탭 5개 + ‘더보기’(모든 기능 도달 가능)</h3>
+  <div class="phone">
+    <div class="top" style="display:flex;align-items:center;gap:8px">
+      <span class="dot" style="width:8px;height:8px;border-radius:50%;background:var(--ok);display:inline-block"></span>
+      <b style="font-size:14px">홈</b>
+      <span class="sub" style="margin-left:auto">v1.0.0</span>
+    </div>
+    <div class="content">
+      <div class="card" style="padding:13px">
+        <div style="display:flex;gap:8px;align-items:center">
+          <span class="chip run"><svg aria-hidden="true"><use href="#i-loader"/></svg>음성 인식 62%</span>
+          <span class="sub" style="margin-left:auto">약 4분</span>
+        </div>
+        <div class="pipe" style="margin:10px 0 0">
+          <div class="step" data-state="done"><div class="bar"><i></i></div></div>
+          <div class="step" data-state="done"><div class="bar"><i></i></div></div>
+          <div class="step" data-state="run"><div class="bar"><i></i></div></div>
+          <div class="step" data-state="wait"><div class="bar"><i></i></div></div>
+          <div class="step" data-state="wait"><div class="bar"><i></i></div></div>
+        </div>
+      </div>
+      <button class="btn primary" type="button" style="width:100%;margin-top:10px;min-height:46px">
+        <svg class="ico" aria-hidden="true"><use href="#i-mic"/></svg>녹음 시작</button>
+    </div>
+    <nav class="tabbar" aria-label="주요 메뉴">
+      <a href="#" aria-current="page"><span class="ic"><svg width="19" height="19" aria-hidden="true"><use href="#i-home"/></svg></span>홈</a>
+      <a href="#"><span class="ic"><svg width="19" height="19" aria-hidden="true"><use href="#i-mic"/></svg></span>녹음</a>
+      <a href="#"><span class="ic"><svg width="19" height="19" aria-hidden="true"><use href="#i-file"/></svg></span>파일</a>
+      <a href="#"><span class="ic"><svg width="19" height="19" aria-hidden="true"><use href="#i-list"/></svg></span>이력</a>
+      <a href="#"><span class="ic"><svg width="19" height="19" aria-hidden="true"><use href="#i-more"/></svg></span>더보기</a>
+    </nav>
+  </div>
+</section>
+
+<!-- ==========================================================
+     화면 8 · 회의록 상세 (신규 · 현재 스냅샷에 없는 화면)
+     참고 디자인의 전사/요약 2단 구성을 채택하되,
+     저장 위치·편집 보존·근거 확인을 제품 요구사항에 맞게 재설계했다.
+     ========================================================== -->
+<section class="screen" id="s-doc" role="tabpanel" aria-labelledby="t-doc" tabindex="0" hidden>
+  <div class="app"><div class="app-body"><div class="main" style="width:100%">
+    <div style="max-width:1080px">
+      <div class="page-head">
+        <div>
+          <p class="sub"><a href="#" style="color:var(--accent);font-weight:600">이력</a> / 회의록</p>
+          <h2>주간 제품 회의</h2>
+          <p><span class="num">2026-07-31 09:30</span> · <span class="num">48분 12초</span> · 화자 3명 ·
+            <span class="chip ok" style="vertical-align:middle"><svg aria-hidden="true"><use href="#i-check"/></svg>완료</span></p>
+        </div>
+        <div class="actions">
+          <button class="btn" type="button"><svg class="ico" aria-hidden="true"><use href="#i-folder"/></svg>폴더 열기</button>
+          <button class="btn" type="button">내보내기</button>
+          <button class="btn primary" type="button">변경 사항 저장</button>
+        </div>
+      </div>
+
+      <!-- 저장 위치를 숨기지 않는다: 어디에 무엇이 저장됐는지가 이 제품의 신뢰 근거 -->
+      <div class="banner info" style="margin-bottom:12px">
+        <span class="ico"><svg width="18" height="18" aria-hidden="true"><use href="#i-shield"/></svg></span>
+        <div><b>이 회의록은 두 곳에 저장되어 있습니다</b>
+          결과 폴더 <span class="num">MeetingMinutesData\output\2026-07-31</span> ·
+          노트 폴더 <span class="num">D:\Notes\회의\주간 제품 회의.md</span>
+          — 여기서 고친 내용은 저장할 때 두 곳에 함께 반영됩니다.</div>
+      </div>
+
+      <div class="split">
+        <!-- 좌: 전사 -->
+        <div class="panel">
+          <header>
+            <svg width="16" height="16" aria-hidden="true"><use href="#i-file"/></svg>
+            <h3>전사</h3>
+            <span class="chip idle">gpt-4o-transcribe</span>
+            <span class="r">
+              <label class="sr" for="tq">전사 내용 검색</label>
+              <input class="input" id="tq" type="search" placeholder="본문 검색" style="min-height:32px;width:150px;font-size:12.5px">
+              <button class="btn ghost" type="button" style="min-height:32px;padding:4px 10px">화자 일괄 변경</button>
+            </span>
+          </header>
+          <div class="scroll">
+            <div class="utt">
+              <button class="spk" type="button" aria-label="화자 이름 편집: 참석자 A">참석자 A</button>
+              <button class="ts" type="button" aria-label="00분 04초부터 재생">00:04</button>
+              <p>오늘은 배포 아키텍처부터 정리하겠습니다. 사내 PC 기준으로 설치 권한 없이 실행되는지가 관건입니다.</p>
+            </div>
+            <div class="utt">
+              <button class="spk" type="button" aria-label="화자 이름 편집: 이팀장">이팀장 <svg width="11" height="11" aria-hidden="true"><use href="#i-check"/></svg></button>
+              <button class="ts" type="button" aria-label="1분 12초부터 재생">01:12</button>
+              <p>Portable ZIP을 기본으로 가고, 설치 파일은 검증된 PC에만 배포하는 쪽으로 정리했습니다.</p>
+            </div>
+            <div class="utt low">
+              <button class="spk" type="button" aria-label="화자 이름 편집: 화자 3">화자 3</button>
+              <button class="ts" type="button" aria-label="1시간 3분 51초부터 재생">01:03:51</button>
+              <p>그러면 코드 서명은 이번 릴리즈에서는 …… 하는 걸로 하죠.
+                <span class="flag">인식 신뢰도 낮음</span></p>
+            </div>
+          </div>
+          <div style="padding:10px 14px;border-top:1px solid var(--line);font-size:12px;color:var(--ink-3)">
+            화자 이름을 고치면 같은 화자의 모든 발언에 적용됩니다. 원본 전사는 그대로 보관됩니다.
+          </div>
+        </div>
+
+        <!-- 우: 회의록 · 액션 -->
+        <div class="panel">
+          <header>
+            <svg width="16" height="16" aria-hidden="true"><use href="#i-book"/></svg>
+            <h3>회의록</h3>
+            <span class="r">
+              <span class="chip idle">gpt-4o-mini</span>
+              <button class="btn ghost" type="button" style="min-height:32px;padding:4px 10px">다시 생성</button>
+            </span>
+          </header>
+          <div class="scroll">
+            <h4 style="font-size:13px;font-weight:700;margin-bottom:6px">결정 사항</h4>
+            <ul style="display:grid;gap:7px;font-size:13.5px">
+              <li>· Portable ZIP을 기본 배포 수단으로 확정
+                <button class="ts" type="button" style="margin-left:6px">01:12</button></li>
+              <li>· 설치 프로그램은 파일럿 3대 검증 통과 시에만 제공
+                <button class="ts" type="button" style="margin-left:6px">04:37</button></li>
+            </ul>
+            <h4 style="font-size:13px;font-weight:700;margin:16px 0 6px">액션 아이템</h4>
+            <ul style="display:grid;gap:7px;font-size:13.5px">
+              <li>· 이팀장 — 파일럿 PC 3대 확보 <span class="num" style="color:var(--ink-3)">~08-07</span>
+                <button class="ts" type="button" style="margin-left:6px">12:05</button></li>
+              <li>· 김수석 — SmartScreen 정책 확인 <span class="num" style="color:var(--ink-3)">기한 없음</span>
+                <button class="ts" type="button" style="margin-left:6px">21:40</button></li>
+            </ul>
+          </div>
+          <div style="padding:10px 14px;border-top:1px solid var(--line)">
+            <div class="banner warn" style="padding:9px 11px;font-size:12.5px">
+              <span class="ico"><svg width="16" height="16" aria-hidden="true"><use href="#i-alert"/></svg></span>
+              <div><b>다시 생성하면 직접 고친 내용이 사라집니다</b>
+                지금 문서에 사용자가 수정한 문단 3곳이 있습니다. 다시 생성하기 전에 사본으로 보관할지 물어봅니다.
+                예상 비용 <span class="num">$0.06</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 산출물 출처: 현재 제품이 이미 하고 있는 좋은 동작을 화면에서도 드러낸다 -->
+      <div class="card" style="margin-top:14px">
+        <h3>이 회의록이 만들어진 방법</h3>
+        <div class="kv">
+          <div><dt>수집 경로</dt><dd>파일 업로드</dd></div>
+          <div><dt>음성 인식</dt><dd>gpt-4o-transcribe · 2026-07-31 09:41</dd></div>
+          <div><dt>회의록 생성</dt><dd>gpt-4o-mini · 2026-07-31 09:44</dd></div>
+          <div><dt>도구 버전</dt><dd>v1.0.0 · a1b2c3d</dd></div>
+          <div><dt>사용자 수정</dt><dd>3곳 · 2026-07-31 10:02</dd></div>
+        </div>
+      </div>
+    </div>
+  </div></div></div>
+</section>
+
+<!-- ==========================================================
+     화면 9 · 설정 구조 (현재 설정 화면이 단일 스크롤 15섹션)
+     ========================================================== -->
+<section class="screen" id="s-setia" role="tabpanel" aria-labelledby="t-setia" tabindex="0" hidden>
+  <div class="app"><div class="app-body"><div class="main" style="width:100%">
+    <div class="wrap">
+      <div class="page-head">
+        <div><h2>설정</h2><p>3단계로 나눠 필요한 것만 보이게 합니다. 현재는 15개 섹션이 한 화면에 이어져 있습니다.</p></div>
+      </div>
+
+      <div class="field">
+        <label class="sr" for="setq">설정 검색</label>
+        <div class="filters" style="margin:0">
+          <div class="search" style="min-width:100%">
+            <svg width="16" height="16" aria-hidden="true"><use href="#i-search"/></svg>
+            <input class="input" id="setq" type="search" placeholder="설정 검색 — 예: 마이크, 폴더, 키, 한도">
+          </div>
+        </div>
+      </div>
+
+      <div class="card" style="padding:0">
+        <ul class="tree">
+          <li>
+            <div class="l1"><span class="chip ok"><svg aria-hidden="true"><use href="#i-check"/></svg>1단계</span>
+              필수 — 이것만 있으면 동작합니다<span class="cnt">3개 항목</span></div>
+            <div class="l2"><span>API 키</span><span>결과 저장 폴더</span><span>회의 기본 유형</span></div>
+          </li>
+          <li>
+            <div class="l1"><span class="chip info">2단계</span>자주 쓰는 선택<span class="cnt">4개 그룹</span></div>
+            <div class="l2"><span>지출 한도</span><span>노트 폴더</span><span>보관과 정리</span><span>처리 프로필</span></div>
+          </li>
+          <li>
+            <div class="l1"><span class="chip idle">3단계</span>고급 — 기본값 권장<span class="cnt">7개 그룹 · 접힘</span></div>
+            <div class="l2"><span>모델과 폴백</span><span>오디오 전처리</span><span>실시간 녹취</span><span>이메일 발송</span>
+              <span>Obsidian REST</span><span>검색 인덱스</span><span>기능 토글</span></div>
+          </li>
+          <li>
+            <div class="l1"><span class="chip err"><svg aria-hidden="true"><use href="#i-alert"/></svg>분리</span>
+              위험 구역 — 별도 화면<span class="cnt">되돌릴 수 없음</span></div>
+            <div class="l2"><span>모든 기록 삭제</span><span>설정 JSON 직접 편집</span><span>초기화</span></div>
+          </li>
+        </ul>
+      </div>
+
+      <h3 class="caption">삭제·초기화는 설정 본문에서 분리하고 절차를 둔다</h3>
+      <div class="danger-zone">
+        <h3>모든 기록 삭제</h3>
+        <p style="font-size:13px;color:var(--ink-2)">
+          세션 <b class="num">128</b>건 · 전사와 회의록 <b class="num">4.2 GB</b>가 삭제됩니다.
+          노트 폴더의 <span class="num">.md</span> 파일과 Obsidian 노트는 삭제되지 않습니다.
+        </p>
+        <div class="field" style="margin:12px 0 10px;max-width:320px">
+          <label for="confirm">계속하려면 <b>모든 기록 삭제</b>를 입력하세요</label>
+          <input class="input" id="confirm" type="text" placeholder="모든 기록 삭제">
+        </div>
+        <div style="display:flex;gap:8px">
+          <button class="btn" type="button">먼저 백업 만들기</button>
+          <button class="btn danger" type="button" disabled>휴지통으로 이동</button>
+        </div>
+      </div>
+
+      <h3 class="caption">TLS 검증은 끄는 옵션 대신 사내 인증서를 등록한다</h3>
+      <div class="card">
+        <div class="banner err" style="margin-bottom:12px">
+          <span class="ico"><svg width="18" height="18" aria-hidden="true"><use href="#i-alert"/></svg></span>
+          <div><b>제거 대상: “SSL 인증서 검증 끄기”</b>
+            이 옵션을 끄면 회의 음성과 API 키가 중간자 공격에 노출됩니다. 사내망 SSL 검사 때문에 오류가 나는 경우라면
+            검증을 끄는 것이 아니라 사내 루트 인증서를 신뢰 목록에 추가해야 합니다.</div>
+        </div>
+        <div class="field" style="margin-bottom:0">
+          <label for="ca">사내 루트 인증서 (.pem/.crt)</label>
+          <div style="display:flex;gap:8px">
+            <input class="input" id="ca" type="text" value="C:\ProgramData\CorpCA\root.pem" aria-describedby="cah">
+            <button class="btn" type="button">찾아보기</button>
+            <button class="btn" type="button">연결 확인</button>
+          </div>
+          <p class="hint" id="cah">IT 담당자가 배포한 인증서 경로입니다. 등록 후에도 실패하면 진단 정보를 담당자에게 보내세요.</p>
+        </div>
+      </div>
+    </div>
+  </div></div></div>
+</section>
+
+<!-- ==========================================================
+     화면 10 · 자동 실행 안전장치
+     현재 제품에는 사용자 확인 없이 외부 API를 호출하는 경로가 3개 있다.
+     ========================================================== -->
+<section class="screen" id="s-auto" role="tabpanel" aria-labelledby="t-auto" tabindex="0" hidden>
+  <div class="app"><div class="app-body"><div class="main" style="width:100%">
+    <div class="wrap">
+      <div class="page-head">
+        <div><h2>자동 실행</h2><p>내가 화면을 보고 있지 않을 때 앱이 스스로 하는 일과, 그때 드는 비용을 한곳에서 관리합니다.</p></div>
+      </div>
+
+      <div class="card" style="display:flex;gap:14px;flex-wrap:wrap;align-items:center">
+        <div>
+          <div style="font-size:12.5px;color:var(--ink-3)">이번 달 자동 실행으로 발생한 비용</div>
+          <div class="num" style="font-size:22px;font-weight:700">$2.10</div>
+        </div>
+        <div>
+          <div style="font-size:12.5px;color:var(--ink-3)">전체 사용액 / 한도</div>
+          <div class="num" style="font-size:22px;font-weight:700">$3.84 <span style="font-size:13px;color:var(--ink-3)">/ $20.00</span></div>
+        </div>
+        <button class="btn danger" type="button" style="margin-left:auto">모든 자동 실행 일시 정지</button>
+      </div>
+
+      <div class="card">
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+          <h3 style="margin:0">폴더 자동 감시</h3>
+          <span class="chip run"><svg aria-hidden="true"><use href="#i-loader"/></svg>감시 중</span>
+          <span class="sw" data-on="1" role="switch" aria-checked="true" tabindex="0" style="margin-left:auto"><i></i>켜짐</span>
+        </div>
+        <p class="sub" style="margin-top:6px">
+          <span class="num">C:\MeetingNotes\Inbox</span> 에 새 녹음이 생기면 자동으로 회의록을 만듭니다.
+        </p>
+        <div class="kv">
+          <div><dt>처리 완료 / 실패 / 건너뜀</dt><dd>12 / 1 / 3</dd></div>
+          <div><dt>이번 달 이 기능으로 발생한 비용</dt><dd>$1.44</dd></div>
+          <div><dt>1건당 상한</dt><dd>$0.50 초과 시 대기열에 두고 확인</dd></div>
+        </div>
+        <div class="banner warn" style="margin-top:12px">
+          <span class="ico"><svg width="18" height="18" aria-hidden="true"><use href="#i-alert"/></svg></span>
+          <div><b>확인 대기 2건</b>
+            상한을 넘어 자동 처리하지 않았습니다. 각각 <span class="num">$0.83</span>,
+            <span class="num">$1.12</span>가 예상됩니다.</div>
+          <span class="acts"><button class="btn" type="button">검토</button></span>
+        </div>
+      </div>
+
+      <div class="card">
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+          <h3 style="margin:0">계획 자동화 (회의 비서)</h3>
+          <span class="chip idle">꺼짐</span>
+          <span class="sw" data-on="0" role="switch" aria-checked="false" tabindex="0" style="margin-left:auto"><i></i>꺼짐</span>
+        </div>
+        <p class="sub" style="margin-top:6px">
+          노트 폴더의 예정 회의에 사전 리서치를 자동으로 쓰고, 새로 첨부된 녹음을 자동 처리합니다.
+          <b>노트 폴더의 파일을 앱이 직접 고칩니다.</b>
+        </p>
+        <p class="sub">기본값은 꺼짐입니다. 켜기 전에 무엇을 자동으로 바꾸는지 목록으로 보여주고 동의를 받습니다.</p>
+      </div>
+
+      <div class="card">
+        <h3>음성 인식 실패 시 대체 경로</h3>
+        <p class="sub" style="margin-top:4px;margin-bottom:10px">
+          앞 단계가 실패하면 다음으로 넘어갑니다. 회사 밖 다른 업체로 회의 음성이 전송되는 단계는 별도 동의가 필요합니다.
+        </p>
+        <div class="chain">
+          <span class="n"><b>1</b> OpenAI · gpt-4o-transcribe</span>
+          <span class="arw">→</span>
+          <span class="n"><b>2</b> OpenAI · whisper-1</span>
+          <span class="arw">→</span>
+          <span class="n off"><b>3</b> Groq · whisper-large-v3 <span class="chip err" style="margin-left:4px">동의 필요</span></span>
+          <span class="arw">→</span>
+          <span class="n"><b>4</b> 이 PC · faster-whisper base</span>
+        </div>
+        <div class="banner warn" style="margin-top:12px">
+          <span class="ico"><svg width="18" height="18" aria-hidden="true"><use href="#i-shield"/></svg></span>
+          <div><b>3단계는 꺼져 있습니다</b>
+            Groq는 회사가 승인한 처리 업체 목록에 없습니다. 사용하려면 회의 음성이 이 업체로 전송된다는 데
+            동의해야 하고, 승인 여부는 IT 담당자에게 확인해야 합니다.</div>
+          <span class="acts"><button class="btn" type="button">승인 목록 보기</button></span>
+        </div>
+        <p class="sub" style="margin-top:10px">
+          자동 대체로 발생한 추가 비용은 <b>이력</b>에 <span class="chip idle">대체 경로</span> 표시와 함께 남습니다.
+        </p>
+      </div>
+    </div>
+  </div></div></div>
+</section>
+
+<!-- ==========================================================
+     화면 11 · 처리 모드 — 7개 번호 프리셋을 3개 축으로 분해
+     ========================================================== -->
+<section class="screen" id="s-mode" role="tabpanel" aria-labelledby="t-mode" tabindex="0" hidden>
+  <div class="app"><div class="app-body"><div class="main" style="width:100%">
+    <div class="wrap">
+      <div class="page-head">
+        <div><h2>처리 방식</h2>
+          <p>현재는 “1. 한국어 회의 … 7. 한국어 강의” 7개 중 하나를 고르게 되어 있습니다.
+            조합이 늘면 목록이 계속 길어지고, 번호 자체는 아무 뜻이 없습니다.</p></div>
+      </div>
+
+      <div class="card">
+        <div class="tri">
+          <div>
+            <div style="font-size:12.5px;font-weight:700;color:var(--ink-2);margin-bottom:6px">말하는 언어</div>
+            <div class="seg">
+              <button type="button" aria-pressed="true">한국어</button>
+              <button type="button" aria-pressed="false">영어</button>
+              <button type="button" aria-pressed="false">자동</button>
+            </div>
+          </div>
+          <div>
+            <div style="font-size:12.5px;font-weight:700;color:var(--ink-2);margin-bottom:6px">번역</div>
+            <div class="seg">
+              <button type="button" aria-pressed="true">안 함</button>
+              <button type="button" aria-pressed="false">한국어로</button>
+            </div>
+          </div>
+          <div>
+            <div style="font-size:12.5px;font-weight:700;color:var(--ink-2);margin-bottom:6px">문서 형식</div>
+            <div class="seg">
+              <button type="button" aria-pressed="true">회의</button>
+              <button type="button" aria-pressed="false">세미나</button>
+              <button type="button" aria-pressed="false">강의</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="banner info" style="margin-top:14px">
+          <span class="ico"><svg width="18" height="18" aria-hidden="true"><use href="#i-check"/></svg></span>
+          <div><b>한국어 회의록을 만듭니다</b>
+            번역 없이 한국어 그대로 정리합니다. 예상 <span class="num">$0.31</span> · 약 6분 소요.</div>
+        </div>
+
+        <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap;align-items:center">
+          <button class="btn" type="button"><svg class="ico" aria-hidden="true"><use href="#i-plus"/></svg>이 조합을 프로필로 저장</button>
+          <span class="sub">자주 쓰는 조합은 이름을 붙여 저장하면 다음부터 한 번에 선택할 수 있습니다.</span>
+        </div>
+      </div>
+
+      <h3 class="caption">저장된 프로필 — 기존 “처리 프로필” 기능과 통합</h3>
+      <div class="slist">
+        <div class="srow"><a class="slink" href="#">
+          <span class="t"><h3>표준 한국어 회의</h3><span class="chip idle">기본 제공</span></span>
+          <span class="m"><span>한국어 · 번역 없음 · 회의</span><span class="num">이번 달 14회 사용</span></span></a>
+          <div class="row-acts"><button class="iconbtn" type="button" aria-label="표준 한국어 회의 프로필 편집" title="편집"><svg width="17" height="17" aria-hidden="true"><use href="#i-cog"/></svg></button></div>
+        </div>
+        <div class="srow"><a class="slink" href="#">
+          <span class="t"><h3>영어 세미나 → 한국어</h3></span>
+          <span class="m"><span>영어 · 한국어로 번역 · 세미나</span><span class="num">이번 달 3회 사용</span></span></a>
+          <div class="row-acts">
+            <button class="iconbtn" type="button" aria-label="영어 세미나 프로필 편집" title="편집"><svg width="17" height="17" aria-hidden="true"><use href="#i-cog"/></svg></button>
+            <button class="iconbtn danger" type="button" aria-label="영어 세미나 프로필 삭제" title="삭제"><svg width="17" height="17" aria-hidden="true"><use href="#i-trash"/></svg></button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div></div></div>
+</section>
+
+</div><!-- /.proto -->
+
+<script>
+(function(){
+  var tabs = Array.prototype.slice.call(document.querySelectorAll('[role="tab"]'));
+  function select(tab){
+    tabs.forEach(function(t){
+      var on = t === tab;
+      t.setAttribute('aria-selected', on ? 'true' : 'false');
+      document.getElementById(t.getAttribute('aria-controls')).hidden = !on;
+    });
+    tab.focus();
+  }
+  tabs.forEach(function(t, i){
+    t.addEventListener('click', function(){ select(t); });
+    t.addEventListener('keydown', function(e){
+      var d = e.key === 'ArrowRight' ? 1 : e.key === 'ArrowLeft' ? -1 : 0;
+      if(!d) return;
+      e.preventDefault();
+      select(tabs[(i + d + tabs.length) % tabs.length]);
+    });
+  });
+})();
+</script>
+</body>
+</html>

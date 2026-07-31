@@ -31,6 +31,7 @@ from meeting_minutes_app.wiki_core.vault_retrieval import (
     norm_title,
     strip_frontmatter,
     keyword_terms,
+    normalize_domain_text,
     note_domain_score,
     build_obsidian_context_memo,
     build_related_notes_memo,
@@ -214,6 +215,83 @@ def minutes_vault_context_enabled() -> bool:
     return bool(_c("analysis.minutes_vault_context", False))
 
 
+#: 엔티티 겹침 회수의 주제 후보 상한. 후보마다 그래프 조회 2회(노드+엣지)라
+#: 무한정 늘리면 회의록 생성 앞단에 지연이 붙는다. 알려진 topic 노드가 아니면 조용히
+#: 0건이라 후보를 넉넉히 줘도 결과는 오염되지 않는다 — 비용만 든다.
+_ENTITY_TOPIC_CANDIDATES = 15
+
+#: 엔티티 겹침으로 회수한 노트에서 본문을 얼마나 가져올지(노트당 문자 수).
+#: 유사도 회수분(`wiki.context_max_chars`, 기본 2000)보다 **짧게** 잡는다. 용도가
+#: "이 회의에 나온 용어·인물의 배경 확인"이지 이전 회의 내용을 옮겨오는 게 아니다.
+_ENTITY_EXCERPT_CHARS = 700
+
+
+def _entity_overlap_notes(*, attendees=None, title: str = "", topic: str = "",
+                          segments_or_text: Any = None,
+                          exclude_titles: Optional[Sequence[str]] = None,
+                          limit: int = 3) -> List[Dict[str, Any]]:
+    """이번 회의의 **인물·주제와 겹치는** 이전 노트를 근거와 함께 회수한다.
+
+    씨앗은 추정하지 않는다 — 참석자는 이번 세션이 이미 아는 값이고, 주제 후보는 전사에서
+    뽑은 용어를 그래프의 **기존 topic 노드와 정확 일치**로만 맞춘다(모르는 용어는 노드가
+    없어 자연히 0건). 그래서 결과마다 "같은 인물: X · 같은 주제: Y"를 적을 수 있다.
+    """
+    from meeting_minutes_app.wiki_core import graph_sync
+
+    people = [str(a).strip() for a in (attendees or []) if str(a or "").strip()]
+    search_text = segments_to_search_text(segments_or_text) if segments_or_text else ""
+    # 주제 후보: 사용자가 준 topic + 전사 키워드. 정규화(별칭 치환)를 거쳐 넣는다 —
+    # STT 오인식 표기("한빝"→"한빛")가 그래프 노드 라벨과 어긋나지 않게.
+    cands: List[str] = []
+    for chunk in (topic or "", title or ""):
+        if chunk.strip():
+            cands.append(chunk.strip())
+    if search_text:
+        cands.extend(keyword_terms(normalize_domain_text(search_text)))
+    seen_c: set = set()
+    topics: List[str] = []
+    for t in cands:
+        k = norm_title(t)
+        if k and k not in seen_c and len(t) >= 2:
+            seen_c.add(k)
+            topics.append(t)
+        if len(topics) >= _ENTITY_TOPIC_CANDIDATES:
+            break
+    return graph_sync.notes_sharing_entities(
+        people, topics, exclude_titles=exclude_titles, limit=limit)
+
+
+def _entity_overlap_memo(rows: List[Dict[str, Any]], indexer=None, obs=None) -> str:
+    """엔티티 겹침 회수분 → 회의록 생성 memo 블록.
+
+    **사용 범위를 프롬프트에 못 박는다.** 이 블록의 목적은 이번 회의에 등장한 용어·인물의
+    배경을 정확히 쓰게 돕는 것이고, 이전 회의 내용을 이번 회의 논의로 옮기는 것이 아니다.
+    이 경계가 없으면 유사도 주입을 끈 이유가 무의미해진다.
+    """
+    if not rows:
+        return ""
+    parts = [
+        "[같은 인물·같은 주제를 다룬 이전 자료 — 근거가 확인된 연결만]",
+        "⚠ 사용 범위: 이번 회의에 **실제로 등장한** 용어·인물·조직의 배경을 정확히 쓰는 데만",
+        "쓰세요. 아래 자료의 내용을 이번 회의에서 논의된 것처럼 쓰지 말고, 결정·액션·일정으로",
+        "옮기지 마세요. 이번 전사에 없는 항목은 회의록에 넣지 않습니다.",
+        "",
+    ]
+    for r in rows:
+        parts.append(f"- [[{r['title']}]] ({r['reason']})")
+    body = ""
+    try:
+        body = build_related_notes_memo(
+            indexer, obs, [r["title"] for r in rows],
+            max_chars_per_note=_ENTITY_EXCERPT_CHARS,
+        )
+    except Exception:
+        body = ""
+    if body:
+        parts.extend(["", body])
+    return "\n".join(parts)
+
+
 def build_generation_context_memo(
     *,
     llm=None,
@@ -226,6 +304,7 @@ def build_generation_context_memo(
     obs=None,
     include_web: bool = True,
     inject_vault: Optional[bool] = None,
+    attendees: Optional[Sequence[str]] = None,
 ) -> Tuple[Optional[str], List[str], Dict[str, Any]]:
     """Build one shared generation memo for batch, realtime, and ingestion.
 
@@ -318,13 +397,36 @@ def build_generation_context_memo(
         except Exception:
             registry_memo = ""
 
+    # 4차: 엔티티 겹침 회수 — "같은 인물이 같은 주제로 얘기한 자료".
+    # 위 1~3차(유사도)와 달리 **주입 여부가 inject_vault 와 무관하다.** 근거가 추정이
+    # 아니라 기록이기 때문이다(graph_sync.notes_sharing_entities 주석의 실측 참고):
+    # 두 노트가 같은 person 노드를 가리키면 그건 유사도가 아니라 동일성이고, "왜 걸렸나"를
+    # 문장으로 적을 수 있다. 근거를 적을 수 있는 회수만 회의록 본문에 들인다 —
+    # 그것이 '설명 보완'과 '과대해석'을 가르는 선이다.
+    entity_memo, entity_rows = "", []
+    try:
+        entity_rows = _entity_overlap_notes(
+            attendees=attendees, title=title, topic=topic,
+            segments_or_text=segments_or_text, exclude_titles=related_titles,
+        )
+        if entity_rows:
+            entity_memo = _entity_overlap_memo(entity_rows, indexer, obs)
+            for r in entity_rows:
+                if r["title"] not in related_titles:
+                    related_titles.append(r["title"])
+                evidence.append({"note": r["title"], "heading": None,
+                                 "match_reason": r["reason"]})
+    except Exception as e:
+        print(f"[wiki] 엔티티 겹침 회수 건너뜀: {e}")
+
     web_memo = build_online_research_memo(llm, title=title, topic=topic) if include_web else ""
     if inject_vault:
         merged = merge_memo_parts(base_memo, wiki_memo, extra_memo, graph_memo,
-                                  registry_memo, web_memo)
+                                  registry_memo, entity_memo, web_memo)
     else:
-        # 사용자 본인 메모 + 웹 리서치만 — 볼트(이전 회의) 내용은 싣지 않는다.
-        merged = merge_memo_parts(base_memo, web_memo)
+        # 사용자 본인 메모 + 엔티티 겹침(근거 확인된 연결) + 웹 리서치.
+        # 유사도 회수분(1~3차)은 싣지 않는다.
+        merged = merge_memo_parts(base_memo, entity_memo, web_memo)
 
     _max_chars = int(_c("wiki_knowledge.max_context_chars", 12000) or 12000)
     if merged and len(merged) > _max_chars:

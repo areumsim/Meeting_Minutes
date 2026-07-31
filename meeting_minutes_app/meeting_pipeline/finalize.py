@@ -106,6 +106,8 @@ def build_related_notes_section(evidence: Optional[List[Dict[str, Any]]],
     """
     rows: List[str] = []
     seen: set = set()
+    has_reason = False        # 엔티티 겹침(근거 명시) 항목이 있나
+    has_similarity = False    # 유사도만으로 걸린 항목이 있나
     for item in (evidence or []):
         link = _evidence_link(item)
         title_key = str((item or {}).get("title") or "").strip().lower()
@@ -120,6 +122,14 @@ def build_related_notes_section(evidence: Optional[List[Dict[str, Any]]],
         seen.add(title_key)
         icon = _SOURCE_ICON.get(str(item.get("source_type") or "note"), "📄")
         bits = [f"- {icon} {link}"]
+        # 엔티티 겹침으로 걸린 노트는 **왜 걸렸는지**를 그대로 적는다("같은 인물: 남우진").
+        # 유사도 점수와 달리 검증 가능한 근거이므로 관련도 숫자보다 먼저 보여 준다.
+        reason = str(item.get("match_reason") or "").strip()
+        if reason:
+            bits.append(f"— {reason}")
+            has_reason = True
+        else:
+            has_similarity = True
         score = float(item.get("score") or 0)
         if score:
             bits.append(f"(관련도 {score:.2f})")
@@ -137,17 +147,29 @@ def build_related_notes_section(evidence: Optional[List[Dict[str, Any]]],
         if title_key and title_key not in seen and len(rows) < limit:
             seen.add(title_key)
             rows.append(f"- 📄 [[{t}]]")
+            has_similarity = True     # 제목만 있는 항목 = 근거 없음
     if not rows:
         return ""
-    # 표현 수위는 **실측에 맞춘다**. 이 목록은 '근거'가 아니라 '찾아볼 만한 후보'다 —
-    # scripts/measure_retrieval_floor.py 로 실볼트를 재 보면, 전사에 대해 그 전사
-    # 자신의 회의록(볼트에서 가장 관련 있는 문서)이 1위로 회수되는 비율이 임베딩
-    # 0%(중위 15위) · TF-IDF 0%(중위 88위)다. 이런 회수 결과를 "근거"로 적으면
-    # 회의록이 검증되지 않은 연결을 사실처럼 주장한다.
+    # 머리말은 **목록에 실제로 담긴 종류**에 맞춘다. 두 종류가 섞이는데 신뢰도가 다르다.
+    #
+    # (가) 엔티티 겹침(`match_reason` 있음) — 같은 person/topic 노드를 가리킨다는 *기록*.
+    #      추정이 아니므로 회의록 본문 보완에도 쓰인다.
+    # (나) 유사도 회수 — scripts/measure_retrieval_floor.py 실측에서 전사에 대해 그
+    #      전사 자신의 회의록조차 1위 회수율이 임베딩 0%(중위 15위)·TF-IDF 0%(중위 88위)였다.
+    #      '근거'라고 적으면 회의록이 검증되지 않은 연결을 사실처럼 주장한다.
+    #
+    # 한쪽만 있는데 양쪽 문구를 다 붙이면 그것도 거짓이 된다 — 그래서 조건부다.
+    notes: List[str] = []
+    if has_reason:
+        notes.append("> **같은 인물/같은 주제**로 걸린 항목은 이유가 함께 적혀 있습니다. "
+                     "이 항목은 용어·배경 확인용으로 회의록 작성에 참고했습니다.")
+    if has_similarity:
+        notes.append("> 이유가 없는 항목은 내용이 **비슷해 보여서** 자동 검색된 것으로, "
+                     "관련성은 검증되지 않았습니다.")
+    notes.append("> 어느 쪽이든 이번 회의에서 논의되지 않은 내용은 회의록 본문에 "
+                 "들어가지 않습니다. 확인이 필요하면 직접 열어 보세요.")
     return (f"{RELATED_NOTES_HEADING}\n\n"
-            "> 회의 내용과 **비슷해 보이는** 내부 노트를 자동 검색해 붙인 목록입니다.\n"
-            "> 관련성은 검증되지 않았고, 회의록 본문은 이 노트들을 참고하지 않고 "
-            "이번 녹음만으로 작성됩니다. 확인이 필요하면 직접 열어 보세요.\n\n"
+            + "\n".join(notes) + "\n\n"
             + "\n".join(rows) + "\n")
 
 
@@ -413,6 +435,9 @@ def run_post_session(
             obs=options.obs,
             include_web=options.include_web,
             inject_vault=inject_vault,
+            # '같은 인물이 같은 주제로 얘기한 자료' 회수의 씨앗 — 추정이 아니라 이번
+            # 세션이 이미 아는 참석자다(계획 노트 명단 + 화자 추론 결과).
+            attendees=inputs.attendees,
         )
         memo = memo2
         res.related_note_titles = mw.merge_related_note_titles(

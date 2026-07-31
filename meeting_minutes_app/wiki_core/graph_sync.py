@@ -18,7 +18,7 @@ import json
 import os
 import re
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from meeting_minutes_app.wiki_core import graph_db
 from meeting_minutes_app.wiki_core import wiki_knowledge as wk
@@ -586,3 +586,127 @@ def sync_session_graph(
             conn.commit()
     except Exception as e:
         print(f"[graph_sync] sync_session_graph 실패 (무시): {e}")
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#  엔티티 겹침 회수 — "같은 인물이 같은 주제로 얘기한 자료"
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#
+# 왜 유사도 검색과 별도인가
+# -------------------------
+# 임베딩·TF-IDF 유사도는 이 볼트에서 관련 문서를 찾지 못한다 — 실측(2026-07-31,
+# scripts/measure_retrieval_floor.py)에서 전사에 대해 그 전사 **자신의 회의록**이
+# 1위로 회수되는 비율이 임베딩 0%(중위 15위) · TF-IDF 0%(중위 88위)였다. 그런 회수
+# 결과를 회의록 본문 컨텍스트로 주입하면 무관한 이전 회의가 이번 회의록에 섞인다.
+#
+# 반면 그래프의 `note -[:MENTIONED]-> person|topic` 엣지는 **추정이 아니라 기록**이다.
+# "이 노트가 남우진를 언급했다"는 사실이고, 두 노트가 같은 person 노드를 가리키면
+# 그건 유사도가 아니라 동일성이다. 같은 실측에서 이 축의 회수량을 재 보면:
+#
+#   같은 인물 겹침        평균 1.2건 · 최대 4건
+#   인물 ∩ 주제 겹침      1~3건
+#
+# 유사도가 무차별로 10건을 내던 자리에서 1~3건이 나오고, **왜 걸렸는지 문장으로 적을
+# 수 있다**("같은 인물: 남우진 · 같은 주제: 양자 머신러닝"). 근거를 적을 수 있는 회수만
+# 회의록 본문에 주입한다 — 그것이 '설명 보완'과 '과대해석'을 가르는 선이다.
+#
+# 한계: 그래프에 엣지가 있는 노트만 대상이다(현재 볼트 31/457건). 백필이 안 된 노트는
+# 회수되지 않는다 — 못 찾는 것은 조용히 없는 것으로 두고, 있는 것만 근거와 함께 낸다.
+
+#: 화자 특정 실패로 생긴 자리표시자 — 사람으로 취급하면 서로 다른 회의가 'A'로 묶인다.
+_PLACEHOLDER_PERSON_KEYS = frozenset(
+    resolve_canonical_key("person", n) for n in (
+        "A", "B", "C", "발언자A", "발언자B", "발언자C", "발언자 A", "발언자 B",
+        "화자1", "화자2", "미정", "CFO", "코롱측", "내부 수행사", "외부 업체",
+    )
+)
+
+#: 주제만 겹칠 때 요구하는 최소 겹침 수. 1개는 'NISQ' 하나로 무관한 두 노트가 묶여
+#: 유사도 검색과 같은 문제가 되고, 실측에서 겹침>=2 는 평균 3.9건으로 아직 다룰 만하다.
+_MIN_TOPIC_ONLY_OVERLAP = 2
+
+
+def _mentioned_note_labels(node_type: str, label: str) -> List[str]:
+    """엔티티(person/topic) 를 **언급한** note 노드의 라벨 목록.
+
+    그래프 위상은 항상 `note -[:MENTIONED]-> entity` 이므로 엔티티에서 보면 역방향
+    엣지(to_node_id=엔티티)를 읽으면 된다.
+    """
+    try:
+        key = resolve_canonical_key(node_type, label)
+        node = graph_db.get_node_by_key(node_type, key)
+        if not node:
+            return []
+        out: List[str] = []
+        for e in graph_db.list_edges(relation_type="MENTIONED",
+                                     to_node_id=node["id"], limit=200):
+            src = graph_db.get_node(e.get("from_node_id") or "")
+            if src and src.get("type") == "note" and src.get("label"):
+                out.append(str(src["label"]))
+        return out
+    except Exception:
+        return []
+
+
+def notes_sharing_entities(people: Optional[Sequence[str]] = None,
+                          topics: Optional[Sequence[str]] = None,
+                          *,
+                          exclude_titles: Optional[Sequence[str]] = None,
+                          limit: int = 5) -> List[Dict[str, Any]]:
+    """이번 회의의 인물·주제와 **같은 엔티티를 언급한** 노트를 근거와 함께 회수한다.
+
+    반환: [{"title", "people": [...], "topics": [...], "reason": "같은 인물: … · 같은 주제: …"}]
+    관련도 점수가 아니라 **겹친 엔티티 자체**를 근거로 돌려준다 — 회의록에 "왜 이 노트가
+    관련 있는지"를 적을 수 있어야 주입할 자격이 생긴다.
+
+    채택 규칙(둘 중 하나):
+      - 인물이 1명이라도 겹친다 (자리표시자 화자는 제외 — `_PLACEHOLDER_PERSON_KEYS`)
+      - 주제가 `_MIN_TOPIC_ONLY_OVERLAP` 개 이상 겹친다
+    정렬은 (겹친 인물 수, 겹친 주제 수) 내림차순 — 인물 일치를 주제보다 강하게 본다.
+    """
+    if not _feature_enabled("graph_enabled"):   # sub_key 만 넘긴다(wiki_knowledge. 접두 자동)
+        return []
+    ppl = [p for p in (people or []) if str(p or "").strip()
+           and resolve_canonical_key("person", p) not in _PLACEHOLDER_PERSON_KEYS]
+    tps = [t for t in (topics or []) if str(t or "").strip()]
+    if not ppl and not tps:
+        return []
+
+    excl = {_norm_key(t) for t in (exclude_titles or []) if t}
+    by_note: Dict[str, Dict[str, set]] = {}
+
+    def _collect(kind: str, names: Sequence[str]) -> None:
+        for name in names:
+            for note_label in _mentioned_note_labels(
+                    "person" if kind == "people" else "topic", name):
+                if _norm_key(note_label) in excl:
+                    continue
+                slot = by_note.setdefault(
+                    note_label, {"people": set(), "topics": set()})
+                slot[kind].add(str(name))
+
+    try:
+        _collect("people", ppl)
+        _collect("topics", tps)
+    except Exception as e:
+        print(f"[graph_sync] 엔티티 겹침 회수 실패 (무시): {e}")
+        return []
+
+    rows: List[Dict[str, Any]] = []
+    for title, hit in by_note.items():
+        n_p, n_t = len(hit["people"]), len(hit["topics"])
+        if not (n_p >= 1 or n_t >= _MIN_TOPIC_ONLY_OVERLAP):
+            continue
+        bits = []
+        if n_p:
+            bits.append("같은 인물: " + ", ".join(sorted(hit["people"])))
+        if n_t:
+            bits.append("같은 주제: " + ", ".join(sorted(hit["topics"])))
+        rows.append({
+            "title": title,
+            "people": sorted(hit["people"]),
+            "topics": sorted(hit["topics"]),
+            "reason": " · ".join(bits),
+        })
+    rows.sort(key=lambda r: (-len(r["people"]), -len(r["topics"]), r["title"]))
+    return rows[:max(0, int(limit))]

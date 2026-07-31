@@ -783,6 +783,16 @@ class BrowserRealtimeSession:
             return
         if self._segment_counter % web_interval != 0:
             return
+        # 내용 없는 발화로 웹 검색을 쏘지 않는다 — vault 검색과 **같은 문턱**을 쓴다.
+        # 웹은 vault 와 달리 실제 API 호출·비용·지연이 붙으므로 이 낭비가 더 크다
+        # (예전엔 "다음 회의는 다음 주 화요일입니다" 로도 웹 리서치가 나갔다).
+        # 판정 실패가 실시간 스트림을 깨지 않게 감싼다 — 이 파일의 규칙(예외 무전파).
+        try:
+            if (self._searcher is not None
+                    and not self._searcher.has_searchable_content(text)):
+                return
+        except Exception:
+            pass
         if vault_first and self._searcher is not None and self._searcher.enabled:
             found = len(self._searcher.collected_notes())
             if found > self._internal_seen_count:

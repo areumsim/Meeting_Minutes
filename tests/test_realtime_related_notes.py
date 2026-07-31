@@ -33,12 +33,18 @@ def make_session(monkeypatch):
 
 
 class _FakeSearcher:
-    def __init__(self, notes=None, enabled=True):
+    def __init__(self, notes=None, enabled=True, searchable=True):
         self._notes = list(notes or [])
         self.enabled = enabled
+        #: 웹 검색도 vault 검색과 **같은 내용 문턱**을 쓴다 — 인사말·군더더기로 웹 API를
+        #: 쏘지 않게. 실제 판정은 RealtimeVaultSearcher.has_searchable_content().
+        self.searchable = searchable
 
     def collected_notes(self):
         return list(self._notes)
+
+    def has_searchable_content(self, text):
+        return self.searchable
 
     def add(self, n=1):
         self._notes.extend([{"title": f"n{i}"} for i in range(n)])

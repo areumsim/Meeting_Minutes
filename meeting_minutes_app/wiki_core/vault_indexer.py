@@ -1037,6 +1037,34 @@ class VaultIndexer:
             })
         return out
 
+    def known_term_count(self, text: str) -> int:
+        """이 텍스트에서 **볼트 어휘에 실제로 존재하는** 검색어의 개수.
+
+        "이 발화에 검색할 거리가 있나"를 인덱스 자체에 물어보는 가장 싼 방법이다
+        (idf 조회뿐 — 랭킹 계산도, 임베딩 API 도 부르지 않는다).
+
+        실시간 검색이 이 값으로 발화를 고른다. 예전에는 세그먼트 순번으로
+        `counter % 3 == 0` 만 봐서 **내용과 무관하게** 3번째 발화를 검색했다. 그래서
+        "남우진 교수님 볼츠만 머신 발표"는 건너뛰고 "다음 회의는 다음 주 화요일입니다"를
+        검색해 Daily·Project 같은 무관 노트를 화면에 띄웠다.
+
+        실측(2026-07-31, 실볼트 457노트 · 실제 전사 발화 3,563건): 인사말·진행 군더더기와
+        STT 환각(키릴/중국어 조각)은 일치 term 이 0~2개에 몰리고, 고유명사가 들어간 실제
+        논의는 3개 이상이다. 분포는 0개 4.8% · 1개 7.4% · 2개 11.1% · 3개 이상 76.7%.
+        (한계: 인사말/알맹이 라벨은 손으로 고른 소표본 14건이다. 정확한 분류기가 아니라
+         **싼 게이트**로 쓴다 — 놓친 발화는 다음 발화에서 다시 기회가 있다.)
+        """
+        if not self._built and not self.load():
+            return 0
+        try:
+            from meeting_minutes_app.wiki_core.vault_retrieval import (
+                keyword_terms, normalize_domain_text,
+            )
+            terms = keyword_terms(normalize_domain_text(str(text or "")))
+        except Exception:
+            return 0
+        return sum(1 for t in terms if self._idf.get(t, 0.0) > 0)
+
     def find_related(self, text: str, limit: int = 5,
                      min_score: float = 0.05,
                      path_prefixes: Optional[Sequence[str]] = None,

@@ -149,13 +149,24 @@ class RealtimeVaultSearcher:
         self.allow_launch = allow_launch
 
         self._gate = bool(_c("wiki.realtime_vault_search", True))
-        self._interval = max(int(_c("wiki.realtime_search_interval", 3) or 3), 1)
+        # 기본 1 — **내용 게이트(`_min_terms`)가 스로틀의 원래 목적을 대신한다.**
+        # 종전 기본 3은 "쓸데없는 검색을 줄인다"는 목적이었는데, 순번으로 고르니
+        # 알맹이 있는 발화의 2/3를 버리면서 인사말은 그대로 검색했다. 두 장치가
+        # 중복이고 게이트가 더 나은 쪽이라 스로틀을 풀었다.
+        # 비용 근거: 검색 1회 = 쿼리 임베딩 1회(180자 ≈ 90토큰, text-embedding-3-small
+        # 기준 약 $0.0000018) + 로컬 계산 약 89ms(백그라운드 스레드, 전사 논블로킹).
+        # 60분 회의의 알맹이 발화 200건을 전부 검색해도 약 $0.0004 다.
+        # 지연·비용이 걱정되면 이 값을 2~3으로 올린다(자격 있는 발화만 센다).
+        self._interval = max(int(_c("wiki.realtime_search_interval", 1) or 1), 1)
         self._backend_pref = str(_c("wiki.realtime_search_backend", "auto") or "auto")
         # 내부 후보는 넉넉히 모으고(누적 검토용) 표시만 상위 N개로 제한한다
         self._note_k = max(int(_c("wiki.realtime_note_candidates", 10) or 10), 1)
         self._paper_k = max(int(_c("wiki.realtime_paper_candidates", 4) or 4), 1)
         self._display_n = max(int(_c("wiki.realtime_display_count", 3) or 3), 1)
         self._query_chars = max(int(_c("wiki.realtime_query_chars", 180) or 180), 20)
+        # 검색할 발화를 고르는 내용 문턱 — 볼트 어휘와 일치하는 term 최소 개수.
+        # 0 이면 게이트 없음(종전처럼 순번만으로 스로틀).
+        self._min_terms = max(int(_c("wiki.realtime_min_terms", 3) or 0), 0)
 
         self._counter = 0
         self._notes: List[Dict[str, Any]] = []
@@ -241,11 +252,36 @@ class RealtimeVaultSearcher:
 
     # ── 핫패스 API ────────────────────────────────────────
 
+    def has_searchable_content(self, text: str) -> bool:
+        """검색할 거리가 있는 발화인가 — 볼트 어휘와 일치하는 term 개수로 판정.
+
+        인덱스가 아직 준비되지 않았으면 True(종전 동작 유지) — 게이트가 초기화 실패를
+        '내용 없음'으로 오판해 검색을 통째로 막으면 안 된다.
+        """
+        if self._min_terms <= 0 or self._indexer is None:
+            return True
+        try:
+            return self._indexer.known_term_count(text) >= self._min_terms
+        except Exception:
+            return True
+
     def offer_segment(self, text: str) -> None:
         """세그먼트 확정 시 호출. 스로틀 간격에 맞으면 검색을 풀에 제출.
-        절대 블로킹하지 않고, 절대 예외를 전파하지 않는다."""
+        절대 블로킹하지 않고, 절대 예외를 전파하지 않는다.
+
+        **스로틀 카운터는 '검색할 거리가 있는' 발화만 센다.** 예전에는 모든 발화를 세어
+        `counter % interval == 0` 을 봤는데, 그러면 내용과 무관하게 3번째 발화가 뽑혀
+        알맹이 있는 발화는 건너뛰고 인사말·군더더기가 검색됐다(실측 재현:
+        "남우진 교수님 볼츠만 머신 발표"→스킵, "다음 회의는 다음 주 화요일입니다"→검색되어
+        Daily·Project 가 화면에 떴다). 자격 있는 발화만 세면 **검색 횟수는 그대로거나
+        줄면서**(실볼트 전사 기준 전체의 약 25% vs 종전 33%) 검색되는 발화는 항상
+        내용이 있다. `vault_indexer.known_term_count()` 주석의 실측 참고.
+        """
         try:
             if not self.enabled or not text or not text.strip():
+                return
+            # 인덱스는 풀 스레드에서 lazy init 된다 — 준비 전에는 게이트가 통과시킨다.
+            if not self.has_searchable_content(text):
                 return
             self._counter += 1
             if self._counter % self._interval != 0:

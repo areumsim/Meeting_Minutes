@@ -1,6 +1,6 @@
 # Meeting Minutes System — Architecture
 
-> 코드 기반 정확한 참조 문서 · 최초 2026-07-08 · **갱신 2026-07-31 (기준 커밋 `8917d11`)**
+> 코드 기반 정확한 참조 문서 · 최초 2026-07-08 · **갱신 2026-07-31 (기준 커밋 `3531ba5`)**
 > `meeting_minutes_app/` · `web/backend/api/realtime.py` 분석
 >
 > 기준 커밋을 적어 두는 이유: 날짜만으로는 이 문서가 낡았는지 알 수 없다. 해시가 있으면
@@ -347,9 +347,15 @@ flowchart TD
 flowchart LR
     A[청크] --> B[OpenAI models.stt]
     B -- 실패 --> C[OpenAI models.stt_fallback]
-    C -- 실패 --> D[Groq models.stt_groq\napi.groq_api_key 필요]
+    C -- 실패 --> D[Groq models.stt_groq\nstt.groq_fallback=true · api.groq_api_key 필요]
     D -- 실패 --> E[로컬 faster-whisper\nmodels.stt_local · stt.local_fallback=true]
 ```
+
+**Groq 단계는 명시 토글(`stt.groq_fallback`, 기본 꺼짐)이 있어야 체인에 든다.** 과거에는 이 토글이
+없어 **키 존재만으로** 편입됐다 — 사용자가 "선택 사항"으로 키를 넣어 두면 그 뒤 벤더 전환은
+무동의·자동이었고 회의 음성이 국외로 나갔다. 로컬 단계에는 `stt.local_fallback` 토글이 있었으므로
+Groq 만 예외였다. 판정은 `stt.groq_fallback()` 한 곳이며, 키가 있는데 토글이 꺼져 있으면 조용한
+차이가 되지 않게 경고를 낸다.
 
 | 경로 | 함수 | 어디까지 폴백하나 |
 |---|---|---|
@@ -435,10 +441,35 @@ CLI 라이브는 같은 모델을 3회 두드린 뒤 다음 단계로 가고(순
 단일 소스)로 수렴한다 — 갈라지면 상태 배지가 체인과 다른 모델을 보고한다.
 포터블 배포본에는 라이브러리(`faster-whisper`)가 포함되지만 가중치는 포함되지 않는다.
 
-비용 추정(`pricing.stt_rate_per_min()`)은 **기본 모델 기준**이다. Groq/로컬 단가도 표에 있지만
-아직 추정에만 쓰인다 — 세션이 어떤 제공자로 전사됐는지 기록해 사후 재계산하는 경로는 없어,
-폴백이 걸린 세션의 추정치는 과대평가된다(실제 청구액이 더 싸다). 단가 조회는 표를 직접
-`.get` 하지 말고 `stt_rate_per_min()`을 쓴다 — 미등록 모델의 기본 단가가 호출부마다 갈렸다.
+비용 추정은 `pricing.estimate_session_cost()` 하나를 지난다. **표시값과 지출 한도 판정이 같은
+함수를 써야 한다** — 갈라지면 화면에 보이는 금액과 실제로 막히는 기준이 달라진다.
+
+- **패스 수를 반영한다**: 실시간 경로는 `realtime.two_pass`(기본 켜짐)로 STT 과금이 두 번 난다.
+  과거에는 이 인자가 없어 1차 비용만 계산했다 — 신규 설치 기준 실제의 1/3(3배 과소), 이 리포
+  기본 설정에서 1/2(2배 과소)였고 **지출 한도도 그 값으로 판정**했다. 보정 모델 기본값
+  (`gpt-4o-transcribe` $0.006)이 표시 모델 기본값($0.003)보다 비싸 신규 설치가 가장 크게 틀렸다.
+- **어느 경로에 two_pass 를 적용하는지는 `pricing.is_two_pass_source()` 한 곳이 정한다**
+  (`web_realtime`/`realtime`/`recover`). 배치·업로드에는 보정 패스가 없으므로 적용하면 과대
+  표시된다. 이 판정을 호출부에 복사하면 웹과 CLI 가 갈라진다.
+- 폴백이 걸린 세션은 **어느 제공자로 전사됐는지 기록된다** — 노트 frontmatter(`stt_provider`,
+  `stt_fallback_used`)와 `sessions` 테이블 양쪽. 배치 경로는 `pipeline.process_single(stt_meta_out=)`
+  out-param 으로 실측 제공자를 받아 세션에 남기고, 상세 화면이 '대체 경로' 배지를 띄운다.
+  다만 **그 값으로 비용을 사후 재계산하는 경로는 아직 없다** — Groq/로컬로 처리된 세션의
+  추정치는 여전히 과대평가된다(실제 청구액이 더 싸다).
+- 단가 조회는 표를 직접 `.get` 하지 말고 `stt_rate_per_min()`을 쓴다 — 미등록 모델의 기본
+  단가가 호출부마다 갈렸다(0.003 vs 0.006).
+
+**지출 한도 판정은 `common/spend_guard.py` 하나로 수렴한다.** 한도는 업로드와 임베딩 두 곳에만
+있었고 폴더 감시·계획 자동화·재생성은 검사를 비켜 갔다. 폴더 감시는 그보다 나빴다 —
+`ingestion_pipeline` 이 `web.backend.database` 를 import 하지 않아 DB 세션이 생기지 않고
+`cost_estimate` 도 기록되지 않았다. 즉 워처가 태운 돈이 월 합계에서 **영구히 보이지 않아**
+다른 경로의 한도 판정까지 느슨해졌다. 지금은 세션 없는 과금을 `usage_log`(kind=`watcher` /
+`plan_automation` / `embedding`)에 남기고, `spend_guard.AUTOMATION_KINDS` 가 자동 실행분을
+구분해 `/api/cost/summary` 의 `automationUsd` 로 조회된다.
+
+`spend_guard.automation_paused()`(`automation.paused`)는 모든 자동 실행을 한 번에 멈춘다.
+개별 중지(`watcher/stop`)와 달리 **설정값이라 재시작에도 유지된다** — 개별 중지는
+`autostart_from_config()` 가 다시 켜 버린다.
 
 ---
 

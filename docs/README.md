@@ -8,7 +8,7 @@
 | 문서 | 정본 여부 | 갱신 |
 |---|---|---|
 | [`../scripts/build/사용법_포터블.txt`](../scripts/build/사용법_포터블.txt) | **정본 — 설치·실행** (배포본에 동봉된다. 앱 [도움말] 화면과 `USER_GUIDE.md` 가 여기에 맞춘다) | 배포 시 |
-| [`USER_GUIDE.md`](USER_GUIDE.md) | 기능·사용법 상세 안내서 | 2026-07-30 |
+| [`USER_GUIDE.md`](USER_GUIDE.md) | 기능·사용법 상세 안내서 | 2026-07-31 |
 | [`회의비서_사용법.md`](회의비서_사용법.md) | 회의 생애주기(계획→리서치→녹음→매칭·병합) 흐름 | 2026-07-31 |
 | [`GUIDE_Obsidian_Claude.md`](GUIDE_Obsidian_Claude.md) | Obsidian 볼트를 쓰는 사용자용 3경로 안내 | 2026-07-31 |
 | [`GUIDE_녹음_요약_메일.md`](GUIDE_녹음_요약_메일.md) | 옵시디언 녹음 → 요약 → 메일 자동화 | 2026-07-31 |
@@ -39,7 +39,7 @@
 |---|---|---|
 | [`SETUP_NEW_TEAM.md`](SETUP_NEW_TEAM.md) | **정본 — 새 팀 설치 절차** | 2026-07-28 |
 | [`배포_릴리즈_절차.md`](배포_릴리즈_절차.md) | **정본 — 포터블 빌드·검증·GitHub Release 절차** | 2026-07-29 |
-| [`RELEASE_NOTES_최신.md`](RELEASE_NOTES_최신.md) | GitHub Release 붙여넣기용 본문 | ⚠️ 본문은 `3f7e6a1` 기준 · **미출시 38건은 「다음 릴리즈 초안」에 누적** |
+| [`RELEASE_NOTES_최신.md`](RELEASE_NOTES_최신.md) | GitHub Release 붙여넣기용 본문 | ⚠️ 본문은 `3f7e6a1` 기준 · **미출시 44건은 「다음 릴리즈 초안」에 누적** · 비용 표기가 2~3배로 보이는 변경 포함(🔴 문구 필수) |
 
 > 이 리포에는 **git 태그가 없다**. 태그는 GitHub Release 를 작성할 때 생성된다.
 

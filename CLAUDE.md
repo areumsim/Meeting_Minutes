@@ -11,7 +11,8 @@ Obsidian 기반 **회의록 자동화 + LLM Wiki 지식순환** 시스템. 오�
     `run_meeting.bat`로 호출. 주요 cmd: `realtime`/`record`, `batch`, `audio-watcher`,
     `vault-indexer`, `wiki-ask`, `prep-brief`, `reindex`.
   - `common/` — `config_loader`(설정+reload 훅), `config_schema`, `llm_client`(OpenAI/Anthropic),
-    `pricing`(비용), `app_paths`(경로 해석).
+    `pricing`(단가·비용 추정), `spend_guard`(지출 한도 판정+세션 밖 과금 기록),
+    `usage_log`(세션 없는 사용량 테이블), `app_paths`(경로 해석).
   - `meeting_pipeline/` — STT·실시간 전사·파이프라인·watcher·finalize·date_utils 등.
   - `wiki_core/` — `vault_indexer`(TF-IDF+임베딩 인덱스), `wiki_ask`(위키 Q&A), `wiki_knowledge`
     (prep-brief/레지스트리), `graph_db`/`graph_sync`(지식그래프), `obsidian`/`obsidian_fs`(볼트 접근).
@@ -24,7 +25,7 @@ Obsidian 기반 **회의록 자동화 + LLM Wiki 지식순환** 시스템. 오�
 pip install -e .                       # 개발 설치
 python run_meeting.py <cmd> [args]     # CLI (run_meeting.bat 도 동일)
 webUI_실행.bat                          # 웹 UI 로컬 실행 (데이터 = 리포 루트)
-python -m pytest                       # 테스트 (2026-07-31: 720 collected, 1 skipped) ← 수치 정본
+python -m pytest                       # 테스트 (2026-07-31: 769 collected, 1 skipped) ← 수치 정본
 python run_meeting.py reindex          # 위키/그래프 인덱스 재빌드
 ```
 
@@ -69,3 +70,20 @@ python run_meeting.py reindex          # 위키/그래프 인덱스 재빌드
     편입분은 노트 메타에 `source: "reference"`가 붙어 `recent_notes()`의 '회의' 구제에서 빠진다
     (`01_회의_세미나`가 `meeting_dirs`의 `"회의"`에 substring으로 걸려 발표자료가 '최근 회의'로
     승격되던 자리).
+- **비용에 관한 세 가지 단일 소스.** 같은 규칙이 복사돼 갈라진 전례가 이미 여러 번이다
+  (단가 표 4곳, 노트 판정 2곳). 새 과금 경로를 추가할 때 이 셋을 우회하면 안 된다.
+  - **추정**: `pricing.estimate_session_cost()`. 표를 직접 `.get` 하지 말고
+    `stt_rate_per_min()`/`minutes_cost()`를 쓴다. 실시간은 `two_pass=`/`revise_model=`을
+    반드시 넘긴다 — 안 넘기면 STT 과금을 한 번만 계산해 **신규 설치 기준 실제의 1/3**이 된다
+    (`is_two_pass_source()`가 어느 출처에 적용되는지 판정한다).
+  - **한도**: `spend_guard.blocked()`. 업로드·재생성·폴더 감시·계획 자동화·임베딩이 모두 이
+    함수를 지난다. **표시 금액과 한도 판정이 같은 함수에서 나와야 한다.**
+  - **집계**: 세션이 있으면 `sessions.cost_estimate`(누적은 `db.add_session_cost()` — 
+    `update_session_status`는 덮어쓰기라 부적합), 세션이 없으면 `spend_guard.record()`.
+    `ingestion_pipeline`은 `web.backend.database`를 import하지 않아 **DB 세션이 안 생긴다** —
+    그래서 워처 과금이 월 합계에서 영구히 안 보였다. 세션 없는 경로는 반드시 후자를 쓴다.
+- **자동 실행 경로는 두 관문을 지난다** — `spend_guard.automation_paused()`(전역 일시정지,
+  설정값이라 재시작에도 유지된다)와 `spend_guard.blocked()`(한도). 워처는 한도 초과·기존 파일을
+  `status="queued"` 확인 대기열에 넣고, `queued`는 **터미널 상태**다(매 폴링 재판정 방지).
+  승인은 `reprocess()`로 상태를 지우는 것이며, 그 뒤 한도 검사를 **다시** 지난다 —
+  승인이 한도를 우회하는 뒷문이 되면 안 된다.

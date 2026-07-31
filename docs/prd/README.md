@@ -99,12 +99,25 @@
 | 문서 주장 | 확인 명령 | 그때 결과 |
 |---|---|---|
 | 로컬 전용 / loopback 전용 | `grep -rn 'lan_access' meeting_minutes_app/` | 비지 않음 → "기본 loopback, `lan_access` 옵트인"으로 써야 한다 |
-| 외부 호출은 백엔드 경유 | `grep -rn 'api.openai.com' web/frontend/src/` | **3곳** → 단독 모드 존재를 인정해야 한다 |
+| 외부 호출은 백엔드 경유 | `grep -rn 'api.openai.com' web/frontend/src/` | **4줄 = 주석 1 + 실제 호출 3**(`api.ts` 665·976·1025) → 단독 모드 존재를 인정해야 한다. 줄 수만 세면 호출 수와 어긋난다 |
 | TLS 검증 비활성 경로 0건 | `grep -n 'verify_ssl\|"verify"' meeting_minutes_app/common/config_schema.py` | **2건, 그중 1건 기본 False** |
 | PDF/PPTX 추출 파이프라인 있음 | `grep -n 'pypdf\|python-pptx' pyproject.toml requirements*.txt` | **0건** → Natively FR-B3 ❌ 표기가 정당 |
-| 테스트 수 | `python -m pytest --collect-only -q` 마지막 줄 | **720** — `CLAUDE.md` 와 일치해야 한다(수치 정본은 CLAUDE.md) |
+| 테스트 수 | `python -m pytest --collect-only -q` 마지막 줄 | **769** — `CLAUDE.md` 와 일치해야 한다(수치 정본은 CLAUDE.md) |
 | 월 한도 서버 강제 | `grep -rn 'monthly_cap_usd' meeting_minutes_app/` | 존재 → G-13 "PRD에 요구사항 없음" 표기는 폐기됐다 |
 | `MM-*` 오류 코드 | `grep -rn 'MM-[A-Z]*-[0-9]' web/backend/` | **0건** → OPS-004 는 신규 구축 |
+
+Batch A(비용 정합·자동 실행 안전장치) 착수 후 추가된 확인 항목:
+
+| 문서 주장 | 확인 명령 | 그때 결과 |
+|---|---|---|
+| two_pass 가 비용 추정에 반영됨 | `grep -n 'two_pass' meeting_minutes_app/common/pricing.py` | 존재 → FR-014 의 N-1 은 해소됐다(미해소로 쓰면 틀린다) |
+| 표시값과 한도가 같은 함수 | `grep -rn 'estimate_session_cost' web/backend/api/` | 4곳 모두 `pricing.estimate_session_cost` 경유 |
+| 자동 실행 과금이 합계에 잡힘 | `grep -n 'KIND_WATCHER\|KIND_PLAN_AUTOMATION' meeting_minutes_app/common/spend_guard.py` | 존재 → N-2 해소. 대시보드는 `automationUsd` 로 조회 |
+| 한도 판정이 한 곳인지 | `grep -rn 'spend_guard.blocked' meeting_minutes_app/ web/backend/` | 워처·계획자동화·임베딩·재생성이 모두 같은 함수 |
+| Groq 가 기본 꺼짐인지 | `grep -n 'groq_fallback' meeting_minutes_app/common/config_schema.py` | `default: False` → N-5 해소(결정: 유지·기본 꺼짐) |
+| 워처 첫 스캔이 전량 처리하지 않는지 | `grep -n 'first_scan' meeting_minutes_app/meeting_pipeline/audio_watcher.py` | 존재 → N-3 해소. 대기열은 `GET /watcher/pending` |
+| 전역 일시정지 존재 | `grep -n 'automation_paused' meeting_minutes_app/common/spend_guard.py` | 존재 → N-6 해소 |
+| 벤더 전환이 세션에 남는지 | `grep -n 'stt_fallback_used' web/backend/database.py` | 컬럼 존재 → N-25 는 배치 경로까지 해소 |
 
 ## 6. archive/ 와 이력 주의
 

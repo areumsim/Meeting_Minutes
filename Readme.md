@@ -1324,6 +1324,14 @@ CLI에서 직접 실행 시에는 `--topic "주제"` 옵션으로 지정할 수 
 | `gpt-4o-mini-transcribe` | ❌ | ❌ | $0.003 | ✅ | 제한적 | 코드 fallback (가성비) |
 | `whisper-1` | ❌ | ✅ | $0.006 | ✅ | ❌ | 레거시 파일 전사, 타임스탬프 필요 시 |
 
+> **단가 기준일 2026-07.** 이 표는 사람이 읽기 위한 사본이고 **계산의 정본은
+> `meeting_minutes_app/common/pricing.py`** 다. 단가가 바뀌면 그 파일을 먼저 고치고 이 표를
+> 맞춘다(반대로 하면 표시와 청구가 갈린다).
+>
+> **실시간 녹음의 실제 분당 비용은 위 표의 2배다.** `realtime.two_pass`(기본 켜짐)가 1차 전사
+> 뒤 `realtime.revise_model`(기본 `gpt-4o-transcribe` $0.006)로 다시 전사해 문장을 확정하기
+> 때문이다. 기본 조합은 `$0.003 + $0.006 = $0.009/분`이다.
+
 > `gpt-4o-transcribe-diarize`는 OpenAI `/v1/audio/transcriptions` 배치 전사용 모델이며 Realtime API에서는 지원되지 않습니다.
 > 30초 초과 오디오는 `chunking_strategy` 적용 가능성을 우선 검증하고, 실패 또는 품질 저하 시 `gpt-4o-transcribe`로 fallback합니다.
 >

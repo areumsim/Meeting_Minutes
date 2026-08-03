@@ -10,7 +10,10 @@
     "ios:sync": "npm run build:standalone && npx cap sync ios",
     "ios:open": "npx cap open ios",
     "ios:build": "npm run build:standalone && npx cap sync ios && npx cap open ios",
-    "build:standalone": "tsc -b && vite build --mode standalone"
+    "build:standalone": "tsc -b && vite build --mode standalone",
+    "test": "npm run test:types && vitest run",
+    "test:watch": "vitest",
+    "test:types": "tsc -p tsconfig.test.json --noEmit"
   },
   "dependencies": {
     "@capacitor-community/keep-awake": "^8.0.0",
@@ -36,11 +39,16 @@
     "@capacitor/cli": "^8.2.0",
     "@tailwindcss/typography": "^0.5.16",
     "@tailwindcss/vite": "^4.1.0",
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
+    "@testing-library/user-event": "^14.6.1",
     "@types/react": "^19.0.0",
     "@types/react-dom": "^19.0.0",
     "@vitejs/plugin-react": "^4.3.0",
+    "jsdom": "^26.1.0",
     "tailwindcss": "^4.1.0",
     "typescript": "^5.8.0",
-    "vite": "^6.2.0"
+    "vite": "^6.2.0",
+    "vitest": "^4.1.10"
   }
 }

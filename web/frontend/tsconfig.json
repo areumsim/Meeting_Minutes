@@ -17,5 +17,10 @@
     "noFallthroughCasesInSwitch": true,
     "forceConsistentCasingInFileNames": true
   },
-  "include": ["src"]
+  "include": ["src"],
+  // 릴리즈 빌드(`npm run build` = tsc -b && vite build)에서 **테스트를 제외한다.**
+  // 제외하지 않으면 테스트 파일의 타입 슬립 하나가 릴리즈 빌드를 멈춘다 — 실제로
+  // 프런트 테스트를 도입하면서 그렇게 깨졌다(TS2493). 테스트 타입은 tsconfig.test.json
+  // 이 따로 검사하므로 검사를 잃는 것이 아니라 **경로를 분리**하는 것이다.
+  "exclude": ["src/**/*.test.ts", "src/**/*.test.tsx", "src/test"]
 }

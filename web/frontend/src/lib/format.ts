@@ -15,8 +15,14 @@ export function formatTime(sec: number): string {
 
 export function formatDate(d: string): string {
   if (!d) return "";
+  // `new Date("아무말")` 은 **던지지 않는다** — Invalid Date 를 만들고
+  // toLocaleDateString 이 문자열 "Invalid Date" 를 돌려준다. 그래서 아래 catch 만
+  // 두었을 때는 폴백이 한 번도 동작하지 않고 화면에 "Invalid Date" 가 그대로 나왔다
+  // (프런트 테스트를 붙이면서 발견). 유효성은 getTime() 으로 판정해야 한다.
   try {
-    return new Date(d).toLocaleDateString("ko-KR", {
+    const dt = new Date(d);
+    if (Number.isNaN(dt.getTime())) return d;
+    return dt.toLocaleDateString("ko-KR", {
       month: "short", day: "numeric", hour: "2-digit", minute: "2-digit",
     });
   } catch { return d; }

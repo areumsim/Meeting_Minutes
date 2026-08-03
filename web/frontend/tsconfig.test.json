@@ -1,0 +1,10 @@
+{
+  // 테스트 전용 타입검사. 릴리즈 경로(tsconfig.json)와 분리해 두어야, 테스트의 타입
+  // 오류가 배포 빌드를 막지 않으면서도 검사는 계속된다(`npm test` 가 함께 돌린다).
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "types": ["vitest/globals", "@testing-library/jest-dom"]
+  },
+  "include": ["src"],
+  "exclude": []
+}

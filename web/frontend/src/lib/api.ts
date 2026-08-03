@@ -535,6 +535,25 @@ export const getSessions = async (search?: string, type?: string) => {
             await mirrorServerSession(s.id);
           }
         }
+        // 서버가 더 이상 주지 않는 **미러 사본**을 정리한다.
+        // 이것이 없을 때: 로컬 사본을 지우는 코드가 deleteSession 에만 있어서, 다른
+        // 기기·다른 브라우저에서 삭제한 회의가 이 기기에는 영구히 남았다. 휴지통
+        // (soft delete)이 들어오면서 "서버 목록에 없지만 행은 살아 있는" 상태가 흔해져
+        // 더 자주 드러난다.
+        // 정리 조건이 두 개인 이유:
+        //   ① `res.ok` 안에서만 한다 — 서버가 죽었을 때 오프라인이 데이터 삭제가 되면 안 된다.
+        //   ② `_mirrored` 인 것만 한다 — 단독 모드에서 이 기기가 만든 녹음은 서버에
+        //      존재하지 않으므로, 표식 없이 정리하면 사용자 녹음을 지운다.
+        const serverIds = new Set(list.map((s: any) => s?.id).filter(Boolean));
+        const stale: string[] = [];
+        await sessionsStore.iterate((v: any, k: string) => {
+          if (v?._mirrored && !serverIds.has(k)) stale.push(k);
+        });
+        for (const id of stale) {
+          await sessionsStore.removeItem(id);
+          await segmentsStore.removeItem(id);
+          await documentsStore.removeItem(id);
+        }
       }
     } catch { /* 서버 미가용 시 로컬만 표시 */ }
   }
@@ -637,15 +656,31 @@ export const getSessionStatus = async (id: string) => {
 // 결과 폴더는 사용자가 '완전 삭제'를 누를 때만 OS 휴지통으로 간다.
 // 단독(모바일) 모드는 서버가 없어 로컬 저장소에서 바로 지운다 — 그 경로에는 휴지통이 없다.
 export const deleteSession = async (id: string) => {
-  await sessionsStore.removeItem(id);
-  await segmentsStore.removeItem(id);
-  await documentsStore.removeItem(id);
+  // **순서가 중요하다**: 서버에 먼저 요청하고, 받아들여졌을 때만 로컬 사본을 지운다.
+  // 반대 순서였을 때: 서버 호출이 실패해도 로컬은 이미 지워져 목록에서 사라지고,
+  // 다음 getSessions 가 `!local` 이라 서버에서 **다시 미러링**해 와서 사용자에게는
+  // "지웠는데 되살아났다"가 됐다(백엔드의 재부활 버그와 같은 모양의 프런트 쌍둥이).
+  const dropLocal = async () => {
+    await sessionsStore.removeItem(id);
+    await segmentsStore.removeItem(id);
+    await documentsStore.removeItem(id);
+  };
+
   if (await isPackagedMode()) {
     try {
       const res = await fetch(`${getBackendUrl()}/api/sessions/${id}`, { method: "DELETE" });
-      return { success: res.ok, restorable: res.ok };
-    } catch { /* 서버 미가용 무시 */ }
+      if (!res.ok) {
+        // 로컬을 남긴다 — 목록에 그대로 보이는 것이 "사라졌다가 돌아오는" 것보다 정직하다.
+        return { success: false, restorable: false };
+      }
+      await dropLocal();
+      return { success: true, restorable: true };
+    } catch {
+      return { success: false, restorable: false };
+    }
   }
+  // 단독 모드: 서버가 없으므로 로컬이 유일한 진실이고 휴지통도 없다.
+  await dropLocal();
   return { success: true, restorable: false };
 };
 
@@ -670,12 +705,22 @@ export const purgeSession = async (id: string): Promise<{ message?: string }> =>
 };
 
 export const clearSessions = async () => {
-  await sessionsStore.clear();
-  await segmentsStore.clear();
-  await documentsStore.clear();
+  // deleteSession 과 같은 이유로 서버가 먼저다 — 실패했는데 로컬만 비우면 다음 조회에서
+  // 전량이 다시 미러링돼 "전체 삭제가 안 먹는다"로 보인다.
+  const dropLocal = async () => {
+    await sessionsStore.clear();
+    await segmentsStore.clear();
+    await documentsStore.clear();
+  };
   if (await isPackagedMode()) {
-    try { await fetch(`${getBackendUrl()}/api/sessions/clear`, { method: "POST" }); } catch { /* 서버 미가용 무시 */ }
+    try {
+      const res = await fetch(`${getBackendUrl()}/api/sessions/clear`, { method: "POST" });
+      if (!res.ok) return { success: false };
+    } catch {
+      return { success: false };
+    }
   }
+  await dropLocal();
   return { success: true };
 };
 
@@ -976,7 +1021,11 @@ export async function mirrorServerSession(sessionId: string): Promise<boolean> {
     clearTimeout(t);
     if (!res.ok) return false;
     const data = await res.json();
-    if (data.session) await sessionsStore.setItem(sessionId, data.session);
+    // `_mirrored` 표시가 필요한 이유 — getSessions 가 "서버가 더 이상 주지 않는" 로컬
+    // 사본을 정리할 때, **단독 모드에서 이 기기가 직접 만든 녹음**(source:"mobile",
+    // 서버에 존재하지 않는다)까지 지우면 사용자 데이터가 사라진다. 서버에서 온 것만
+    // 정리 대상으로 삼기 위한 표식이다.
+    if (data.session) await sessionsStore.setItem(sessionId, { ...data.session, _mirrored: true });
     if (data.segments) {
       await segmentsStore.setItem(sessionId, data.segments.map((s: any) => ({
         ...s,

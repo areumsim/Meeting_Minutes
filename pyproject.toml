@@ -26,6 +26,10 @@ dependencies = [
     "uvicorn[standard]~=0.29",
     "python-multipart~=0.0.9",
     "pydantic~=2.0",
+    # 세션 '완전 삭제' 시 결과 폴더를 OS 휴지통으로 보낸다(PRD §17 확정: 삭제는 휴지통 기본).
+    # 기본 설치는 순수 ctypes 라 임베디드 파이썬 포터블에도 안전하다 — pywin32 는 extra 다
+    # (그래서 fastmcp 처럼 배포에서 빠뜨릴 이유가 없다). 없으면 data/.trash/ 로 폴백한다.
+    "Send2Trash~=1.8",
     # fastmcp 는 원격 MCP 서버(/mcp) 전용이다. 포터블 배포본(build_portable.ps1 /
     # requirements-web.txt)은 임베디드 파이썬의 pywin32 재배치 문제로 fastmcp 를 의도적으로
     # 제외하며, 이 경우 /mcp 만 비활성화되고 나머지 기능은 정상 동작한다. 개발환경(pip install

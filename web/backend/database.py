@@ -110,6 +110,9 @@ def init_db():
         for _ddl in (
             "ALTER TABLE sessions ADD COLUMN stt_provider TEXT",
             "ALTER TABLE sessions ADD COLUMN stt_fallback_used INTEGER DEFAULT 0",
+            # 휴지통(soft delete). NULL = 살아 있는 세션. 하드 DELETE 였을 때는 결과
+            # 폴더가 남아 다음 시작에 스캐너가 되살렸고, 되돌릴 방법도 없었다.
+            "ALTER TABLE sessions ADD COLUMN deleted_at TEXT",
         ):
             try:
                 c.execute(_ddl)
@@ -161,9 +164,16 @@ def get_session(sid: str) -> Optional[Dict]:
     return dict(row) if row else None
 
 
-def list_sessions(search: str = "", type_filter: str = "") -> List[Dict]:
+def list_sessions(search: str = "", type_filter: str = "",
+                  deleted: bool = False) -> List[Dict]:
+    """세션 목록. 기본은 **삭제되지 않은 것만**, `deleted=True` 면 휴지통 목록.
+
+    삭제가 하드 DELETE 였을 때는 `output_dir` 폴더가 남아, 다음 시작에서
+    `session_scanner` 가 "DB 에 없는 폴더"로 보고 **다시 임포트**했다 — 지운 회의가
+    되살아났다. 그래서 soft delete 로 바꾸고, 스캐너는 `known_output_dirs()` 를 본다.
+    """
     with _conn() as c:
-        q = "SELECT * FROM sessions WHERE 1=1"
+        q = "SELECT * FROM sessions WHERE deleted_at IS " + ("NOT NULL" if deleted else "NULL")
         params: list = []
         if search:
             q += " AND (title LIKE ? OR topic LIKE ?)"
@@ -171,9 +181,22 @@ def list_sessions(search: str = "", type_filter: str = "") -> List[Dict]:
         if type_filter:
             q += " AND type = ?"
             params.append(type_filter)
-        q += " ORDER BY created_at DESC"
+        q += " ORDER BY deleted_at DESC" if deleted else " ORDER BY created_at DESC"
         rows = c.execute(q, params).fetchall()
     return [dict(r) for r in rows]
+
+
+def known_output_dirs() -> List[str]:
+    """DB 가 아는 모든 output 폴더 — **삭제된 세션 것도 포함**한다.
+
+    `session_scanner` 가 재임포트 여부를 판단할 때 쓴다. `list_sessions()` 를 쓰면
+    삭제된 세션의 폴더가 "모르는 폴더"로 보여 지운 회의가 되살아난다.
+    """
+    with _conn() as c:
+        rows = c.execute(
+            "SELECT output_dir FROM sessions WHERE output_dir IS NOT NULL AND output_dir != ''"
+        ).fetchall()
+    return [r["output_dir"] for r in rows]
 
 
 def update_session_status(sid: str, status: str, **kwargs):
@@ -285,22 +308,56 @@ def top_cost_sessions(limit: int = 5, month: str = "",
              "usd": round(float(r["cost_estimate"] or 0), 4)} for r in rows]
 
 
-def delete_session(sid: str):
+def delete_session(sid: str) -> bool:
+    """휴지통으로 보낸다(soft delete). 존재하지 않으면 False.
+
+    하드 DELETE 였을 때는 두 가지가 잘못됐다: ① 결과 폴더가 남아 다음 시작에
+    `session_scanner` 가 되살렸고 ② 되돌릴 방법이 없는데 확인은 프런트 `confirm()`
+    뿐이었다. 전사·문서·관련노트는 **지우지 않는다** — 되돌리기가 성립해야 한다.
+    """
     with _conn() as c:
+        cur = c.execute(
+            "UPDATE sessions SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL",
+            (datetime.now().isoformat(timespec="seconds"), sid))
+        c.commit()
+        return cur.rowcount > 0
+
+
+def restore_session(sid: str) -> bool:
+    with _conn() as c:
+        cur = c.execute(
+            "UPDATE sessions SET deleted_at = NULL WHERE id = ? AND deleted_at IS NOT NULL",
+            (sid,))
+        c.commit()
+        return cur.rowcount > 0
+
+
+def purge_session(sid: str) -> Optional[str]:
+    """완전 삭제(행 제거). 정리해야 할 `output_dir` 을 돌려준다(없으면 None).
+
+    폴더를 지우는 것은 호출부(API)의 몫이다 — DB 계층이 파일시스템을 건드리면
+    테스트와 트랜잭션 경계가 뒤섞인다.
+    """
+    with _conn() as c:
+        row = c.execute("SELECT output_dir FROM sessions WHERE id = ?", (sid,)).fetchone()
+        if not row:
+            return None
+        out = row["output_dir"] or ""
         c.execute("DELETE FROM segments WHERE session_id = ?", (sid,))
         c.execute("DELETE FROM documents WHERE session_id = ?", (sid,))
         c.execute("DELETE FROM related_notes WHERE session_id = ?", (sid,))
         c.execute("DELETE FROM sessions WHERE id = ?", (sid,))
         c.commit()
+    return out or None
 
 
-def clear_all_sessions():
+def clear_all_sessions() -> int:
+    """모든 세션을 휴지통으로 보낸다. 되돌릴 수 있어야 하므로 여기서도 soft delete 다."""
     with _conn() as c:
-        c.execute("DELETE FROM segments")
-        c.execute("DELETE FROM documents")
-        c.execute("DELETE FROM related_notes")
-        c.execute("DELETE FROM sessions")
+        cur = c.execute("UPDATE sessions SET deleted_at = ? WHERE deleted_at IS NULL",
+                        (datetime.now().isoformat(timespec="seconds"),))
         c.commit()
+        return cur.rowcount
 
 
 # ── Segments ──────────────────────────────────────

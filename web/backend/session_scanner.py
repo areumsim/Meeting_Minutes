@@ -26,9 +26,12 @@ def scan_output_dir(output_dir: Optional[str] = None):
     if not output_path.exists():
         return
 
-    existing_sessions = {
-        os.path.normcase(os.path.normpath(s.get("output_dir", ""))): s
-        for s in db.list_sessions() if s.get("output_dir")
+    # **삭제된 세션의 폴더도 '아는 폴더'로 센다**(db.known_output_dirs). list_sessions() 는
+    # 휴지통을 제외하므로, 그것을 쓰면 지운 회의의 폴더가 "모르는 폴더"로 보여 여기서
+    # 다시 임포트된다 — 사용자에게는 지운 회의가 재시작 후 되살아나는 것으로 보였다.
+    known = {
+        os.path.normcase(os.path.normpath(p))
+        for p in db.known_output_dirs() if p
     }
 
     for item in output_path.iterdir():
@@ -37,7 +40,7 @@ def scan_output_dir(output_dir: Optional[str] = None):
 
         dir_path = str(item)
         normalized = os.path.normcase(os.path.normpath(dir_path))
-        if normalized in existing_sessions:
+        if normalized in known:
             continue
 
         meta = _find_meta(item)

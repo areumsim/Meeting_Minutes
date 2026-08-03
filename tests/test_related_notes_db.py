@@ -83,17 +83,34 @@ class TestPersistence:
 
 
 class TestDeletionPropagates:
-    def test_delete_session_removes_related(self, db):
+    """삭제가 관련 노트까지 정리하는지.
+
+    **계약 변경(FR-001 개정)**: `delete_session`/`clear_all_sessions` 는 이제 휴지통으로
+    보내는 soft delete 다. 되돌리기가 성립해야 하므로 그 시점에는 관련 노트를 **남긴다**.
+    실제 정리는 사용자가 '완전 삭제'를 누를 때(`purge_session`) 일어난다.
+    """
+
+    def test_soft_delete_keeps_related_for_restore(self, db):
         sid = db.create_session("회의1")
         db.add_related_notes(sid, ROWS)
         db.delete_session(sid)
+        assert db.get_related_notes(sid), "soft delete 가 지우면 되돌리기가 반쪽이 된다"
+        db.restore_session(sid)
+        assert len(db.get_related_notes(sid)) == len(ROWS)
+
+    def test_purge_removes_related(self, db):
+        sid = db.create_session("회의1")
+        db.add_related_notes(sid, ROWS)
+        db.purge_session(sid)
         assert db.get_related_notes(sid) == []
         assert db.related_notes_cross_sessions() == []
 
-    def test_clear_all_removes_related(self, db):
+    def test_clear_all_is_soft_and_purge_cleans_up(self, db):
         sid = db.create_session("회의1")
         db.add_related_notes(sid, ROWS)
         db.clear_all_sessions()
+        assert db.get_related_notes(sid), "전량 삭제도 되돌릴 수 있어야 한다"
+        db.purge_session(sid)
         assert db.get_related_notes(sid) == []
 
 

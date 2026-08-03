@@ -633,15 +633,40 @@ export const getSessionStatus = async (id: string) => {
   return { id, status: session?.status || "error" };
 };
 
+// 서버가 있는 모드에서 삭제는 **휴지통으로 보내는 것**(soft delete)이다. 되돌릴 수 있고,
+// 결과 폴더는 사용자가 '완전 삭제'를 누를 때만 OS 휴지통으로 간다.
+// 단독(모바일) 모드는 서버가 없어 로컬 저장소에서 바로 지운다 — 그 경로에는 휴지통이 없다.
 export const deleteSession = async (id: string) => {
   await sessionsStore.removeItem(id);
   await segmentsStore.removeItem(id);
   await documentsStore.removeItem(id);
-  // 패키지 모드: 서버 DB에서도 삭제 — 로컬만 지우면 다음 미러링 때 되살아난다.
   if (await isPackagedMode()) {
-    try { await fetch(`${getBackendUrl()}/api/sessions/${id}`, { method: "DELETE" }); } catch { /* 서버 미가용 무시 */ }
+    try {
+      const res = await fetch(`${getBackendUrl()}/api/sessions/${id}`, { method: "DELETE" });
+      return { success: res.ok, restorable: res.ok };
+    } catch { /* 서버 미가용 무시 */ }
   }
-  return { success: true };
+  return { success: true, restorable: false };
+};
+
+export const getTrash = async (): Promise<Session[]> => {
+  if (!(await isPackagedMode())) return [];
+  const res = await fetch(`${getBackendUrl()}/api/sessions/trash`);
+  if (!res.ok) throw new Error(`휴지통을 불러오지 못했습니다 (${res.status})`);
+  return res.json();
+};
+
+export const restoreSession = async (id: string) => {
+  const res = await fetch(`${getBackendUrl()}/api/sessions/${id}/restore`, { method: "POST" });
+  if (!res.ok) throw new Error(`되돌리지 못했습니다 (${res.status})`);
+  return res.json();
+};
+
+// 완전 삭제 — DB 행을 지우고 결과 폴더를 OS 휴지통으로 보낸다(서버가 처리).
+export const purgeSession = async (id: string): Promise<{ message?: string }> => {
+  const res = await fetch(`${getBackendUrl()}/api/sessions/${id}/purge`, { method: "DELETE" });
+  if (!res.ok) throw new Error(`완전 삭제에 실패했습니다 (${res.status})`);
+  return res.json();
 };
 
 export const clearSessions = async () => {

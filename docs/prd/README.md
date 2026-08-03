@@ -10,6 +10,7 @@
 | [`PRD_v1.0.0.md`](PRD_v1.0.0.md) | **v1.0.0 사내 릴리즈 정본.** 기준 PRD + v1.2 델타 + v1.3 소스 검증판을 하나로 통합 | Draft · 검토 요청 |
 | [`PRD_Natively_적용_20260730.md`](PRD_Natively_적용_20260730.md) | 동의·녹취 정책 / Reference Files 인덱싱 / 로컬·BYOK 참조 아키텍처 | v1.0 — **트랙 A·C 완료, FR-B3만 잔여** |
 | [`PRD_실시간관련정보_임베딩_PageIndex.md`](PRD_실시간관련정보_임베딩_PageIndex.md) | 실시간 관련 노트 검색 + 누적 검토 | v1.1 — **Phase 0 완료, Phase 1 미착수, FR-2 라이브 검증 미실시** |
+| [`PRD_회의중_음성브리핑_20260803.md`](PRD_회의중_음성브리핑_20260803.md) | 회의 **중간** 요약 · 이견 지적 · 음성(TTS) 안내 | v0.1 검토 요청 — **미착수.** 트랙 A(중간 요약) 구현 권고 / 트랙 C(음성) 옵트인 / **트랙 B(회의 중 오류 지적) 보류 권고** |
 | [`archive/PRD_MeetingMinutes_WebUI_패키징.md`](archive/PRD_MeetingMinutes_WebUI_패키징.md) | 2026-07-15 패키징 요구사항 | **이력** — PyInstaller 전제. 현재 배포는 포터블 |
 
 **검토 자료** (요구사항이 아니라 근거)
@@ -102,7 +103,8 @@
 | 외부 호출은 백엔드 경유 | `grep -rn 'api.openai.com' web/frontend/src/` | **4줄 = 주석 1 + 실제 호출 3**(`api.ts` 665·976·1025) → 단독 모드 존재를 인정해야 한다. 줄 수만 세면 호출 수와 어긋난다 |
 | TLS 검증 비활성 경로 0건 | `grep -n 'verify_ssl\|"verify"' meeting_minutes_app/common/config_schema.py` | **2건, 그중 1건 기본 False** |
 | PDF/PPTX 추출 파이프라인 있음 | `grep -n 'pypdf\|python-pptx' pyproject.toml requirements*.txt` | **0건** → Natively FR-B3 ❌ 표기가 정당 |
-| 테스트 수 | `python -m pytest --collect-only -q` 마지막 줄 | **896** — `CLAUDE.md` 와 일치해야 한다(수치 정본은 CLAUDE.md) |
+| 테스트 수 | `python -m pytest --collect-only -q` 마지막 줄 | **905** — `CLAUDE.md` 와 일치해야 한다(수치 정본은 CLAUDE.md) |
+| 배포 의존성이 고정돼 있음 | `grep -c '==' scripts/build/constraints-web.txt` | 50 — 비어 있으면 버전이 빌드 시점에 결정된다(재현 불가) |
 | 월 한도 서버 강제 | `grep -rn 'monthly_cap_usd' meeting_minutes_app/` | 존재 → G-13 "PRD에 요구사항 없음" 표기는 폐기됐다 |
 | `MM-*` 오류 코드 | `grep -rn 'MM-[A-Z]*-[0-9]' web/backend/` | **0건** → OPS-004 는 신규 구축 |
 

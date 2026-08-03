@@ -11,7 +11,9 @@ import traceback
 from pathlib import Path
 from datetime import datetime
 
-from fastapi import APIRouter, UploadFile, File, Form, BackgroundTasks, HTTPException
+from fastapi import APIRouter, UploadFile, File, Form, BackgroundTasks, Depends, HTTPException
+
+from web.backend.security import require_client
 
 from web.backend import database as db
 from web.backend.schemas import MODE_PRESETS
@@ -246,7 +248,15 @@ async def upload_file(
     speakers: str = Form(""),
     mode: int = Form(2),
     confirm: str = Form("false"),
+    _guard: None = Depends(require_client),
 ):
+    """오디오를 업로드해 STT·회의록 파이프라인을 시작한다.
+
+    관문을 지나는 이유 — multipart/form-data 는 CORS 의 "단순 요청"이라 preflight 가
+    없다. 즉 악성 페이지가 조작한 오디오를 그대로 밀어넣어 **사용자 키로 과금**시킬 수
+    있었다. 서버측 지출 한도가 있지만 기본값이 0(무제한)이라 기본 설정에서는 방어가 없고,
+    `confirm=true` 를 같이 보내면 예상비용 확인 단계도 건너뛴다.
+    """
     # 사전 점검: OpenAI 키(STT 필수)가 없으면 백그라운드에서 실패해 원인이 로그에만
     # 남는다. 시작 전에 명확한 한국어 오류로 거절해 설정 화면으로 안내한다.
     from meeting_minutes_app.common import config_loader as _cfg

@@ -14,7 +14,9 @@ autostart_from_config()가 자동으로 재개한다.
 import threading
 from pathlib import Path
 
-from fastapi import APIRouter, Body
+from fastapi import APIRouter, Body, Depends
+
+from web.backend.security import require_client
 
 router = APIRouter(prefix="/watcher", tags=["watcher"])
 
@@ -212,7 +214,12 @@ def watcher_status():
 
 
 @router.post("/start")
-def watcher_start():
+def watcher_start(_guard: None = Depends(require_client)):
+    """감시 시작 — 지속 과금을 일으키는 자동화라 관문을 지난다.
+
+    본문 없는 POST 는 CORS 의 "단순 요청"이라 preflight 가 없다. 악성 페이지가
+    사용자의 폴더 감시를 켤 수 있었다.
+    """
     return _manager.start()
 
 
@@ -228,8 +235,15 @@ def watcher_pending():
 
 
 @router.post("/approve")
-def watcher_approve(body: dict = Body(default={})):
-    """대기열 승인. `paths` 를 주면 그 항목만, 없으면 전체."""
+def watcher_approve(body: dict = Body(default={}),
+                    _guard: None = Depends(require_client)):
+    """대기열 승인. `paths` 를 주면 그 항목만, 없으면 전체.
+
+    **본문 없이** 호출하면 Body 기본값이 적용돼 대기열 전체가 승인된다 — 그리고 본문
+    없는 POST 는 preflight 가 없어 cross-origin 에서 성립했다. 승인 자체가 한도를
+    우회하지는 않지만(처리는 다음 스캔에서 한도를 다시 지난다), 한도를 설정하지 않은
+    사용자에게는 남이 누른 승인이 곧 지출이다.
+    """
     paths = body.get("paths") if isinstance(body, dict) else None
     return _manager.approve(paths if isinstance(paths, list) else None)
 

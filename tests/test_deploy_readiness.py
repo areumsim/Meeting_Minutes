@@ -98,7 +98,11 @@ class TestUploadPreflight:
         monkeypatch.setattr(config_loader, "get_api_key", lambda *a, **k: "")
         app = FastAPI()
         app.include_router(batch.router, prefix="/api")
-        client = TestClient(app)
+        # 업로드는 과금 경로라 접근 관문(security.require_client)을 지난다. TestClient 의
+        # 기본 client.host 는 "testclient" 로 loopback 이 아니어서 403 이 된다 —
+        # 프로덕션 판정에 "testclient" 를 넣는 대신 여기서 loopback 으로 접속한다
+        # (실제 소켓 피어는 늘 IP 라, 판정을 느슨하게 하면 테스트 편의만 남는다).
+        client = TestClient(app, client=("127.0.0.1", 12345))
 
         r = client.post(
             "/api/upload",

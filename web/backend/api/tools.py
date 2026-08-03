@@ -10,7 +10,9 @@ import tempfile
 import traceback
 from datetime import datetime
 
-from fastapi import APIRouter, BackgroundTasks, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+
+from web.backend.security import require_client
 
 from web.backend import database as db
 
@@ -204,8 +206,12 @@ def _rebuild_graph_from_vault() -> str:
 
 
 @router.post("/reindex")
-def reindex():
-    """노트 폴더(.md) 검색 인덱스와 지식 그래프를 다시 만든다. 폴더-only 위키에 필수."""
+def reindex(_guard: None = Depends(require_client)):
+    """노트 폴더(.md) 검색 인덱스와 지식 그래프를 다시 만든다. 폴더-only 위키에 필수.
+
+    임베딩 과금이 있는 경로라 관문을 지난다 — 본문 없는 POST 는 CORS 의 "단순 요청"이어서
+    preflight 가 없고, 악성 페이지가 그대로 호출할 수 있었다(SEC-009 가 남긴 구멍).
+    """
     try:
         from meeting_minutes_app.wiki_core.vault_indexer import VaultIndexer
         idx = VaultIndexer.from_config()

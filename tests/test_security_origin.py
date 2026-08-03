@@ -212,6 +212,48 @@ class TestWebSocketOrigin:
         assert asyncio.run(sec.ws_reject_foreign_origin(ws)) is True
 
 
+class TestBillingEndpointsAreGuarded:
+    """과금·자동화 엔드포인트가 관문을 지나는지.
+
+    SEC-009 는 종료·삭제·비밀읽기를 막았지만 **돈이 나가는 경로**를 빠뜨렸다.
+    CORS 가 막지 못하는 것은 "단순 요청"인데, 그 정의에 정확히 해당하는 것들이
+    남아 있었다(실측: 악성 Origin 으로 reindex·watcher/start·watcher/approve 가 200).
+
+    - `POST /api/upload` — multipart/form-data 는 preflight 가 없다
+    - 본문 없는 POST(reindex·watcher/start·watcher/approve)도 preflight 가 없다
+      (JSON 본문 엔드포인트는 preflight 가 생겨 CORS 가 실제로 막는다)
+
+    라우트의 의존성을 직접 본다 — 핸들러를 호출하려면 multipart 나 DB 가 필요해
+    "관문을 지나는가"만 확인하는 편이 정확하고 깨지지 않는다.
+    """
+
+    GUARDED = [
+        ("/api/upload", "POST"),
+        ("/api/reindex", "POST"),
+        ("/api/watcher/start", "POST"),
+        ("/api/watcher/approve", "POST"),
+    ]
+
+    @pytest.mark.parametrize("path,method", GUARDED)
+    def test_route_depends_on_require_client(self, path, method):
+        from web.backend.app import app
+        matches = [r for r in app.routes
+                   if getattr(r, "path", None) == path and method in getattr(r, "methods", ())]
+        assert matches, f"{method} {path} 라우트를 찾지 못했다"
+        calls = [d.call for d in matches[0].dependant.dependencies]
+        assert sec.require_client in calls, (
+            f"{method} {path} 가 관문을 지나지 않는다 — 악성 페이지가 과금을 트리거할 수 있다")
+
+    def test_cost_reducing_endpoints_stay_open(self):
+        """감시 중지·업로드 취소는 막지 않는다 — 비용을 줄이는 방향이라 막아서 얻는 게 없고,
+        취소가 실패하면 오히려 손해다."""
+        from web.backend.app import app
+        for path in ("/api/watcher/stop",):
+            r = [x for x in app.routes if getattr(x, "path", None) == path]
+            assert r, f"{path} 라우트를 찾지 못했다"
+            assert sec.require_client not in [d.call for d in r[0].dependant.dependencies]
+
+
 class TestShutdownGuards:
     """종료가 인증 없이·진행 중 작업 확인 없이 되던 것을 막는다."""
 

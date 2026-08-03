@@ -25,7 +25,7 @@ Obsidian 기반 **회의록 자동화 + LLM Wiki 지식순환** 시스템. 오�
 pip install -e .                       # 개발 설치
 python run_meeting.py <cmd> [args]     # CLI (run_meeting.bat 도 동일)
 webUI_실행.bat                          # 웹 UI 로컬 실행 (데이터 = 리포 루트)
-python -m pytest                       # 테스트 (2026-08-03: 838 collected, 1 skipped) ← 수치 정본
+python -m pytest                       # 테스트 (2026-08-03: 893 collected, 1 skipped) ← 수치 정본
 python run_meeting.py reindex          # 위키/그래프 인덱스 재빌드
 ```
 

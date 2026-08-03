@@ -162,3 +162,49 @@ class TestTrashUtility:
         assert not target.exists()
         kept = list((tmp_path / "data" / ".trash").glob("*_out/회의록.md"))
         assert kept and kept[0].read_text(encoding="utf-8") == "본문", "내용이 사라졌다"
+
+
+class TestPurgeOrdering:
+    """FR-001 수용 기준: **파일 이동 실패 시 DB 레코드를 삭제하지 않는다.**
+
+    반대 순서로 하면 폴더 이동이 실패했을 때 파일만 남고 그것을 가리키는 기록이 사라져
+    아무도 모르는 고아 폴더가 된다 — 원래 결함이 바로 고아 파일이었으므로, 고치면서
+    같은 결과를 만들면 의미가 없다.
+    """
+
+    def _client(self, monkeypatch):
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from web.backend.api import sessions as api
+        app = FastAPI()
+        app.include_router(api.router, prefix="/api")
+        return TestClient(app, client=("127.0.0.1", 12345))
+
+    def test_keeps_record_when_folder_move_fails(self, fresh_db, tmp_path, monkeypatch):
+        from web.backend.api import sessions as api
+
+        out = tmp_path / "output" / "회의"
+        out.mkdir(parents=True)
+        sid = _make(out)
+        db.delete_session(sid)
+
+        monkeypatch.setattr("web.backend.trash.move_to_trash",
+                            lambda p: (False, "권한이 없습니다"))
+        r = self._client(monkeypatch).delete(f"/api/sessions/{sid}/purge")
+        assert r.status_code == 500
+        assert db.get_session(sid) is not None, "폴더가 남았는데 기록을 지우면 고아 폴더가 된다"
+        assert [s["id"] for s in db.list_sessions(deleted=True)] == [sid]
+
+    def test_purges_after_successful_move(self, fresh_db, tmp_path, monkeypatch):
+        out = tmp_path / "output" / "회의"
+        out.mkdir(parents=True)
+        sid = _make(out)
+        db.delete_session(sid)
+
+        moved: list = []
+        monkeypatch.setattr("web.backend.trash.move_to_trash",
+                            lambda p: (moved.append(p) or (True, "휴지통으로 보냈습니다")))
+        r = self._client(monkeypatch).delete(f"/api/sessions/{sid}/purge")
+        assert r.status_code == 200 and r.json()["folder_removed"] is True
+        assert moved == [str(out)]
+        assert db.get_session(sid) is None

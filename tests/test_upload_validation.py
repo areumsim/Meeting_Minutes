@@ -76,11 +76,20 @@ class TestFilenameSanitize:
 
 class TestUploadRejects:
     def test_traversal_filename_stays_inside(self, client, tmp_path):
+        """저장명은 서버가 만든다(FR-002) — 클라이언트 문자열은 경로에 남지 않는다."""
         r = _post(client, "../../../escaped.mp3")
         assert r.status_code == 200                    # 정상 업로드로 처리된다
-        outside = tmp_path / "escaped.mp3"
-        assert not outside.exists(), "UPLOADS_DIR 밖에 파일이 생겼다"
-        assert list((tmp_path / "uploads").glob("*escaped.mp3")), "안에는 저장돼야 한다"
+        assert not (tmp_path / "escaped.mp3").exists(), "UPLOADS_DIR 밖에 파일이 생겼다"
+        stored = list((tmp_path / "uploads").iterdir())
+        assert len(stored) == 1
+        assert "escaped" not in stored[0].name, "원본 파일명이 경로에 남았다"
+        assert stored[0].suffix == ".mp3", "확장자는 화이트리스트를 통과한 값으로 붙인다"
+
+    def test_same_second_uploads_do_not_collide(self, client, tmp_path):
+        """예전에는 타임스탬프만 붙여 같은 초에 같은 이름을 올리면 덮어썼다."""
+        _post(client, "a.mp3", content=b"first")
+        _post(client, "a.mp3", content=b"second")
+        assert len(list((tmp_path / "uploads").iterdir())) == 2
 
     def test_unsupported_extension(self, client):
         r = _post(client, "malware.exe")
@@ -137,3 +146,37 @@ class TestExtensionSourceIsShared:
         monkeypatch.setattr(config_loader, "get", lambda k, d=None: None)
         _, max_mb = batch._upload_limits()
         assert max_mb == batch._DEFAULT_MAX_UPLOAD_MB
+
+
+class TestDurationCap:
+    """재생 시간 상한(FR-002). 크기 상한만으로는 고압축 장시간 파일이 통과한다 —
+    8시간 mp3 는 400MB 남짓이라 2GB 상한을 여유롭게 통과하지만 STT 과금은 8시간분이다."""
+
+    def _with_duration(self, monkeypatch, seconds):
+        from meeting_minutes_app.meeting_pipeline import meeting_minutes as mm
+        monkeypatch.setattr(mm, "audio_duration", lambda p: seconds)
+
+    def test_too_long_is_rejected_and_file_removed(self, client, tmp_path, monkeypatch):
+        self._with_duration(monkeypatch, 9 * 3600)
+        r = _post(client, "long.mp3")
+        assert r.status_code == 413
+        assert "너무 깁니다" in r.json()["detail"]
+        assert list((tmp_path / "uploads").iterdir()) == []
+
+    def test_normal_length_passes(self, client, monkeypatch):
+        self._with_duration(monkeypatch, 3 * 3600)
+        assert _post(client, "ok.mp3").status_code == 200
+
+    def test_zero_disables_the_cap(self, client, monkeypatch):
+        from meeting_minutes_app.common import config_loader
+        self._with_duration(monkeypatch, 20 * 3600)
+        monkeypatch.setattr(config_loader, "get",
+                            lambda k, d=None: 0 if k == "server.max_duration_hours" else d)
+        assert _post(client, "verylong.mp3").status_code == 200
+
+    def test_unreadable_duration_still_proceeds(self, client, monkeypatch):
+        """길이를 못 재면(ffprobe 부재 등) **막지 않는다.** FR-002 는 차단을 요구하지만,
+        ffmpeg 가 없는 환경에서 모든 업로드를 거절하면 정상 사용이 통째로 깨진다 —
+        의도된 이탈이고 PRD 에 근거를 남겼다. 비용 추정만 건너뛴다."""
+        self._with_duration(monkeypatch, 0)
+        assert _post(client, "unknown.mp3").status_code == 200

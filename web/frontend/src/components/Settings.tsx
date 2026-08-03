@@ -405,9 +405,11 @@ export default function SettingsView() {
     setProfiles(await getProfiles());
   };
   const handleClearHistory = async () => {
-    if (!confirm("이 기기의 모든 세션 기록을 삭제할까요? 되돌릴 수 없습니다.")) return;
+    // 대시보드의 [전체 삭제]와 **같은 문구**를 쓴다(FR-001: 두 진입점의 문구가 같아야 한다).
+    // "되돌릴 수 없습니다"는 이제 사실이 아니다 — 삭제는 휴지통으로 보내는 것이다.
+    if (!confirm("모든 회의 기록을 휴지통으로 보낼까요? 나중에 되돌릴 수 있습니다.")) return;
     await clearSessions();
-    alert("기록이 삭제되었습니다.");
+    alert("휴지통으로 보냈습니다. [대시보드] → [휴지통]에서 되돌릴 수 있습니다.");
   };
 
   if (!schema) return null;
@@ -700,9 +702,12 @@ export default function SettingsView() {
       {/* Danger Zone */}
       <section className="bg-white border border-red-200 rounded-2xl p-6 md:p-8">
         <h3 className="text-lg font-bold text-red-600 mb-2">위험 구역</h3>
-        <p className="text-sm text-red-500/80 mb-5">이 기기에 저장된 모든 세션·전사·요약을 삭제합니다.</p>
+        <p className="text-sm text-red-500/80 mb-5">
+          모든 세션·전사·요약을 휴지통으로 보냅니다. [대시보드] → [휴지통]에서 되돌리거나
+          완전히 삭제할 수 있습니다(완전 삭제는 결과 폴더를 Windows 휴지통으로 보냅니다).
+        </p>
         <button onClick={handleClearHistory} className="flex items-center justify-center w-full md:w-auto gap-2 px-6 py-3 bg-red-50 text-red-600 border border-red-200 rounded-xl font-bold hover:bg-red-100 transition-all">
-          <Trash2 size={16} /> 모든 기기 기록 삭제
+          <Trash2 size={16} /> 모든 기록 휴지통으로 보내기
         </button>
       </section>
     </div>

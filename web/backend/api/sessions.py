@@ -141,12 +141,22 @@ def purge_session(session_id: str, request: Request):
     session = db.get_session(session_id)
     if not session:
         raise HTTPException(status_code=404, detail="세션을 찾을 수 없습니다.")
-    output_dir = db.purge_session(session_id)
-    moved, message = (True, "결과 폴더가 없습니다.")
+
+    # **순서가 중요하다**(FR-001 수용 기준): 폴더를 먼저 옮기고, 성공한 뒤에 DB 행을 지운다.
+    # 반대로 하면 폴더 이동이 실패했을 때 파일만 남고 그것을 가리키는 기록이 사라져
+    # 아무도 모르는 고아 폴더가 된다(원래 결함이 바로 고아 파일이었다).
+    output_dir = (session.get("output_dir") or "").strip()
+    moved, message = True, "결과 폴더가 없습니다."
     if output_dir:
         from web.backend.trash import move_to_trash
         moved, message = move_to_trash(output_dir)
-    # 폴더 정리가 실패해도 DB 행은 이미 지웠다 — 그 사실을 숨기지 않고 함께 돌려준다.
+        if not moved:
+            raise HTTPException(
+                status_code=500,
+                detail=(f"{message} 기록은 그대로 두었습니다(휴지통에 남아 있습니다) — "
+                        f"폴더를 직접 정리한 뒤 다시 시도하세요."))
+
+    db.purge_session(session_id)
     return {"success": True, "folder_removed": moved, "message": message}
 
 

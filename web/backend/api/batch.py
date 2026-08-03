@@ -25,11 +25,14 @@ router = APIRouter(tags=["batch"])
 UPLOADS_DIR = Path(EXE_DIR) / "web" / "uploads"
 UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
 
-#: 업로드 크기 상한의 기본값(MB). 3시간 mp3 가 ~150MB, 같은 길이 wav 가 ~1GB 라
-#: 정상 회의 녹음을 막지 않는 선에서 폭주만 끊는 값으로 둔다.
-_DEFAULT_MAX_UPLOAD_MB = 1024
+#: 업로드 크기 상한의 기본값(MB). FR-002 의 2 GiB 를 따른다 — 3시간 mp3 가 ~150MB,
+#: 같은 길이 wav 가 ~1GB 라 정상 회의 녹음을 막지 않으면서 폭주만 끊는다.
+_DEFAULT_MAX_UPLOAD_MB = 2048
+#: 재생 시간 상한(시간). 크기만으로는 고압축 장시간 파일이 통과해 STT 과금이 커진다.
+_DEFAULT_MAX_DURATION_H = 8
 #: 저장 시작 전에 요구하는 최소 여유 공간(MB). 디스크가 가득 차면 SQLite 까지 위험해진다.
-_MIN_FREE_DISK_MB = 1024
+#: FR-002 의 5 GiB 기준.
+_MIN_FREE_DISK_MB = 5120
 
 #: 파일명에 허용할 문자. 나머지는 `_` 로 바꾼다(한글·공백은 허용).
 _UNSAFE_NAME_RE = re.compile(r'[\x00-\x1f<>:"/\\|?*]')
@@ -344,8 +347,12 @@ async def upload_file(
     except OSError:
         pass                      # 공간을 못 재면 정상 업로드를 막지 않는다
 
+    # 저장 파일명은 **서버가 만든다**(FR-002). 원본 이름은 제목 등 표시용으로만 쓰고
+    # 경로 구성에는 넣지 않는다 — 정규화를 거쳐도 클라이언트 문자열이 경로에 남으면
+    # 예약 장치명(CON/NUL)·같은 초 업로드 충돌·인코딩 문제를 계속 방어해야 한다.
+    # 확장자만 화이트리스트를 통과한 값으로 붙인다(파이프라인이 형식을 보고 분기한다).
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    save_path = str(UPLOADS_DIR / f"{ts}_{safe_name}")
+    save_path = str(UPLOADS_DIR / f"{ts}_{uuid.uuid4().hex[:8]}.{ext}")
 
     # 스트리밍 저장 — 수백 MB 녹음 파일을 통째로 RAM에 올리지 않는다.
     # 상한을 넘으면 **받은 것을 지우고** 거절한다(부분 파일을 남기면 다음 스캔·재시도가 그걸 쓴다).
@@ -391,6 +398,18 @@ async def upload_file(
         duration_sec = _mm.audio_duration(save_path)
     except Exception:
         duration_sec = 0.0
+    # 재생 시간 상한(FR-002). ffprobe 로 읽은 실제 길이를 본다 — 크기 상한만으로는
+    # 고압축 장시간 파일(8시간 mp3 ≈ 400MB)이 통과해 STT 과금이 커진다.
+    max_hours = float(_cfg.get("server.max_duration_hours", _DEFAULT_MAX_DURATION_H) or 0)
+    if max_hours > 0 and duration_sec > max_hours * 3600:
+        try:
+            os.remove(save_path)
+        except OSError:
+            pass
+        raise HTTPException(
+            status_code=413,
+            detail=(f"녹음이 너무 깁니다({duration_sec / 3600:.1f}시간, 상한 {max_hours:g}시간). "
+                    f"나눠 올리거나 [설정] → 고급의 '업로드 최대 길이'를 조정하세요."))
     if duration_sec > 0:
         from meeting_minutes_app.common import pricing
         _m = pricing.current_models(_cfg)

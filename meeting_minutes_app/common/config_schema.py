@@ -212,6 +212,7 @@ SCHEMA: List[Dict[str, Any]] = [
         "desc": "아이폰·태블릿 앱에서 이 PC에 접속하려면 'LAN 접속 허용'을 켜세요. 켜면 같은 WiFi의 다른 기기가 이 PC의 회의록 서버에 연결할 수 있습니다.",
         "fields": [
             {"section": "server", "key": "lan_access", "label": "LAN 접속 허용 (모바일 앱 연결용)", "type": "bool", "default": False, "desc": "끄면 이 PC에서만(localhost) 접속 가능(기본, 안전). 켜면 0.0.0.0으로 바인딩해 같은 WiFi의 기기가 접속할 수 있습니다 — 신뢰된 네트워크(집·사무실)에서만 켜세요. 변경 후 앱을 재시작해야 적용됩니다."},
+            {"section": "server", "key": "max_upload_mb", "label": "업로드 최대 크기 (MB)", "type": "number", "default": 1024, "desc": "이보다 큰 파일은 거절합니다(기본 1024MB). 3시간 mp3가 약 150MB, 같은 길이 wav가 약 1GB입니다 — 디스크가 가득 차는 것을 막는 안전장치이고, 긴 녹음을 정상적으로 올리려면 값을 늘리세요."},
         ],
     },
     {

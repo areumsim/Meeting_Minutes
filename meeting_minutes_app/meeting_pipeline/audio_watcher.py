@@ -36,7 +36,9 @@ def _c(key: str, default: Any = None) -> Any:
     return _cfg.get(key, default) if _cfg_ok else default
 
 
-_DEFAULT_EXTS: Set[str] = {"mp3", "m4a", "wav", "webm", "mp4", "ogg", "flac", "mpga"}
+#: 지원 오디오 확장자의 **단일 소스**. 워처와 웹 업로드 검증이 같은 목록을 본다 —
+#: 두 곳에 적으면 "워처는 받는데 업로드는 거부"처럼 갈라진다.
+DEFAULT_AUDIO_EXTS: Set[str] = {"mp3", "m4a", "wav", "webm", "mp4", "ogg", "flac", "mpga"}
 
 
 class AudioWatcher:
@@ -56,7 +58,7 @@ class AudioWatcher:
         self.watch_folders = [str(f) for f in watch_folders if f]
         self.state_path = state_path
         self.callback = callback
-        self.supported_exts = supported_exts or _DEFAULT_EXTS
+        self.supported_exts = supported_exts or DEFAULT_AUDIO_EXTS
         self.poll_interval = poll_interval
         self.stability_checks = stability_checks
         self.stability_interval = stability_interval
@@ -394,7 +396,7 @@ class AudioWatcher:
     def from_config(cls, callback: Callable[[str], Any]) -> "AudioWatcher":
         folders = list(_c("vault_watcher.watch_folders", []) or [])
         state_path = _c("vault_watcher.processed_state_path", "data/processed_audio.json")
-        exts = set(_c("vault_watcher.supported_extensions", list(_DEFAULT_EXTS)))
+        exts = set(_c("vault_watcher.supported_extensions", list(DEFAULT_AUDIO_EXTS)))
         poll = float(_c("vault_watcher.poll_interval", 10))
         checks = int(_c("vault_watcher.stability_checks", 3))
         interval = float(_c("vault_watcher.stability_interval", 2.0))

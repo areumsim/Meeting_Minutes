@@ -3,6 +3,7 @@ api/batch.py — 파일 업로드 + 배치 처리 API
 """
 
 import os
+import re
 import time
 import uuid
 import argparse
@@ -23,6 +24,54 @@ router = APIRouter(tags=["batch"])
 
 UPLOADS_DIR = Path(EXE_DIR) / "web" / "uploads"
 UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
+
+#: 업로드 크기 상한의 기본값(MB). 3시간 mp3 가 ~150MB, 같은 길이 wav 가 ~1GB 라
+#: 정상 회의 녹음을 막지 않는 선에서 폭주만 끊는 값으로 둔다.
+_DEFAULT_MAX_UPLOAD_MB = 1024
+#: 저장 시작 전에 요구하는 최소 여유 공간(MB). 디스크가 가득 차면 SQLite 까지 위험해진다.
+_MIN_FREE_DISK_MB = 1024
+
+#: 파일명에 허용할 문자. 나머지는 `_` 로 바꾼다(한글·공백은 허용).
+_UNSAFE_NAME_RE = re.compile(r'[\x00-\x1f<>:"/\\|?*]')
+
+
+def _safe_upload_name(raw: str) -> str:
+    """업로드 파일명을 저장 가능한 형태로 정규화한다.
+
+    왜 필요한가 — 예전에는 `file.filename` 을 그대로 경로에 조립했다
+    (`UPLOADS_DIR / f"{ts}_{name}"`). 접두 타임스탬프가 `..` 한 단계를 소모하기 때문에
+    `../../../x.mp3` 부터는 **UPLOADS_DIR 밖으로 나간다**(실측: `web/x.mp3`).
+    multipart 의 filename 은 클라이언트가 주는 값이라 검증 대상이다.
+
+    - 디렉터리 성분을 전부 버린다(`PurePath(...).name`) — 이것이 이탈을 막는 핵심이다.
+    - Windows 예약 문자·제어문자를 `_` 로 치환한다.
+    - 길이를 제한한다(경로 길이 상한과 로그 가독성).
+    - 확장자는 호출부가 별도로 검증한다(빈 이름/확장자 없음도 거기서 거른다).
+    """
+    from pathlib import PurePath, PureWindowsPath
+
+    # PureWindowsPath 로 한 번 더 자른다 — POSIX 에서는 "a\\b.mp3" 가 파일명 하나로
+    # 취급되지만, 그 문자열이 Windows 에 저장되면 경로 구분자가 된다.
+    name = PurePath(PureWindowsPath(raw or "").name).name
+    name = _UNSAFE_NAME_RE.sub("_", name).strip().strip(".")
+    if len(name) > 120:
+        stem, dot, ext = name.rpartition(".")
+        name = (stem[:110] + dot + ext[:9]) if dot else name[:120]
+    return name
+
+
+def _upload_limits() -> tuple[set, int]:
+    """(허용 확장자, 최대 MB). 확장자는 워처와 **같은 설정 키**를 본다."""
+    from meeting_minutes_app.common import config_loader as _cfg
+    from meeting_minutes_app.meeting_pipeline.audio_watcher import DEFAULT_AUDIO_EXTS
+
+    exts = _cfg.get("vault_watcher.supported_extensions", None) or list(DEFAULT_AUDIO_EXTS)
+    max_mb = _cfg.get("server.max_upload_mb", _DEFAULT_MAX_UPLOAD_MB)
+    try:
+        max_mb = int(max_mb) or _DEFAULT_MAX_UPLOAD_MB
+    except (TypeError, ValueError):
+        max_mb = _DEFAULT_MAX_UPLOAD_MB
+    return {str(e).lstrip(".").lower() for e in exts}, max_mb
 
 # 세션별 처리 진행 상태(in-memory). BackgroundTasks가 같은 프로세스에서 돌아 공유된다.
 # {session_id: {"percent": int, "stage": str, "started": float}}
@@ -266,17 +315,67 @@ async def upload_file(
             detail="OpenAI API 키가 설정되지 않았습니다. [설정] → API 키에서 입력한 뒤 다시 시도하세요.",
         )
 
-    safe_name = file.filename or "upload.mp3"
+    # ── 파일명·형식·크기 검증 ────────────────────────────────────────
+    # multipart 의 filename 과 본문 길이는 **클라이언트가 주는 값**이다. 예전에는 둘 다
+    # 검증 없이 썼다: 파일명은 그대로 경로에 조립돼 `../../../x.mp3` 부터 UPLOADS_DIR
+    # 밖으로 나갔고, 크기 상한이 없어 청크 루프가 디스크를 채울 수 있었다.
+    allowed_exts, max_mb = _upload_limits()
+    safe_name = _safe_upload_name(file.filename or "")
+    ext = safe_name.rpartition(".")[2].lower() if "." in safe_name else ""
+    if not safe_name or not ext:
+        raise HTTPException(
+            status_code=400,
+            detail="파일 이름을 확인할 수 없습니다. 확장자가 있는 오디오 파일을 올려 주세요.")
+    if ext not in allowed_exts:
+        raise HTTPException(
+            status_code=400,
+            detail=(f"지원하지 않는 형식입니다(.{ext}). "
+                    f"지원 형식: {', '.join(sorted(allowed_exts))}"))
+
+    # 저장 시작 전 여유 공간 확인 — 디스크가 가득 차면 SQLite 까지 위험해진다.
+    try:
+        import shutil as _shutil
+        free_mb = _shutil.disk_usage(str(UPLOADS_DIR)).free // (1024 * 1024)
+        if free_mb < _MIN_FREE_DISK_MB:
+            raise HTTPException(
+                status_code=507,
+                detail=(f"디스크 여유 공간이 부족합니다(남은 공간 {free_mb}MB). "
+                        f"공간을 확보한 뒤 다시 시도하세요."))
+    except OSError:
+        pass                      # 공간을 못 재면 정상 업로드를 막지 않는다
+
     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
     save_path = str(UPLOADS_DIR / f"{ts}_{safe_name}")
 
-    # 스트리밍 저장 — 수백 MB 녹음 파일을 통째로 RAM에 올리지 않는다
-    with open(save_path, "wb") as f:
-        while True:
-            chunk = await file.read(4 * 1024 * 1024)
-            if not chunk:
-                break
-            f.write(chunk)
+    # 스트리밍 저장 — 수백 MB 녹음 파일을 통째로 RAM에 올리지 않는다.
+    # 상한을 넘으면 **받은 것을 지우고** 거절한다(부분 파일을 남기면 다음 스캔·재시도가 그걸 쓴다).
+    limit_bytes = max_mb * 1024 * 1024
+    written = 0
+    try:
+        with open(save_path, "wb") as f:
+            while True:
+                chunk = await file.read(4 * 1024 * 1024)
+                if not chunk:
+                    break
+                written += len(chunk)
+                if written > limit_bytes:
+                    raise HTTPException(
+                        status_code=413,
+                        detail=(f"파일이 너무 큽니다(상한 {max_mb}MB). 긴 녹음은 나눠 올리거나 "
+                                f"[설정] → 고급의 '업로드 최대 크기'를 조정하세요."))
+                f.write(chunk)
+    except HTTPException:
+        try:
+            os.remove(save_path)
+        except OSError:
+            pass
+        raise
+    if written == 0:
+        try:
+            os.remove(save_path)
+        except OSError:
+            pass
+        raise HTTPException(status_code=400, detail="빈 파일입니다. 녹음 파일을 확인해 주세요.")
 
     do_translate = translate.lower() in ("true", "1", "yes")
 

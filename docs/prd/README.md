@@ -104,7 +104,8 @@
 | TLS 검증 비활성 경로 0건 | `grep -n 'verify_ssl\|"verify"' meeting_minutes_app/common/config_schema.py` | **2건, 그중 1건 기본 False** |
 | PDF/PPTX 추출 파이프라인 있음 | `grep -n 'pypdf\|python-pptx' pyproject.toml requirements*.txt` | **0건** → Natively FR-B3 ❌ 표기가 정당 |
 | 테스트 수 | `python -m pytest --collect-only -q` 마지막 줄 | **905** — `CLAUDE.md` 와 일치해야 한다(수치 정본은 CLAUDE.md) |
-| 배포 의존성이 고정돼 있음 | `grep -c '==' scripts/build/constraints-web.txt` | 50 — 비어 있으면 버전이 빌드 시점에 결정된다(재현 불가) |
+| 배포 의존성이 고정돼 있음(파이썬) | `grep -c '==' scripts/build/constraints-web.txt` | 50 — 비어 있으면 버전이 빌드 시점에 결정된다(재현 불가) |
+| 배포 의존성이 고정돼 있음(프런트) | `grep -c "@('install')" scripts/build/build_portable.ps1` | **0** — `npm install` 이 남아 있으면 lockfile 이 갱신돼 같은 커밋에서 다른 번들이 나온다 |
 | 프런트엔드 테스트 수 | `cd web/frontend && npm test` 마지막 줄 | **62** — 0건이면 UX-015 가 미해소다 |
 | 프런트 E2E·접근성 게이트 | `grep -c 'playwright\|axe-core' web/frontend/package.json` | **0** → §13.3 의 해당 게이트는 "미실행"으로 표기해야 한다 |
 | 월 한도 서버 강제 | `grep -rn 'monthly_cap_usd' meeting_minutes_app/` | 존재 → G-13 "PRD에 요구사항 없음" 표기는 폐기됐다 |

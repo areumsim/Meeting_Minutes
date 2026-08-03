@@ -16,9 +16,21 @@ echo  ==============================================
 echo.
 
 :: 1. 프론트엔드 빌드 (EXE 배포용이므로 항상 새로 빌드)
+::    `npm install` 이 아니라 `npm ci` 를 쓴다 — install 은 package.json 의 범위(^)를
+::    다시 해석해 lockfile 을 갱신할 수 있고, 그러면 같은 커밋에서 다른 번들이 나온다.
+::    포터블 빌드(build_portable.ps1)와 같은 규칙이다. 한쪽만 고치면 갈라진다.
+::    CSP 는 `npm run build`(packaged 프로파일) — exe 도 백엔드가 프런트를 서빙한다.
+::    아이폰 번들만 standalone 프로파일을 쓴다(npm run build:standalone).
 echo  [1/5] Building frontend...
 cd web\frontend
-call npm install
+if not exist "package-lock.json" (
+    echo  [ERROR] package-lock.json not found - release builds must install from the lockfile.
+    echo          Run "npm install", commit the lockfile, then build again.
+    cd ..\..
+    pause
+    exit /b 1
+)
+call npm ci
 call npm run build
 cd ..\..
 if not exist "web\frontend\dist\index.html" (

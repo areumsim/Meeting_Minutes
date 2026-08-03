@@ -9,7 +9,7 @@
     "preview": "vite preview",
     "ios:sync": "npm run build:standalone && npx cap sync ios",
     "ios:open": "npx cap open ios",
-    "ios:build": "npm run build:standalone && npx cap sync ios && npx cap open ios",
+    "ios:build": "npm ci && npm run build:standalone && npx cap sync ios && npx cap open ios",
     "build:standalone": "tsc -b && vite build --mode standalone",
     "test": "npm run test:types && vitest run",
     "test:watch": "vitest",

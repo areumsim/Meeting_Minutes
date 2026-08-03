@@ -39,7 +39,7 @@ npm install
 
 # 3) 웹 빌드 + iOS 프로젝트 동기화 + Xcode 열기 (한 방)
 npm run ios:build
-#   (= npm run build && npx cap sync ios && npx cap open ios)
+#   (= npm ci && npm run build:standalone && npx cap sync ios && npx cap open ios)
 ```
 
 `npm run ios:build`가 Xcode에서 App 프로젝트를 자동으로 엽니다.
@@ -122,4 +122,25 @@ npm run ios:sync     # 웹 다시 빌드 + iOS에 반영
 - iOS 프로젝트: `web/frontend/ios/` (Capacitor + Swift Package Manager)
 - 앱 표시 이름: **AI 회의록** / Bundle ID(기본): `com.meetingminutes.app`
 - 마이크 권한·백그라운드 오디오·로컬 네트워크 권한은 `ios/App/App/Info.plist`에 이미 설정됨.
-- 웹 자산은 `npm run build`의 `dist/`를 `npx cap sync ios`가 `ios/App/App/public/`로 복사합니다.
+- 웹 자산은 `npm run build:standalone`의 `dist/`를 `npx cap sync ios`가 `ios/App/App/public/`로 복사합니다.
+
+### 왜 iOS 는 `build:standalone` 인가 (CSP 빌드 프로파일, SEC-006)
+
+CSP 는 빌드 프로파일 2종으로 갈라져 있다(`web/frontend/vite.config.ts`).
+
+| 프로파일 | 쓰는 곳 | `connect-src` |
+|---|---|---|
+| `packaged`(기본) | PC 포터블·exe — FastAPI 가 같은 오리진에서 프런트를 서빙 | `'self'` 만 |
+| `standalone` | **아이폰 앱 번들** — 서버 없이 OpenAI 직접 호출 + 사용자가 입력한 LAN 주소 | OpenAI + LAN 허용 |
+
+아이폰 앱을 `npm run build`(packaged)로 만들면 **단독 모드가 통째로 죽는다**(외부 호출이
+CSP 에 막힌다). 반대로 PC 배포본을 standalone 으로 만들면 좁혀 둔 보안이 풀린다.
+그래서 `ios:*` 스크립트는 항상 `build:standalone` 을 쓴다 — 손으로 `npm run build` 를
+부르지 말 것.
+
+### 왜 `ios:build` 는 `npm ci` 이고 `ios:sync` 는 아닌가
+
+`ios:build` 는 **배포용 산출물**을 만드는 경로라 lockfile 을 그대로 설치해 재현성을
+맞춘다(`npm install` 은 package.json 의 `^` 범위를 다시 해석해 lockfile 을 갱신할 수 있다).
+`ios:sync` 는 개발 중 반복 동기화용이고 `npm ci` 는 매번 `node_modules` 를 지워 느리므로
+설치를 하지 않는다 — 의존성을 바꿨다면 `npm install` 을 먼저 직접 돌린다.

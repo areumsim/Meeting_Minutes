@@ -122,3 +122,108 @@ class TestDeclarationsMatchReality:
         text = (Path(__file__).resolve().parent.parent / "pyproject.toml").read_text(encoding="utf-8")
         line = next(l for l in text.splitlines() if l.strip().startswith('"numpy'))
         assert "~=1.24" not in line, "numpy 선언이 1.x 만 허용한다 — 실제 배포는 2.x 다"
+
+
+class TestFrontendInstallIsReproducible:
+    """프런트 설치도 lockfile 을 **그대로** 써야 한다.
+
+    파이썬을 constraints 로 고정해도 프런트가 `npm install` 이면 재현성 구멍이 남는다 —
+    `npm install` 은 package.json 의 범위(`^`)를 다시 해석해 lockfile 을 갱신할 수 있고,
+    그러면 같은 커밋에서 빌드해도 다른 번들이 나온다. `npm ci` 는 lockfile 을 그대로
+    설치하고 package.json 과 어긋나면 실패한다(그 실패가 조용한 드리프트보다 낫다).
+    """
+
+    def test_build_uses_npm_ci_not_install(self, ps1):
+        assert "@('ci')" in ps1, "릴리즈 빌드가 npm ci 를 쓰지 않는다"
+        assert "@('install')" not in ps1, (
+            "npm install 이 남아 있다 — lockfile 이 갱신되면 같은 커밋에서 다른 번들이 나온다")
+
+    def test_missing_lockfile_fails_loudly(self, ps1):
+        """lockfile 이 없을 때 조용히 `npm install` 로 떨어지면 고정의 의미가 없다."""
+        assert "package-lock.json 이 없습니다" in ps1
+
+    def test_build_info_records_lock_hash(self, ps1):
+        """파이썬만 각인하면 '같은 커밋인데 화면이 다르다' 의 원인을 좁힐 수 없다."""
+        assert "package-lock sha256:" in ps1
+
+    def test_lockfile_is_committed_and_in_sync(self):
+        """`npm ci` 는 lockfile 과 package.json 이 어긋나면 빌드를 멈춘다 — 미리 잡는다."""
+        import json
+        root = Path(__file__).resolve().parent.parent / "web" / "frontend"
+        pkg = json.loads((root / "package.json").read_text(encoding="utf-8"))
+        lock = json.loads((root / "package-lock.json").read_text(encoding="utf-8"))
+        lock_root = (lock.get("packages") or {}).get("") or {}
+        for kind in ("dependencies", "devDependencies"):
+            assert (pkg.get(kind) or {}) == (lock_root.get(kind) or {}), (
+                f"{kind} 가 lockfile 과 어긋난다 — `npm install` 후 lockfile 을 커밋하세요")
+
+    def test_test_script_exists_and_typechecks(self):
+        """프런트 테스트가 실행 가능한 명령으로 존재하는지(UX-015 수용 기준)."""
+        import json
+        pkg = json.loads((Path(__file__).resolve().parent.parent / "web" / "frontend"
+                          / "package.json").read_text(encoding="utf-8"))
+        scripts = pkg.get("scripts") or {}
+        assert "test" in scripts, "npm test 가 없으면 UX-015 는 미해소다"
+        # 릴리즈 빌드가 테스트 타입검사에 인질이 되지 않도록 경로를 나눴다 — 그래도
+        # 테스트 타입은 검사돼야 한다.
+        assert "test:types" in scripts
+        assert "test:types" in scripts["test"]
+
+
+def _commands_only(text: str, comment_prefixes=("::", "rem ", "#")) -> str:
+    """주석을 걷어낸 **실행 줄**만 남긴다.
+
+    주석에 규칙을 설명해 두면 문자열 검사가 그 설명에 걸린다 — 실제로 두 번 걸렸다
+    (`unsafe-eval`, `build:standalone`). 검사 대상은 코드여야 한다.
+    """
+    out = []
+    for line in text.splitlines():
+        t = line.strip().lower()
+        if any(t.startswith(pfx) for pfx in comment_prefixes):
+            continue
+        out.append(line)
+    return "\n".join(out)
+
+
+@pytest.fixture(scope="module")
+def exe_bat():
+    return _commands_only((_BUILD / "build_exe.bat").read_text(encoding="utf-8", errors="replace"))
+
+
+@pytest.fixture(scope="module")
+def npm_scripts():
+    import json
+    return (json.loads((Path(__file__).resolve().parent.parent / "web" / "frontend"
+                        / "package.json").read_text(encoding="utf-8"))).get("scripts") or {}
+
+
+class TestAllBuildPathsAreConsistent:
+    """빌드 경로가 셋이다 — 포터블(ps1) · exe(bat) · iOS(npm script).
+    한쪽만 고치면 갈라진다(이 리포의 반복 사고 유형). 세 경로를 함께 고정한다.
+    """
+
+    def test_exe_build_also_uses_npm_ci(self, exe_bat):
+        """포터블만 고치면 exe 경로에서 lockfile 이 갱신돼 번들이 갈라진다."""
+        assert "npm ci" in exe_bat
+        assert "call npm install" not in exe_bat
+
+    def test_exe_build_fails_without_lockfile(self):
+        raw = (_BUILD / "build_exe.bat").read_text(encoding="utf-8", errors="replace")
+        assert "package-lock.json not found" in raw
+
+    def test_ios_uses_the_standalone_csp_profile(self, npm_scripts):
+        """아이폰 번들을 packaged 로 만들면 단독 모드가 CSP 에 막혀 통째로 죽는다.
+        반대로 PC 배포본을 standalone 으로 만들면 좁혀 둔 보안이 풀린다."""
+        for key in ("ios:sync", "ios:build"):
+            assert "build:standalone" in npm_scripts.get(key, ""), f"{key} 가 standalone 프로파일이 아니다"
+
+    def test_ios_release_build_installs_from_lockfile(self, npm_scripts):
+        """배포용 산출물 경로는 재현돼야 한다. (반복 동기화용 ios:sync 는 제외 — 매번
+        node_modules 를 지우면 느리고, 개발자가 직접 install 한다.)"""
+        assert npm_scripts.get("ios:build", "").startswith("npm ci")
+
+    def test_pc_builds_use_the_packaged_profile(self, exe_bat, ps1):
+        """PC 경로(exe·포터블)는 백엔드가 프런트를 서빙하므로 `connect-src 'self'` 로 충분하다.
+        **실행 줄만** 본다 — 주석에는 standalone 설명이 들어 있다."""
+        assert "build:standalone" not in exe_bat
+        assert "build:standalone" not in _commands_only(ps1, comment_prefixes=("#",))

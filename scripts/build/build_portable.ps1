@@ -64,9 +64,24 @@ Write-Host "  빌드 파이썬: $pyVer  (임베디드 태그: $tag)"
 
 # ── 1. 프론트엔드 빌드 ────────────────────────────────────────────
 Step '1/8' 'Building frontend...'
+# `npm install` 이 아니라 `npm ci` 를 쓴다 — 파이썬 쪽을 constraints 로 고정한 것과 같은 이유다.
+# `npm install` 은 package.json 의 범위(`^`)를 다시 해석해 **lockfile 을 갱신할 수 있고**,
+# 그러면 같은 커밋에서 빌드해도 다른 번들이 나온다. `npm ci` 는 lockfile 을 그대로 설치하고
+# package.json 과 어긋나면 실패한다(그 실패가 조용한 드리프트보다 낫다).
+$lockFile = Join-Path $Root 'web\frontend\package-lock.json'
+if (-not (Test-Path $lockFile)) {
+    Fail @"
+package-lock.json 이 없습니다: $lockFile
+  릴리즈 빌드는 lockfile 을 그대로 설치해야 재현이 됩니다.
+  `npm install` 로 lockfile 을 만들고 **커밋한 뒤** 다시 빌드하세요.
+"@
+}
+$lockHash = (Get-FileHash $lockFile -Algorithm SHA256).Hash.Substring(0,12)
+Write-Host "  package-lock sha256:$lockHash (npm ci 로 그대로 설치)"
 Push-Location (Join-Path $Root 'web\frontend')
 try {
-    Invoke-Native 'npm install' 'npm.cmd' @('install')
+    # npm ci 는 node_modules 를 지우고 새로 설치한다 — 이전 빌드의 잔재가 섞이지 않는다.
+    Invoke-Native 'npm ci' 'npm.cmd' @('ci')
     Invoke-Native 'npm run build' 'npm.cmd' @('run','build')
 } finally { Pop-Location }
 if (-not (Test-Path (Join-Path $Root 'web\frontend\dist\index.html'))) { Fail '프론트엔드 빌드 결과(index.html)가 없습니다.' }
@@ -223,7 +238,10 @@ $buildInfo = @(
     ("python   : " + $pyVer),
     # 어느 의존성 조합으로 빌드됐는지. 'none' 이면 버전이 빌드 시점에 결정된 빌드이므로
     # 같은 커밋이라도 재현되지 않는다 — 문제 신고 시 이 값이 있어야 원인을 좁힐 수 있다.
+    # 파이썬(constraints)과 프런트(package-lock) 양쪽을 남긴다 — 한쪽만 고정돼 있으면
+    # "같은 커밋인데 화면이 다르다"의 원인을 좁힐 수 없다.
     ("deps     : constraints sha256:" + $conHash),
+    ("web deps : package-lock sha256:" + $lockHash),
     "",
     "이 파일은 문제 신고 시 어느 빌드인지 확인하는 용도입니다."
 ) -join "`r`n"

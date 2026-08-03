@@ -163,11 +163,16 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         print(f"[startup] Obsidian 볼트 경로 점검 경고(무시): {e}")
 
-    if _mcp_app is not None:
-        async with _mcp_app.lifespan(app):
+    try:
+        if _mcp_app is not None:
+            async with _mcp_app.lifespan(app):
+                yield
+        else:
             yield
-    else:
-        yield
+    finally:
+        # 정상 종료가 끝났다는 신호. /api/shutdown 의 폴백 타이머가 이 값을 본다 —
+        # 여기까지 왔으면 실시간 세션 정리와 DB 커밋이 이미 실행된 것이다.
+        app.state.shutdown_done = True
 
 
 app = FastAPI(title="AI Meeting Minutes", lifespan=lifespan)
@@ -271,9 +276,13 @@ def shutdown(request: Request, force: bool = False):
         # 핸들은 런처가 server_launch.register_shutdown_handle() 로 심는다.
         if srv is not None:
             srv.should_exit = True
+            # 완료 신호는 lifespan 이 세우는 app.state.shutdown_done 이다.
+            # 예전에는 `srv.started is False` 를 기다렸는데, uvicorn 은 started 를
+            # True 로만 세팅하고 종료 시 되돌리지 않는다(uvicorn/server.py) — 즉 이
+            # 조건은 절대 성립하지 않아 항상 10초를 센 뒤 폴백으로 떨어졌다.
             for _ in range(100):            # 최대 10초 대기
                 time.sleep(0.1)
-                if getattr(srv, "started", True) is False:
+                if getattr(app.state, "shutdown_done", False):
                     return
         # 폴백: 핸들이 없거나 10초 안에 안 내려간 경우. Windows 에서는 SIGTERM 이
         # 강제 종료라 정상 종료 훅이 돌지 않는다 — 즉 이 경로는 os._exit 과 사실상

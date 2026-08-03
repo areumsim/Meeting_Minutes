@@ -168,8 +168,8 @@ def _is_local_client(request: Request) -> bool:
     판정은 `web.backend.security.is_loopback` 하나를 쓴다(같은 목록이 두 곳에 있으면
     갈라진다). 이 함수만으로는 부족하다 — loopback 확인은 "사용자 PC 안에서 왔다"만
     말해 주고, **그 PC의 브라우저가 열어 둔 악성 웹페이지**도 loopback 이다.
-    그래서 부수효과·비밀 읽기 엔드포인트는 `security.require_local`(Origin 까지 검증)을
-    쓴다.
+    그래서 부수효과·비밀 읽기 엔드포인트는 `security.require_client` /
+    `security.require_loopback`(Origin 까지 검증)을 쓴다.
     """
     from web.backend.security import is_loopback
     return is_loopback(request.client.host if request.client else None)
@@ -185,9 +185,12 @@ def reveal_secret(path: str, request: Request):
     loopback 확인만으로는 부족하다 — 사용자 PC의 브라우저가 열어 둔 **다른 사이트**도
     loopback 에서 오고, 이 엔드포인트는 비밀 원문을 돌려준다. Origin 까지 검증한다
     (SEC-009 / N-10).
+
+    `require_loopback` 이다 — `server.lan_access` 를 켰더라도 여기는 LAN 기기에 열지
+    않는다. 폰이 PC 의 실제 키를 가져가지 못하게 하는 것이 이 제한의 목적 자체다.
     """
-    from web.backend.security import require_local
-    require_local(request)
+    from web.backend.security import require_loopback
+    require_loopback(request)
     if path not in set(_sensitive_paths()):
         raise HTTPException(status_code=400, detail="허용되지 않은 경로입니다.")
     if not CONFIG_PATH.exists():
@@ -206,11 +209,11 @@ def recover_config(request: Request, body: dict | None = None):
     false 면 손상 파일만 보관하고 빈 설정으로 시작한다. 어느 쪽이든 손상 파일은
     지우지 않는다(사용자가 손으로 넣은 키가 들어 있을 수 있다).
 
-    설정 파일을 갈아치우는 동작이라 `require_local` 을 지난다 — 아무 웹페이지가
-    사용자 설정을 초기화하게 둘 수 없다.
+    설정 파일을 갈아치우는 동작이라 관문을 지난다 — 아무 웹페이지가 사용자 설정을
+    초기화하게 둘 수 없다.
     """
-    from web.backend.security import require_local
-    require_local(request)
+    from web.backend.security import require_client
+    require_client(request)
     from meeting_minutes_app.common import config_loader
     restore = bool((body or {}).get("restore_backup")) if isinstance(body, dict) else False
     return config_loader.recover(restore_backup=restore)
@@ -571,10 +574,6 @@ _PICK_FOLDER_PS = (
 )
 
 
-def _is_loopback(host: str | None) -> bool:
-    return host in ("127.0.0.1", "::1", "localhost", "testclient")
-
-
 @router.get("/system/info")
 def system_info():
     """이 서버 인스턴스가 어느 데이터 폴더를 쓰는지 — 경로만, 비밀값 없음.
@@ -605,11 +604,14 @@ async def pick_folder(request: Request, body: dict | None = None):
     """
     # loopback 뿐 아니라 Origin 도 본다 — 아무 웹페이지가 사용자 화면에 네이티브
     # 대화상자를 띄우게 할 수 있었다(SEC-009 / N-10).
+    # `lan_access` 를 켜도 여기는 loopback 전용이다 — 원격 요청으로 서버 화면에 창이
+    # 떠 버리는 것을 막는 것이 이 제한의 목적이다. 거부는 403 이 아니라 {ok:false} 로
+    # 돌려준다(프런트가 텍스트 입력을 유지하는 안전한 폴백을 이미 갖고 있다).
     from web.backend.security import is_allowed_origin, is_loopback
     host = request.client.host if request.client else None
     if not is_loopback(host):
         return {"ok": False, "message": "폴더 선택은 이 PC(로컬)에서만 사용할 수 있습니다. 경로를 직접 입력하세요."}
-    if not is_allowed_origin(request.headers.get("origin")):
+    if not is_allowed_origin(request.headers.get("origin"), request.headers.get("host")):
         return {"ok": False, "message": "허용되지 않은 출처의 요청입니다. 앱 화면에서 다시 시도하세요."}
     if sys.platform != "win32":
         return {"ok": False, "message": "이 환경에서는 폴더 선택 창을 열 수 없습니다. 경로를 직접 입력하세요."}

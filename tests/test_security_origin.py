@@ -78,28 +78,104 @@ class TestLoopback:
 class _Req:
     """Request 대역 — client.host 와 headers 만 본다."""
 
-    def __init__(self, host="127.0.0.1", origin=None):
+    def __init__(self, host="127.0.0.1", origin=None, host_header=None):
         self.client = type("C", (), {"host": host})()
-        self.headers = {} if origin is None else {"origin": origin}
+        self.headers = {}
+        if origin is not None:
+            self.headers["origin"] = origin
+        if host_header is not None:
+            self.headers["host"] = host_header
 
 
-class TestRequireLocal:
-    def test_passes_for_app_origin(self):
-        sec.require_local(_Req(origin="http://localhost:8501"))     # 예외 없음
+@pytest.fixture
+def lan_off(monkeypatch):
+    monkeypatch.setattr(sec, "_lan_enabled", lambda: False)
 
-    def test_passes_without_origin(self):
-        sec.require_local(_Req())
 
-    def test_rejects_foreign_origin(self):
+@pytest.fixture
+def lan_on(monkeypatch):
+    monkeypatch.setattr(sec, "_lan_enabled", lambda: True)
+
+
+class TestRequireClient:
+    def test_passes_for_app_origin(self, lan_off):
+        sec.require_client(_Req(origin="http://localhost:8501"))     # 예외 없음
+
+    def test_passes_without_origin(self, lan_off):
+        sec.require_client(_Req())
+
+    def test_rejects_foreign_origin(self, lan_off):
         from fastapi import HTTPException
         with pytest.raises(HTTPException) as ei:
-            sec.require_local(_Req(origin="https://evil.example"))
+            sec.require_client(_Req(origin="https://evil.example"))
         assert ei.value.status_code == 403
 
-    def test_rejects_non_loopback(self):
+    def test_rejects_non_loopback_when_lan_off(self, lan_off):
+        """기본값(lan_access=false)에서는 loopback 전용 — SEC-009 초판과 같다."""
         from fastapi import HTTPException
         with pytest.raises(HTTPException) as ei:
-            sec.require_local(_Req(host="192.168.0.10"))
+            sec.require_client(_Req(host="192.168.0.10"))
+        assert ei.value.status_code == 403
+
+
+class TestLanAccess:
+    """`server.lan_access` 를 켠 사용자의 아이폰 앱(PC 연결 모드)이 들어오는 경로.
+
+    회귀 배경: SEC-009 초판이 두 관문 모두 loopback 을 강제해, 그 설정을 켜도
+    `/ws/realtime` 이 1008 로 조용히 거부됐다. PRD 는 LAN 모드 유지를 명시한다.
+    """
+
+    def test_private_ip_allowed_when_on(self, lan_on):
+        sec.require_client(_Req(host="192.168.0.10", origin="capacitor://localhost"))
+
+    @pytest.mark.parametrize("host", ["10.0.0.5", "172.16.0.9", "192.168.1.2"])
+    def test_private_ranges(self, lan_on, host):
+        assert sec.is_allowed_client_host(host) is True
+
+    @pytest.mark.parametrize("host", ["8.8.8.8", "1.1.1.1", "172.32.0.1"])
+    def test_public_ip_still_rejected(self, lan_on, host):
+        """켜도 공인 IP 는 받지 않는다. 172.32 는 172.16/12 **밖**이다 —
+        문자열 프리픽스 비교로는 틀리는 경계라 ipaddress 로 판정한다.
+        (203.0.113.0/24 같은 문서용 대역은 ipaddress 가 private 으로 보므로 예시로 쓰지 않는다.)"""
+        assert sec.is_allowed_client_host(host) is False
+
+    def test_same_origin_lan_address_allowed(self, lan_on):
+        """`http://192.168.x.x:8501` 로 접속하면 Origin 이 그 주소가 된다 —
+        정규식은 localhost 계열만 알기 때문에 Host 와 같은 오리진을 허용한다."""
+        assert sec.is_allowed_origin("http://192.168.0.10:8501",
+                                     "192.168.0.10:8501") is True
+
+    def test_foreign_origin_not_saved_by_host_match(self, lan_on):
+        assert sec.is_allowed_origin("https://evil.example",
+                                     "192.168.0.10:8501") is False
+
+    def test_host_match_ignored_when_off(self, lan_off):
+        assert sec.is_allowed_origin("http://192.168.0.10:8501",
+                                     "192.168.0.10:8501") is False
+
+    def test_ws_accepts_lan_client_when_on(self, lan_on):
+        ws = _WS(host="192.168.0.10", origin="capacitor://localhost")
+        assert asyncio.run(sec.ws_reject_foreign_origin(ws)) is False
+
+
+class TestRequireLoopback:
+    """비밀 원문·네이티브 대화상자는 `lan_access` 와 무관하게 이 PC 전용이다."""
+
+    def test_rejects_lan_client_even_when_lan_on(self, lan_on):
+        from fastapi import HTTPException
+        with pytest.raises(HTTPException) as ei:
+            sec.require_loopback(_Req(host="192.168.0.10", origin="capacitor://localhost"))
+        assert ei.value.status_code == 403
+
+    def test_allows_loopback(self, lan_on):
+        sec.require_loopback(_Req(origin="http://localhost:8501"))
+
+    def test_reveal_secret_uses_loopback_gate(self, lan_on):
+        """폰이 PC 의 실제 키를 빼가지 못하게 하는 것이 이 제한의 목적 자체다."""
+        from fastapi import HTTPException
+        from web.backend.api.settings import reveal_secret
+        with pytest.raises(HTTPException) as ei:
+            reveal_secret("api.openai_api_key", _Req(host="192.168.0.10"))
         assert ei.value.status_code == 403
 
 

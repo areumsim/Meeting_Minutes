@@ -233,8 +233,8 @@ def shutdown(request: Request, force: bool = False):
        그래서 실시간 세션 정리(스레드풀 shutdown, tmpdir 삭제)가 실행되지 않고 처리 중
        세션이 `processing` 으로 영구 고착됐다. SIGTERM 상당의 정상 경로로 내려간다.
     """
-    from web.backend.security import require_local
-    require_local(request)
+    from web.backend.security import require_client
+    require_client(request)
 
     busy: list = []
     if not force:

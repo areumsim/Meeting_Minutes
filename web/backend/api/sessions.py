@@ -93,8 +93,8 @@ def get_session_status(session_id: str):
 def delete_session(session_id: str, request: Request):
     # 부수효과(삭제)가 있는 요청은 Origin 을 본다 — CORS 는 단순 요청의 전송을 막지
     # 않으므로, 예전에는 아무 웹페이지가 사용자의 회의 기록을 지울 수 있었다(SEC-009).
-    from web.backend.security import require_local
-    require_local(request)
+    from web.backend.security import require_client
+    require_client(request)
     db.delete_session(session_id)
     return {"success": True}
 
@@ -107,7 +107,7 @@ def clear_sessions(request: Request):
     delete)와 입력 확인은 FR-001 개정으로 Batch C 에서 다룬다 — 여기서는 원격
     트리거만 막는다.
     """
-    from web.backend.security import require_local
-    require_local(request)
+    from web.backend.security import require_client
+    require_client(request)
     db.clear_all_sessions()
     return {"success": True}

@@ -436,6 +436,53 @@
     "_doc_type_classify_llm_comment": "파일명 키워드로 문서 유형(meeting/seminar/lecture)을 못 정했을 때, STT 완료 후 전사 내용으로 LLM이 보완 판단. wiki.domain_classify_llm(클레임 검증용)과는 별개 플래그.",
     "doc_type_classify_llm": true
   },
+  "facilitation": {
+    "_comment": [
+      "회의 진행 페르소나 — 실시간 전사 위에서 여러 관점(촉진자·서기·팩트체커 등)이",
+      "놓친 논점·모호한 정의·사실 오류 후보를 판정하는 보조 기능. 기본 꺼짐.",
+      "현재는 M0 관찰모드: 켜도 화면에는 아무것도 뜨지 않고 판정을 DB(facilitation_log)에",
+      "기록만 한다 — 이 기록으로 페르소나별 오탐률을 실측한 뒤에야 화면 개입을 연다.",
+      "비용은 트리아지(경량 LLM, triage_period_sec 마다 최대 1회)에서 발생하며",
+      "지출 한도(cost.*)와 아래 회의당 캡을 모두 지난다. PRD: docs/prd/PRD_회의진행_페르소나에이전트_20260803.md"
+    ],
+    "enabled": false,
+    "_max_level_comment": "참견도 전역 상한 — 개별 페르소나 값이 이걸 넘지 못한다. 4(알림음)·5(음성)는 관리자 개방 몫. 사내 배포 기본 3(무음).",
+    "max_level": 3,
+    "_max_interventions_comment": "세션당 화면 개입 예산(M1 이후 적용) — 초과분은 기록으로 강등된다.",
+    "max_interventions_per_session": 12,
+    "_triage_model_comment": "트리아지(1차 선별) 경량 모델 — 상시 비용 결정 요인. claude-haiku-4-5 선택 시 현재는 models.claude_model 이 대신 적용된다(모델 오버라이드는 GPT 계열만 지원).",
+    "_triage_model_options": [
+      "gpt-4o-mini",
+      "claude-haiku-4-5"
+    ],
+    "triage_model": "gpt-4o-mini",
+    "_triage_period_sec_comment": "이 간격(초)마다 최대 1회 판정 — 시간 기반이라 발화량과 무관하게 호출 수 상한이 고정된다(25초 = 1시간 최대 ~144회). 발화가 없으면 0회.",
+    "triage_period_sec": 25,
+    "_voice_enabled_comment": "v1 강제 false — 스피커→마이크 되먹임 방지 미구현. M3 파일럿(헤드셋 전제·실기 검증)에서만 개방.",
+    "voice_enabled": false,
+    "_web_search_enabled_comment": "팩트체커/도메인 전문가 웹검색(M1 이후 적용). wiki.online_search_enabled 와 AND 이고, 라이브 검색이 실제 성공(searched=true)했을 때만 팩트체커가 개입한다.",
+    "web_search_enabled": false,
+    "web_search_interval": 4,
+    "_max_cost_usd_per_meeting_comment": "이 기능 전용 회의당 비용 캡(USD). 월 한도(cost.monthly_cap_usd)가 0(무제한)인 기본 설치에서도 이 캡은 동작한다. 0이면 캡 없음.",
+    "max_cost_usd_per_meeting": 0.5,
+    "_personas_comment": [
+      "페르소나별 참견도(level): 0=금지(트리아지에서 제외, 비용 0) 1=관찰(기록만, 화면 표시 없음)",
+      "2=소극 3=표준 4=적극(알림음) 5=최대(음성) — 2 이상은 M1 이후에만 화면에 나타난다.",
+      "M0 관찰모드 기본은 전원 1. PRD §3 로스터 권장값(촉진자·서기 3, 도메인·팩트체커 등 2)은",
+      "오탐률 실측 통과 후 M1 개방 시 참조. model 은 Tier 1 생성 모델(M1 이후 사용).",
+      "hard_cap: 위험 페르소나(팩트체커·비판자)는 설정으로 이 값을 넘는 참견도로 올릴 수 없다."
+    ],
+    "personas": {
+      "facilitator":     {"level": 1, "model": "gpt-4o-mini"},
+      "scribe":          {"level": 1, "model": "gpt-4o-mini"},
+      "domain_expert":   {"level": 1, "model": "claude-sonnet-5"},
+      "fact_checker":    {"level": 1, "model": "claude-opus-4-8", "hard_cap": 2},
+      "devils_advocate": {"level": 1, "model": "claude-sonnet-5"},
+      "junior":          {"level": 1, "model": "gpt-4o-mini"},
+      "senior":          {"level": 1, "model": "claude-sonnet-5"},
+      "critic":          {"level": 1, "model": "claude-opus-4-8", "hard_cap": 2}
+    }
+  },
   "mcp": {
     "_comment": [
       "Wiki Knowledge Graph를 원격 MCP 서버(/mcp)로 노출 — Claude Cowork 커스텀 커넥터 연동용.",

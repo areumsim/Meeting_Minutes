@@ -181,6 +181,11 @@ class BrowserRealtimeSession:
         self._web_findings: List[Dict] = []
         self._notes_lock = threading.Lock()
         self._web_pool = ThreadPoolExecutor(max_workers=1)  # 웹 검색 보완용
+        # 회의 진행 페르소나 오케스트레이터(M0 관찰모드) — wiki_core.facilitation.
+        # config.facilitation.enabled(기본 꺼짐) 게이트·전용 스레드풀·비용 관문은
+        # 전부 모듈 내부에 있다. run()에서 세션 생성 후 만든다(관찰 로그가 session_id
+        # 로 남아야 종료 후 finalize 사실검증과 대조할 수 있다).
+        self._facilitator = None
         self._segment_counter = 0  # 웹 검색 throttle용
         # 웹은 보완재 — 내부(vault) 검색이 후보를 찾아낸 구간에서는 웹 검색을 건너뛴다
         # (wiki.realtime_web_only_if_no_vault_hit). 내부 후보 누적 개수의 증가로 판정.
@@ -276,6 +281,10 @@ class BrowserRealtimeSession:
                     db.update_session_status(self.session_id, "error")
                 self.session_id = None
             return
+
+        # API 키 확인을 통과한 뒤에 만든다 — 위의 조기 return 경로에서 유휴
+        # 스레드풀이 남지 않게 한다(게이트가 꺼져 있으면 어차피 no-op).
+        self._facilitator = self._create_facilitator(topic)
 
         ssl_verify = cfg.get("ssl.verify", True)  # 안전 기본값: 키 누락 시 검증 켜짐
 
@@ -474,6 +483,8 @@ class BrowserRealtimeSession:
         self._web_pool.shutdown(wait=True, cancel_futures=False)
         if self._searcher is not None:
             self._searcher.shutdown(wait=True)
+        if self._facilitator is not None:
+            self._facilitator.shutdown(wait=True)
         await self._finalize(
             openai_client, language, translate, doc_type, topic, title,
         )
@@ -593,6 +604,9 @@ class BrowserRealtimeSession:
             # vault 검색 게이트/스로틀은 RealtimeVaultSearcher 내부에서 처리
             if self._searcher is not None:
                 self._searcher.offer_segment(final_text)
+            # 회의 진행 페르소나 트리아지 — 같은 계약(논블로킹, 시간 게이트는 내부)
+            if self._facilitator is not None:
+                self._facilitator.offer_segment(final_text)
             self._segment_counter += 1
             self._maybe_web_research(final_text)
 
@@ -711,6 +725,20 @@ class BrowserRealtimeSession:
                 on_status=self._emit_search_status, allow_launch=True)
             searcher.warmup()
             return searcher
+        except Exception:
+            return None
+
+    def _create_facilitator(self, topic: str):
+        """회의 진행 페르소나 오케스트레이터(M0 관찰모드) 생성.
+
+        게이트(config.facilitation.enabled, 기본 꺼짐)는 모듈 내부에서 검사한다 —
+        꺼져 있으면 스레드풀도 만들지 않는 no-op 이라 LLM 호출이 0회다.
+        관찰모드라 화면(WS) 이벤트는 보내지 않는다 — 판정은 facilitation_log 에만
+        남는다. 생성 실패는 녹음을 막지 않는다(_create_searcher 와 같은 규칙)."""
+        try:
+            from meeting_minutes_app.wiki_core.facilitation import FacilitationOrchestrator
+            return FacilitationOrchestrator(
+                session_id=self.session_id or "", topic=topic)
         except Exception:
             return None
 
@@ -1155,6 +1183,9 @@ class BrowserRealtimeSession:
             #  realtime_web_search_interval 을 켜도 아무 일도 일어나지 않았다.)
             if self._searcher is not None:
                 self._searcher.offer_segment(text)
+            # 회의 진행 페르소나 트리아지 — 같은 계약(논블로킹, 시간 게이트는 내부)
+            if self._facilitator is not None:
+                self._facilitator.offer_segment(text)
             self._segment_counter += 1
             self._maybe_web_research(text)
 
@@ -1470,6 +1501,11 @@ class BrowserRealtimeSession:
                     self._searcher.shutdown(wait=False)
                 except Exception:
                     pass
+            if self._facilitator is not None:
+                try:
+                    self._facilitator.shutdown(wait=False)
+                except Exception:
+                    pass
             try:
                 await self.ws.send_json({
                     "type": "cancelled",
@@ -1519,6 +1555,9 @@ class BrowserRealtimeSession:
         # vault 검색 drain — _finalize()의 collected_notes() 완결성 보장 (WS 경로와 동일)
         if self._searcher is not None:
             self._searcher.shutdown(wait=True)
+        # 페르소나 트리아지 drain — 관찰 로그(facilitation_log) 기록 완결성 보장
+        if self._facilitator is not None:
+            self._facilitator.shutdown(wait=True)
 
         # 스레드풀 정리 — 과거엔 WS 경로만 shutdown 해 HTTP 세션마다 유휴 스레드가 누적됐다
         self._translator_pool.shutdown(wait=True, cancel_futures=False)

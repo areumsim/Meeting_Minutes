@@ -110,11 +110,36 @@ def _resolve_llm_key(llm: str = "gpt", model: str | None = None) -> str:
     return "gpt-4o"
 
 
+def llm_token_price(model: str | None = None, llm: str = "gpt") -> dict:
+    """LLM 토큰 단가({"in","out"}, $/1M) 조회. 미등록 모델은 기본 단가.
+
+    표를 직접 .get 하지 말 것 — 호출부마다 기본값이 갈린다(STT 단가에서 실제로
+    0.003 vs 0.006 로 갈렸던 전례, embedding_rate_per_1m 과 같은 규칙)."""
+    return LLM_TOKEN_PRICE.get(_resolve_llm_key(llm, model), DEFAULT_LLM_TOKEN_PRICE)
+
+
 def minutes_cost(llm: str = "gpt", model: str | None = None) -> float:
     """회의록 생성 1회 대략 비용(USD) — 실제 LLM 모델 단가 반영."""
-    price = LLM_TOKEN_PRICE.get(_resolve_llm_key(llm, model), DEFAULT_LLM_TOKEN_PRICE)
+    price = llm_token_price(model, llm)
     return (MINUTES_INPUT_TOKENS / 1_000_000) * price["in"] + \
            (MINUTES_OUTPUT_TOKENS / 1_000_000) * price["out"]
+
+
+# 회의 진행 페르소나(facilitation) 트리아지 1회 대략 토큰 — PRD §10 추정치
+# (최근 발화 창 ~2000자 + 페르소나 목록 ≈ 입력 1.5k, 후보 JSON 출력 ≈ 150).
+# 창 길이(facilitation.TRIAGE_WINDOW_CHARS)를 바꾸면 이 값도 같이 조정한다.
+FACILITATION_TRIAGE_INPUT_TOKENS  = 1_500
+FACILITATION_TRIAGE_OUTPUT_TOKENS = 150
+
+
+def facilitation_triage_call_cost(model: str | None) -> float:
+    """트리아지 1회 예상 비용(USD).
+
+    한도 판정(spend_guard.blocked 의 입력)과 세션 추정(estimate_session_cost 의
+    facilitation 항)이 **같은 함수**를 써야 표시 금액과 판정이 안 갈라진다(CLAUDE.md)."""
+    price = llm_token_price(model)
+    return (FACILITATION_TRIAGE_INPUT_TOKENS / 1_000_000) * price["in"] + \
+           (FACILITATION_TRIAGE_OUTPUT_TOKENS / 1_000_000) * price["out"]
 
 
 # 하위호환: 기존 import 유지 (gpt-4o 기준 = 0.08)
@@ -172,7 +197,10 @@ def estimate_session_cost(duration_sec: float, stt_model: str,
                           llm: str = "gpt",
                           minutes_model: str | None = None,
                           two_pass: bool = False,
-                          revise_model: str | None = None) -> dict:
+                          revise_model: str | None = None,
+                          facilitation: bool = False,
+                          facilitation_triage_model: str | None = None,
+                          facilitation_period_sec: float = 25.0) -> dict:
     """오디오 길이(초) 기반 세션 비용 추정(USD).
 
     stt = 길이(분) × 모델 분당단가, translate = 길이(분) × 번역단가(옵션),
@@ -184,6 +212,11 @@ def estimate_session_cost(duration_sec: float, stt_model: str,
     비싸다(gpt-4o-transcribe $0.006 vs gpt-4o-mini-transcribe $0.003).
     기본값을 False 로 둔 것은 의도적이다 — 배치/업로드 경로에는 보정 패스가 없으므로
     호출부가 실시간 경로임을 명시할 때만 켜진다(is_two_pass_source 참조).
+
+    facilitation=True 면 회의 진행 페르소나 트리아지(시간 기반, 기본 25초에 1회)
+    비용을 더한다 — 실시간 경로에서 config `facilitation.enabled` 가 켜져 있을 때만
+    호출부가 켠다(two_pass 와 같은 규칙). 단가는 facilitation_triage_call_cost()
+    한 곳에서 나온다 — 오케스트레이터의 한도 판정과 같은 함수다.
     """
     minutes_dur = max(0.0, float(duration_sec)) / 60.0
     stt_rate = stt_rate_per_min(stt_model)
@@ -192,6 +225,10 @@ def estimate_session_cost(duration_sec: float, stt_model: str,
     stt_revise = minutes_dur * revise_rate
     tr = minutes_dur * TRANSLATE_COST_PER_MIN if translate else 0.0
     mins = minutes_cost(llm, minutes_model) if include_minutes else 0.0
+    fac = 0.0
+    if facilitation and facilitation_period_sec > 0:
+        triage_calls = max(0.0, float(duration_sec)) / float(facilitation_period_sec)
+        fac = triage_calls * facilitation_triage_call_cost(facilitation_triage_model)
     return {
         "duration_sec": round(float(duration_sec)),
         "stt": round(stt, 4),
@@ -199,7 +236,9 @@ def estimate_session_cost(duration_sec: float, stt_model: str,
         "stt_revise": round(stt_revise, 4),
         "translate": round(tr, 4),
         "minutes": round(mins, 4),
-        "total": round(stt + stt_revise + tr + mins, 4),
+        # 회의 진행 페르소나 트리아지(상시 경량 호출). facilitation=False 면 0.0.
+        "facilitation": round(fac, 4),
+        "total": round(stt + stt_revise + tr + mins + fac, 4),
         "stt_rate_per_min": stt_rate,
         "revise_rate_per_min": revise_rate,
         # 실측 분당 STT 단가(두 패스 합계) — 러닝 미터·한도 검사가 이 값을 써야 한다.

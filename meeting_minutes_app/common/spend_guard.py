@@ -30,6 +30,11 @@ from typing import Any
 KIND_WATCHER = "watcher"
 KIND_PLAN_AUTOMATION = "plan_automation"
 KIND_REGENERATE = "regenerate"
+#: 회의 진행 페르소나(트리아지) — 실시간 녹음 중 도는 상시 LLM 경로
+#: (wiki_core.facilitation). 사용자가 녹음을 직접 시작·주시하므로 AUTOMATION_KINDS
+#: (무인 실행 집계)에는 넣지 않지만, 상시 호출이라 오케스트레이터가
+#: automation_paused() 관문을 별도로 지난다(PRD §10).
+KIND_FACILITATION = "facilitation"
 
 #: 사용자가 화면을 보고 있지 않을 때 돌아가는 경로. FR-011 의 "자동 실행분 별도 집계"가
 #: 이 목록을 쓴다. 재생성은 사용자가 버튼을 눌러 시작하므로 자동 실행이 아니다.

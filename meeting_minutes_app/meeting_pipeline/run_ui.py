@@ -175,7 +175,23 @@ def main():
         # 0.0.0.0 바인딩이 남의 127.0.0.1 바인딩과 공존해 버려서, 브라우저(localhost)는
         # 남의 앱을 보고 이 서버는 요청을 못 받는 상태가 된다 — 데이터 폴더가 다른 두
         # 인스턴스일 때 "내 설정이 사라졌다"로 오해하게 만든 원인이다(server_launch 참고).
+        # 같은 데이터 폴더에 두 번째 서버를 띄우지 않는다(포터블 런처와 같은 함수).
+        # 포트 검사로는 부족하다 — 아래 find_free_port 가 점유 시 다른 포트로 옮기므로
+        # 첫 인스턴스가 이미 랜덤 포트에 있을 수 있다. 겹치면 안 되는 자원은 포트가 아니라
+        # 데이터 폴더(SQLite·config·워처 상태)다.
+        _data_base = app_paths.get_base_dir()
+        running = server_launch.acquire_instance_lock(_data_base)
+        if running is not None:
+            other_port = running.get("port")
+            print(f"\n  [오류] 같은 데이터 폴더로 이미 실행 중입니다: {_data_base}")
+            if other_port:
+                print(f"         기존 인스턴스: http://localhost:{other_port}")
+            print("         두 개가 함께 돌면 워처가 같은 파일을 중복 처리하고 "
+                  "진행 중 세션이 error 로 표시됩니다.")
+            sys.exit(1)
+
         port = server_launch.find_free_port(args.port)
+        server_launch.publish_instance_port(_data_base, port)
         if port != args.port:
             print(f"\n  [알림] 포트 {args.port} 는 "
                   f"{server_launch.describe_port_holder(args.port)} —")

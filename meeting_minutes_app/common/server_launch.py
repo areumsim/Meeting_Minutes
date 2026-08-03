@@ -38,6 +38,110 @@ LOOPBACK = "127.0.0.1"
 _PROBE_HOSTS = ("0.0.0.0", LOOPBACK)
 
 
+# ── 중복 실행 방지 ────────────────────────────────
+#: 프로세스 수명 동안 살아 있어야 하는 락 핸들. 지역 변수로 두면 GC 가 닫아 락이 풀린다.
+_LOCK_FH = None
+
+#: 락 파일과 그 옆의 정보 파일. 정보 파일을 분리하는 이유는 락을 건 바이트 영역과
+#: 쓰기가 겹치지 않게 하려는 것이다(같은 파일에 쓰면 플랫폼별로 동작이 갈린다).
+_LOCK_NAME = ".instance.lock"
+_INFO_NAME = ".instance.json"
+
+
+def _lock_paths(data_dir):
+    from pathlib import Path
+    d = Path(data_dir)
+    return d / _LOCK_NAME, d / _INFO_NAME
+
+
+def acquire_instance_lock(data_dir) -> Optional[dict]:
+    """데이터 폴더 단위 배타 락을 잡는다. **성공하면 None**, 이미 실행 중이면 그 인스턴스 정보.
+
+    왜 포트 검사로 안 되는가 — `find_free_port` 가 점유 시 **다른 포트로 옮기므로**,
+    첫 인스턴스가 이미 랜덤 포트에 있을 수 있다. 8501 만 봐서는 못 찾는다. 겹치면 안 되는
+    자원은 포트가 아니라 **데이터 폴더**(SQLite·config.json·워처 상태)이므로 거기서 잠근다.
+
+    왜 잔류 락이 문제가 되지 않는가 — 파일 **내용**이 아니라 OS 의 바이트 범위 락이라,
+    프로세스가 크래시해도 커널이 핸들을 닫으면서 자동으로 풀린다. (config 저장에 프로세스
+    간 잠금을 두지 않기로 한 판단과 상충하지 않는다: 그쪽은 빈번한 짧은 락이고 여기는
+    프로세스 수명 동안 핸들 하나다.)
+
+    범위는 **웹 서버 런처 2종**뿐이다. CLI(`batch`·`realtime`)까지 막으면 웹 앱을 켜 둔 채
+    CLI 를 쓰는 기존 사용 방식이 깨진다 — 그건 이 P0(같은 앱을 두 번 띄움)이 아니다.
+    """
+    global _LOCK_FH
+    import json
+    import os
+
+    lock_path, info_path = _lock_paths(data_dir)
+    try:
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        fh = open(lock_path, "a+b")
+    except OSError as e:
+        print(f"  [중복실행] 락 파일을 열지 못해 검사를 건너뜁니다(무시): {e}")
+        return None
+
+    if not _try_lock(fh):
+        fh.close()
+        info = {}
+        try:
+            info = json.loads(info_path.read_text(encoding="utf-8"))
+        except Exception:
+            pass
+        return info if isinstance(info, dict) else {}
+
+    _LOCK_FH = fh                      # 프로세스가 끝날 때까지 살려 둔다
+    try:
+        info_path.write_text(json.dumps({"pid": os.getpid()}, ensure_ascii=False),
+                             encoding="utf-8")
+    except OSError:
+        pass
+    return None
+
+
+def _try_lock(fh) -> bool:
+    """비차단 배타 락. 잡았으면 True.
+
+    Windows 는 `msvcrt.LK_NBLCK`(non-blocking 배타)이고 **현재 위치부터** n 바이트를
+    잠그므로 seek(0) 이 필요하다. POSIX 상수(LOCK_EX/LOCK_NB)는 msvcrt 에 없다.
+    """
+    try:
+        fh.seek(0)
+    except OSError:
+        return False
+    try:
+        import msvcrt                                  # Windows
+        msvcrt.locking(fh.fileno(), msvcrt.LK_NBLCK, 1)
+        return True
+    except ImportError:
+        try:
+            import fcntl                               # POSIX(개발용 macOS/Linux)
+            fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return True
+        except Exception:
+            return False
+    except OSError:
+        return False
+
+
+def publish_instance_port(data_dir, port: int) -> None:
+    """락을 잡은 뒤 확정된 포트를 정보 파일에 남긴다.
+
+    두 번째 인스턴스가 "이미 실행 중"을 알리는 것만으로는 부족하다 — 사용자는 앱을 열려고
+    두 번 누른 것이므로, **원래 창을 열어 주는 것**이 기대에 맞다. 그 주소가 여기서 온다.
+    """
+    import json
+    import os
+
+    _, info_path = _lock_paths(data_dir)
+    try:
+        info_path.write_text(
+            json.dumps({"pid": os.getpid(), "port": int(port)}, ensure_ascii=False),
+            encoding="utf-8")
+    except OSError:
+        pass
+
+
 def lan_access_enabled() -> bool:
     """config `server.lan_access` — 같은 WiFi의 모바일 앱 접속을 허용하는지."""
     try:

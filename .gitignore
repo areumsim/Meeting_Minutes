@@ -106,6 +106,10 @@ temp_*
 
 # ── 상태/인덱스 파일 (사용자별, git에 올리지 말 것) ─────
 data/*.json
+# 중복 실행 방지 락(server_launch.acquire_instance_lock). 소스 실행은 데이터 폴더가
+# 리포 루트라 여기 생긴다(포터블은 MeetingMinutesData/ 안이라 이미 무시됨).
+.instance.lock
+.instance.json
 
 # bash 크래시 덤프
 *.stackdump

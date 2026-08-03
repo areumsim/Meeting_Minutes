@@ -107,7 +107,27 @@ def main():
     # 포트 선택·브라우저 열기 규칙은 소스 런처(run_ui.py)와 공용 모듈 하나를 쓴다 —
     # 과거엔 이 파일에만 있어 소스 런처가 8501 고정 + 바인딩 전 브라우저 열기로 갈라졌다.
     from meeting_minutes_app.common import server_launch
+
+    # 같은 데이터 폴더에 두 번째 서버를 띄우지 않는다. find_free_port 가 점유 시 조용히
+    # 다른 포트로 옮기기 때문에, 예전에는 런처를 두 번 실행하면 서버가 둘 다 떴다:
+    #   ① 워처가 둘이 되어 같은 파일을 중복 처리(중복 과금) + 상태 파일 lost update
+    #   ② 두 번째 인스턴스의 init_db() 가 첫 인스턴스의 진행 중 세션을 error 로 표시
+    # 사용자는 앱을 열려고 두 번 누른 것이므로 **원래 창을 열어 주고** 조용히 끝낸다.
+    running = server_launch.acquire_instance_lock(data_base)
+    if running is not None:
+        other_port = running.get("port")
+        print(f"  이미 실행 중입니다 (데이터 폴더: {data_base}).")
+        if other_port and not args.no_browser:
+            print(f"  기존 창을 엽니다 — http://localhost:{other_port}")
+            import webbrowser
+            webbrowser.open(f"http://localhost:{other_port}")
+        elif not other_port:
+            print("  기존 인스턴스의 포트를 확인할 수 없습니다 — 작업관리자에서 "
+                  "MeetingMinutes 를 종료한 뒤 다시 실행하세요.")
+        return
+
     port = server_launch.find_free_port(args.port)
+    server_launch.publish_instance_port(data_base, port)
 
     # LAN 접속 허용(config server.lan_access=true) 시 0.0.0.0 으로 바인딩해 같은 WiFi의
     # 아이폰·태블릿 앱이 접속할 수 있게 한다. 기본은 localhost 전용(안전).

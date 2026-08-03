@@ -180,6 +180,14 @@ class TestRunUiLauncher:
         monkeypatch.setattr(run_ui, "build_frontend", lambda: None)
         monkeypatch.setattr(run_ui, "check_node_deps", lambda: None)
         monkeypatch.setattr(sys, "argv", ["run_ui", *argv])
+        # 중복 실행 락은 여기 관심사가 아니다(TestInstanceLock 이 본다). 실제로 잡으면
+        # 리포 루트에 락이 남아 뒤따르는 테스트가 "이미 실행 중"으로 죽는다.
+        monkeypatch.setattr(
+            "meeting_minutes_app.common.server_launch.acquire_instance_lock",
+            lambda data_dir: None)
+        monkeypatch.setattr(
+            "meeting_minutes_app.common.server_launch.publish_instance_port",
+            lambda data_dir, port: None)
         calls = {}
         monkeypatch.setitem(sys.modules, "uvicorn", _fake_uvicorn(calls))
         return run_ui, calls
@@ -248,6 +256,8 @@ class TestBindHostRule:
         monkeypatch.setattr(run_ui, "build_frontend", lambda: None)
         monkeypatch.setattr(sl, "lan_access_enabled", lambda: False)
         monkeypatch.setattr(sl, "open_browser_when_ready", lambda *a, **k: None)
+        monkeypatch.setattr(sl, "acquire_instance_lock", lambda data_dir: None)
+        monkeypatch.setattr(sl, "publish_instance_port", lambda data_dir, port: None)
         calls = {}
         monkeypatch.setitem(sys.modules, "uvicorn", _fake_uvicorn(calls))
         monkeypatch.setattr(sys, "argv", ["run_ui", "--no-browser"])
@@ -276,6 +286,9 @@ class TestGracefulShutdownHandle:
         monkeypatch.setattr(run_ui, "build_frontend", lambda: None)
         monkeypatch.setattr(sl, "lan_access_enabled", lambda: False)
         monkeypatch.setattr(sl, "open_browser_when_ready", lambda *a, **k: None)
+        # 락은 여기 관심사가 아니다 — 실제로 잡으면 리포 루트에 남아 다음 테스트를 죽인다.
+        monkeypatch.setattr(sl, "acquire_instance_lock", lambda data_dir: None)
+        monkeypatch.setattr(sl, "publish_instance_port", lambda data_dir, port: None)
         registered = {}
         monkeypatch.setattr(sl, "register_shutdown_handle",
                             lambda s: registered.update({"s": s}) or True)
@@ -344,3 +357,65 @@ class TestDiagnoseShowsDataFolder:
         row = next(c for c in res["checks"] if c["name"] == "데이터 폴더")
         assert row["ok"] is True            # 식별 정보이므로 상태를 실패로 만들지 않는다
         assert "소스 실행" in row["detail"] or "포터블" in row["detail"]
+
+
+class TestInstanceLock:
+    """중복 실행 방지 — 같은 데이터 폴더에 두 번째 서버가 뜨지 않게 한다.
+
+    회귀 배경: `find_free_port` 가 점유 시 **조용히 다른 포트로 옮기기** 때문에, 런처를
+    두 번 실행하면 서버가 둘 다 떴다. 그러면
+      ① 워처가 둘이 되어 같은 파일을 중복 처리(중복 과금)하고 상태 파일이 lost update 되며
+      ② 두 번째 인스턴스의 `init_db()` 가 첫 인스턴스의 진행 중 세션을 error 로 바꾼다
+        (`database.py` — 시작 시 processing 세션을 error 로 정리하는 로직).
+    포트가 아니라 **데이터 폴더**에서 잠그는 이유가 여기 있다.
+    """
+
+    def _release(self, sl):
+        if sl._LOCK_FH is not None:
+            sl._LOCK_FH.close()
+            sl._LOCK_FH = None
+
+    def test_first_acquire_succeeds(self, tmp_path):
+        import meeting_minutes_app.common.server_launch as sl
+        try:
+            assert sl.acquire_instance_lock(tmp_path) is None
+        finally:
+            self._release(sl)
+
+    def test_second_acquire_reports_running_instance(self, tmp_path):
+        import meeting_minutes_app.common.server_launch as sl
+        try:
+            assert sl.acquire_instance_lock(tmp_path) is None
+            sl.publish_instance_port(tmp_path, 8501)
+            # 락 핸들을 전역에 붙잡아 두므로 두 번째 시도는 같은 프로세스에서도 실패해야 한다
+            # (플랫폼 락은 핸들/open file description 단위다).
+            info = sl.acquire_instance_lock(tmp_path)
+            assert info is not None, "두 번째 인스턴스가 락을 얻었다 — 중복 실행이 가능하다"
+            assert info.get("port") == 8501, "기존 창을 열어 주려면 포트를 알아야 한다"
+        finally:
+            self._release(sl)
+
+    def test_lock_released_when_process_handle_closes(self, tmp_path):
+        """크래시 후 잔류 락이 생기지 않는다 — 파일 내용이 아니라 OS 바이트 범위 락이라
+        핸들이 닫히면 풀린다(그래서 락 파일을 지우는 복구 절차가 필요 없다)."""
+        import meeting_minutes_app.common.server_launch as sl
+        assert sl.acquire_instance_lock(tmp_path) is None
+        self._release(sl)                      # 프로세스 종료에 해당
+        try:
+            assert sl.acquire_instance_lock(tmp_path) is None
+        finally:
+            self._release(sl)
+
+    def test_different_data_dirs_do_not_conflict(self, tmp_path):
+        """소스 실행과 포터블은 데이터 폴더가 달라 함께 떠도 된다 — 의도된 격리다."""
+        import meeting_minutes_app.common.server_launch as sl
+        a, b = tmp_path / "src", tmp_path / "portable"
+        try:
+            assert sl.acquire_instance_lock(a) is None
+            first = sl._LOCK_FH
+            sl._LOCK_FH = None                 # 두 번째 락을 위해 전역만 비운다(핸들 유지)
+            assert sl.acquire_instance_lock(b) is None
+            sl._LOCK_FH.close()
+            first.close()
+        finally:
+            sl._LOCK_FH = None

@@ -19,7 +19,11 @@ dependencies = [
     # 해당 sync API는 websockets 14부터 제공되며, OpenAI 공식 상한은 <16이다.
     "websockets>=14,<16",
     "sounddevice~=0.4.6",
-    "numpy~=1.24",
+    # `numpy~=1.24`(=1.x 만) 이었는데 **실제로는 개발환경도 배포본도 2.x 였다**
+    # (2026-08-03 실측: dev 2.2.2 / 포터블 2.5.1). 선언이 사실과 달랐던 것이므로
+    # 실제 지원 범위로 고친다 — 코드에 numpy 1.x 전용 API 사용은 0건이다.
+    # 배포본이 쓰는 정확한 버전은 scripts/build/constraints-web.txt 가 고정한다.
+    "numpy>=1.24,<3",
     "requests~=2.31",
     "watchdog>=4.0",
     "fastapi~=0.110",

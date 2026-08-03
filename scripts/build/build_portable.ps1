@@ -140,7 +140,35 @@ Write-Host "  $tag._pth 구성 완료"
 Step '4/8' 'Installing web runtime dependencies (pip --target)...'
 $reqWeb = Join-Path $ScriptDir 'requirements-web.txt'
 if (-not (Test-Path $reqWeb)) { Fail "requirements-web.txt 가 없습니다: $reqWeb" }
-Invoke-Native 'pip install --target' 'python' @('-m','pip','install','--target',$SiteDir,'--no-warn-script-location','-r',$reqWeb)
+
+# constraints 로 **정확한 버전 조합**을 고정한다. requirements-web.txt 는 `>=` 범위라
+# pip 이 빌드 시점에 버전을 정하고, 그래서 같은 커밋을 다시 빌드해도 다른 조합이 나왔다.
+# 더 나쁜 것은 테스트가 검증한 조합과 배포 조합이 다르다는 점이다(2026-08-03 실측:
+# uvicorn 0.41 vs 0.52, fastapi 0.135 vs 0.141, openai 2.46 vs 2.52 …).
+# 파일이 없으면 **막지 않고 경고**한다 — 의존성을 의도적으로 올리는 갱신 절차가
+# "constraints 를 지우고 빌드"이기 때문이다(constraints-web.txt 머리말 참고).
+# « --no-warn-conflicts 를 쓰는 이유 »
+# `--target` 은 격리 설치인데 pip 은 설치 후 **빌드 PC 의 환경**과 비교해 충돌을 보고한다.
+# 그 메시지가 "ERROR:" 로 시작해서, 빌드 PC 에 개발 설치(`pip install -e .`)나 scipy 가
+# 있으면 성공한 빌드가 실패처럼 보인다(실측: "meeting-minutes requires fastmcp ... not
+# installed", "scipy requires numpy<2.5"). 배포본과 무관한 잡음이다.
+# **target 내부의 진짜 충돌은 resolver 오류로 빌드를 멈추므로** 이 옵션으로 가려지지 않는다.
+$pipArgs = @('-m','pip','install','--target',$SiteDir,'--no-warn-script-location',
+             '--no-warn-conflicts','-r',$reqWeb)
+$constraints = Join-Path $ScriptDir 'constraints-web.txt'
+$conHash = 'none'
+if (Test-Path $constraints) {
+    $pipArgs += @('-c',$constraints)
+    $conHash = (Get-FileHash $constraints -Algorithm SHA256).Hash.Substring(0,12)
+    # 주석의 `=====` 구분선이 '==' 에 걸리므로 **실제 고정 줄만** 센다(예전엔 52로 표시됐다).
+    $nPins = @(Get-Content $constraints |
+               Where-Object { $_ -notmatch '^\s*#' -and $_ -match '\S==\S' }).Count
+    Write-Host "  constraints 고정: $nPins 개 (sha256:$conHash)"
+} else {
+    Write-Host "  [경고] constraints-web.txt 가 없습니다 — 버전이 빌드 시점에 결정됩니다." -ForegroundColor Yellow
+    Write-Host "         새 조합을 채택하려면 실기 검증 후 이 파일을 갱신하세요." -ForegroundColor Yellow
+}
+Invoke-Native 'pip install --target' 'python' $pipArgs
 
 # ── 5. 소스 복사 (리포 구조 부분집합 → app\) ─────────────────────
 Step '5/8' 'Copying application source...'
@@ -193,6 +221,9 @@ $buildInfo = @(
     ("commit   : " + ($(if ($commit) { $commit } else { 'unknown (git 없음)' }))),
     ("dirty    : " + ($(if ($dirty) { 'YES — 미커밋 변경이 포함된 빌드' } else { 'no' }))),
     ("python   : " + $pyVer),
+    # 어느 의존성 조합으로 빌드됐는지. 'none' 이면 버전이 빌드 시점에 결정된 빌드이므로
+    # 같은 커밋이라도 재현되지 않는다 — 문제 신고 시 이 값이 있어야 원인을 좁힐 수 있다.
+    ("deps     : constraints sha256:" + $conHash),
     "",
     "이 파일은 문제 신고 시 어느 빌드인지 확인하는 용도입니다."
 ) -join "`r`n"

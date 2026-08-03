@@ -137,9 +137,11 @@ def run_init(argv: list[str]) -> int:
     _set_nested(cfg, "api.openai_api_key", openai_key)
     _set_nested(cfg, "api.anthropic_api_key", anthropic_key)
 
-    with open(config_path, "w", encoding="utf-8") as f:
-        json.dump(cfg, f, ensure_ascii=False, indent=2)
-        f.write("\n")
+    # 저장은 config_loader.save() 하나만 쓴다 — 제자리 덮어쓰기는 쓰는 중 종료 시
+    # 잘린 JSON 을 남긴다. `--force` 는 손상된 config 를 의도적으로 재작성하는
+    # 경로이므로 손상 상태 저장 차단을 건너뛴다(그 차단을 걸면 복구 수단이 사라진다).
+    from meeting_minutes_app.common import config_loader
+    config_loader.save(cfg, force=True)
     print()
     print(f"[init] config.json 저장됨: {config_path}")
 
@@ -246,9 +248,10 @@ def run_mcp_token(argv: list[str]) -> int:
     tokens.append({"token": token, "name": name})
     _set_nested(cfg, "mcp.allowed_tokens", tokens)
 
-    with open(config_path, "w", encoding="utf-8") as f:
-        json.dump(cfg, f, ensure_ascii=False, indent=2)
-        f.write("\n")
+    # 여기서 제자리 덮어쓰기가 중단되면 API 키까지 포함한 config 전체가 잘린 JSON 이
+    # 된다. 저장은 config_loader.save() 하나로 모은다(원자적 교체 + .bak 보존).
+    from meeting_minutes_app.common import config_loader
+    config_loader.save(cfg)
 
     print("=" * 60)
     print(f"  MCP 토큰 발급됨 (name={name})")

@@ -262,8 +262,20 @@ def update_config(data: dict):
     except Exception:
         config_schema = None
 
-    with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-        cfg = json.load(f)
+    # 저장 전에 읽는다. 여기서 실패하면 저장하지 않는다 — 예전에는 이 예외가 그대로
+    # 500 이 됐고, 그와 별개로 config_loader 쪽 경로가 빈 dict 로 덮어써 설정을 날렸다.
+    try:
+        with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+            cfg = json.load(f)
+    except FileNotFoundError:
+        cfg = {}                       # 첫 실행 — 잃을 것이 없다
+    except (json.JSONDecodeError, OSError) as e:
+        raise HTTPException(
+            status_code=409,
+            detail=(f"설정 파일을 읽지 못해 저장을 중단했습니다({e}). 덮어쓰면 기존 "
+                    f"설정이 모두 사라집니다. [설정] → 고급에서 파일을 고치거나, "
+                    f"config.json 을 지운 뒤 다시 시도하세요."),
+        )
 
     # 노트 폴더(볼트) 경로가 이번 저장으로 새로 연결/변경됐는지 판별하기 위해 기존 값 캡처.
     _old_vault = _norm_vault(_dget(cfg, "indexing.vault_path") or _dget(cfg, "obsidian.vault_path") or "")
@@ -311,11 +323,20 @@ def update_config(data: dict):
                 if isinstance(mt, (list, tuple)) and len(mt) == 2:
                     _set(mt[0], mt[1], v)
 
-    with open(CONFIG_PATH, "w", encoding="utf-8") as f:
-        json.dump(cfg, f, ensure_ascii=False, indent=2)
+    # 저장은 config_loader.save() 하나만 쓴다(원자적 교체 + .bak 보존). 저장 경로가
+    # 각자 제자리 덮어쓰기였을 때는, 쓰는 중 종료되면 잘린 JSON 이 남고 다음 실행에서
+    # 파싱 실패했다(그리고 그때 빈 dict 폴백이 나머지를 지웠다).
+    # OSError 만 잡지 않는 이유 — 직렬화 불가 값 같은 다른 예외도 "저장 실패"로 보이는
+    # 편이 맞다. 스택트레이스를 그대로 500 으로 흘리면 사용자는 원인을 알 수 없다.
+    from meeting_minutes_app.common import config_loader
+    try:
+        config_loader.save(cfg)
+    except config_loader.ConfigCorrupted as e:
+        raise HTTPException(status_code=409, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"설정 저장 실패: {e}")
 
     try:
-        from meeting_minutes_app.common import config_loader
         config_loader.reload()
     except Exception:
         pass

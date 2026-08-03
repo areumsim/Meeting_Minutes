@@ -7,9 +7,10 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
-    "ios:sync": "npm run build && npx cap sync ios",
+    "ios:sync": "npm run build:standalone && npx cap sync ios",
     "ios:open": "npx cap open ios",
-    "ios:build": "npm run build && npx cap sync ios && npx cap open ios"
+    "ios:build": "npm run build:standalone && npx cap sync ios && npx cap open ios",
+    "build:standalone": "tsc -b && vite build --mode standalone"
   },
   "dependencies": {
     "@capacitor-community/keep-awake": "^8.0.0",

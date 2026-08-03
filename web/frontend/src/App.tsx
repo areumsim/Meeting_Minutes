@@ -26,6 +26,9 @@ export default function App() {
   // 사용자에게 반드시 알려야 한다 — 포터블은 콘솔이 없어 stderr 경고가 안 보인다.
   const [configError, setConfigError] = useState<string | null>(null);
   const [recovering, setRecovering] = useState(false);
+  // ssl.verify 를 끈 상태. 사내망 인증서 오류 대응으로 켰다가 잊으면 API 키와 회의
+  // 내용이 검증 없는 TLS 로 나간다 — truststore 가 있으니 대개 되돌릴 수 있다.
+  const [sslInsecure, setSslInsecure] = useState(false);
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [graphQuery, setGraphQuery] = useState("");   // 위키링크로 지식그래프 진입 시 초기 검색어
   // 데스크톱 사이드바 접기/펴기 (localStorage로 상태 유지)
@@ -83,6 +86,7 @@ export default function App() {
           const h = await res.json();
           setFfmpegMissing(h.ffmpeg_available === false);
           setConfigError(h.config_error || null);
+          setSslInsecure(h.ssl_insecure === true);
         }
       } catch { /* 백엔드 없음(모바일) — 무시 */ }
 
@@ -198,6 +202,14 @@ export default function App() {
                 보관하고 새로 시작
               </button>
             </div>
+          </div>
+        )}
+        {sslInsecure && (
+          <div className="mb-4 rounded-xl border border-amber-300 bg-amber-50 text-amber-800 px-4 py-3 text-sm">
+            ⚠️ <strong>SSL 인증서 검증이 꺼져 있습니다.</strong> API 키와 회의 내용이 검증 없는
+            연결로 전송됩니다. 이 앱은 Windows 인증서 저장소를 신뢰하므로 사내망에서도 대개
+            켠 상태로 동작합니다 — [설정] → 고급에서 <code className="font-mono">SSL 인증서 검증</code>을
+            다시 켜 보세요.
           </div>
         )}
         {ffmpegMissing && (

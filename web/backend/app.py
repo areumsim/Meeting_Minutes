@@ -308,12 +308,19 @@ def health():
     # pythonw.exe 로 띄워 콘솔이 없기 때문이다(scripts/build/MeetingMinutes.bat).
     # health 를 쓰는 이유는 프런트가 시작 시 이미 여기를 부르기 때문이다.
     config_error = None
+    ssl_insecure = False
     try:
         from meeting_minutes_app.common import config_loader
         config_error = config_loader.load_error()
+        # `ssl.verify=false` 는 기본값이 아니라 사용자가 켠 탈출구다(사내망 인증서 오류
+        # 대응). 그런데 이 앱은 truststore 로 Windows 인증서 저장소를 신뢰하므로
+        # (위 import) 대부분의 경우 이 스위치가 필요하지 않다. 켜 둔 채 잊으면 API 키와
+        # 회의 내용이 검증 없는 TLS 로 나가므로, 켜져 있다는 사실을 화면에 계속 남긴다.
+        ssl_insecure = not bool(config_loader.get("ssl.verify", True))
     except Exception:
         pass
-    return {"status": "ok", "ffmpeg_available": ffmpeg_ok, "config_error": config_error}
+    return {"status": "ok", "ffmpeg_available": ffmpeg_ok,
+            "config_error": config_error, "ssl_insecure": ssl_insecure}
 
 
 # ── 프론트엔드 정적 파일 서빙 (프로덕션) ──

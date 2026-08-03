@@ -5,17 +5,12 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0, user-scalable=no" />
     <!-- 외부 폰트(Google Fonts) 의존 제거 — 오프라인/사내망에서도 로딩 지연·실패 없이
          시스템 폰트로 동작한다(비개발자 배포 exe 전제). -->
-    <!-- connect-src: OpenAI 직접(단독 모드) + 같은 WiFi의 PC(exe) 백엔드(서버 모드,
-         http/ws LAN 주소는 사용자가 설정에서 입력)를 모두 허용한다. 로컬 전용 도구라
-         LAN 대역(http/ws)까지 연다. -->
-    <meta http-equiv="Content-Security-Policy"
-      content="default-src 'self' https: data: blob:;
-               connect-src 'self' https://api.openai.com wss://api.openai.com http: https: ws: wss:;
-               style-src 'self' 'unsafe-inline';
-               font-src 'self';
-               img-src 'self' data: blob:;
-               media-src 'self' blob: mediastream:;
-               script-src 'self' 'unsafe-inline' 'unsafe-eval';" />
+    <!-- CSP 는 빌드 프로파일이 주입한다(vite.config.ts 의 cspPlugin).
+         packaged(PC 배포본, 기본)   = connect-src 'self' — 외부 호출은 백엔드를 지난다.
+         standalone(아이폰 앱 번들) = OpenAI 직접 + 사용자가 입력한 LAN 주소까지 허용.
+         한 개의 CSP 로 둘을 덮으려니 임의 호스트가 열려 있었다(SEC-006).
+         자리표시자가 없으면 플러그인이 빌드를 실패시킨다 — CSP 가 조용히 빠지는 것을 막는다. -->
+    <meta http-equiv="Content-Security-Policy" content="%MM_CSP%" />
     <title>AI Meeting Minutes</title>
   </head>
   <body>

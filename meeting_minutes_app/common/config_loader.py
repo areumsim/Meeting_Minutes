@@ -73,9 +73,59 @@ def _load() -> dict:
 
 
 def load_error() -> Optional[str]:
-    """config 를 읽지 못했으면 사유, 정상이면 None. 웹 진단·설정 화면이 쓴다."""
+    """config 를 읽지 못했으면 사유, 정상이면 None.
+
+    `GET /api/health` 가 이 값을 실어 화면 배너로 띄운다 — stderr 경고는 포터블
+    배포본(pythonw.exe, 콘솔 없음)에서 아무 데도 남지 않기 때문이다.
+    """
     _load()
     return _load_error
+
+
+def backup_path() -> Path:
+    """마지막 정상 설정 백업(`config.json.bak`) 경로. `_atomic_write` 가 매 저장 때 남긴다."""
+    return _CONFIG_PATH.with_suffix(_CONFIG_PATH.suffix + ".bak")
+
+
+def recover(*, restore_backup: bool) -> dict:
+    """손상된 config 상태에서 빠져나오는 **사용자가 고르는** 두 경로.
+
+    자동으로 하지 않는 이유 — 손상을 발견했을 때 앱이 알아서 파일을 치워 버리면
+    그 순간부터 "설정이 없는 정상 상태"가 되어 저장이 허용되고, 사용자가 손으로
+    넣었던 키까지 조용히 사라진다. 그래서 손상 시에는 저장만 막아 두고(FR-004),
+    치우는 결정은 화면에서 명시적으로 받는다.
+
+    어느 쪽이든 **손상 파일을 지우지 않는다** — 부분 손상이면 사람이 보고 살릴 수 있고,
+    그 안에 사용자가 직접 넣은 API 키가 들어 있을 수 있다.
+    """
+    if not load_error():
+        return {"ok": False, "message": "설정 파일이 정상입니다 — 복구할 것이 없습니다."}
+
+    bak = backup_path()
+    if restore_backup and not bak.exists():
+        # 손상 파일을 치우기 **전에** 확인한다. 치운 뒤 백업이 없다고 알리면
+        # 사용자는 아무것도 없는 상태로 떨어진다.
+        return {"ok": False, "message": "되돌릴 백업(config.json.bak)이 없습니다."}
+
+    kept = _quarantine_corrupt_file()
+    restored = False
+    if restore_backup:
+        try:
+            import shutil
+            shutil.copy2(bak, _CONFIG_PATH)
+            restored = True
+        except Exception as e:
+            return {"ok": False, "quarantined": kept.name if kept else None,
+                    "message": f"백업 복원 실패: {e}"}
+
+    reload()
+    return {
+        "ok": True,
+        "quarantined": kept.name if kept else None,
+        "restored": restored,
+        "message": ("마지막 정상 설정으로 되돌렸습니다."
+                    if restored else "손상된 설정을 보관하고 새로 시작합니다."),
+    }
 
 
 def _quarantine_corrupt_file() -> Optional[Path]:

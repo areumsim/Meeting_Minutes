@@ -157,6 +157,62 @@ class TestConcurrentSave:
             config_loader.set_nested("models.stt", "gpt-4o-transcribe")
 
 
+class TestRecovery:
+    """손상 상태에서 빠져나오는 두 경로 — 사용자가 화면에서 명시적으로 고른다."""
+
+    def test_restore_backup_brings_last_good_config(self, cfg_file):
+        _write(cfg_file, {"api": {"openai_api_key": "sk-good"}})
+        config_loader._load()
+        config_loader.save({"api": {"openai_api_key": "sk-good2"}})   # .bak 생성
+        _write(cfg_file, "{ 깨짐")
+        config_loader.reload()
+        assert config_loader.load_error()
+
+        r = config_loader.recover(restore_backup=True)
+        assert r["ok"] and r["restored"]
+        assert config_loader.get("api.openai_api_key") == "sk-good"
+        assert config_loader.load_error() is None
+
+    def test_fresh_start_keeps_the_corrupt_file(self, cfg_file):
+        """손상 파일을 지우지 않는다 — 사용자가 손으로 넣은 키가 들어 있을 수 있다."""
+        _write(cfg_file, '{"api": {"openai_api_key": "sk-handwritten"')
+        config_loader.reload()
+
+        r = config_loader.recover(restore_backup=False)
+        assert r["ok"] and not r["restored"]
+        kept = list(cfg_file.parent.glob("config.json.corrupt-*"))
+        assert len(kept) == 1
+        assert "sk-handwritten" in kept[0].read_text(encoding="utf-8")
+        assert config_loader.load_error() is None
+
+    def test_restore_without_backup_does_not_touch_the_file(self, cfg_file):
+        """백업이 없으면 손상 파일을 **치우기 전에** 거절한다 —
+        치운 뒤 알리면 사용자는 아무것도 없는 상태로 떨어진다."""
+        broken = '{"api": {'
+        _write(cfg_file, broken)
+        config_loader.reload()
+
+        r = config_loader.recover(restore_backup=True)
+        assert r["ok"] is False
+        assert cfg_file.read_text(encoding="utf-8") == broken
+
+    def test_recover_refuses_when_config_is_fine(self, cfg_file):
+        """정상 상태에서의 오호출이 설정을 치워 버리면 안 된다."""
+        _write(cfg_file, {"api": {"openai_api_key": "sk-real"}})
+        config_loader._load()
+
+        r = config_loader.recover(restore_backup=False)
+        assert r["ok"] is False
+        assert config_loader.get("api.openai_api_key") == "sk-real"
+        assert list(cfg_file.parent.glob("config.json.corrupt-*")) == []
+
+    def test_quarantine_name_is_gitignored(self):
+        """보관본에는 실제 API 키가 들어 있다 — 커밋될 수 있으면 안 된다."""
+        from pathlib import Path
+        gitignore = Path(__file__).resolve().parent.parent / ".gitignore"
+        assert "config.json.corrupt-*" in gitignore.read_text(encoding="utf-8")
+
+
 class TestSingleSavePath:
     def test_no_module_writes_config_json_directly(self):
         """저장 경로가 다시 갈라지지 않게 못을 박는다.

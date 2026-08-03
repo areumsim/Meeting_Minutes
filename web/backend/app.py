@@ -294,7 +294,17 @@ def health():
         ffmpeg_ok = app_paths.ffmpeg_available()
     except Exception:
         pass
-    return {"status": "ok", "ffmpeg_available": ffmpeg_ok}
+    # config.json 을 읽지 못한 상태(= 저장도 차단된 상태)를 화면까지 올린다.
+    # 경고를 stderr 에만 찍던 동안 사용자는 이유를 알 방법이 없었다 — 포터블은
+    # pythonw.exe 로 띄워 콘솔이 없기 때문이다(scripts/build/MeetingMinutes.bat).
+    # health 를 쓰는 이유는 프런트가 시작 시 이미 여기를 부르기 때문이다.
+    config_error = None
+    try:
+        from meeting_minutes_app.common import config_loader
+        config_error = config_loader.load_error()
+    except Exception:
+        pass
+    return {"status": "ok", "ffmpeg_available": ffmpeg_ok, "config_error": config_error}
 
 
 # ── 프론트엔드 정적 파일 서빙 (프로덕션) ──

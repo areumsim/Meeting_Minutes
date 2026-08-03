@@ -198,6 +198,24 @@ def reveal_secret(path: str, request: Request):
     return {"value": v if isinstance(v, str) else ""}
 
 
+@router.post("/config/recover")
+def recover_config(request: Request, body: dict | None = None):
+    """손상된 config.json 에서 빠져나온다 — 화면 배너의 두 버튼이 부른다.
+
+    `restore_backup=true` 면 마지막 정상 설정(`config.json.bak`)으로 되돌리고,
+    false 면 손상 파일만 보관하고 빈 설정으로 시작한다. 어느 쪽이든 손상 파일은
+    지우지 않는다(사용자가 손으로 넣은 키가 들어 있을 수 있다).
+
+    설정 파일을 갈아치우는 동작이라 `require_local` 을 지난다 — 아무 웹페이지가
+    사용자 설정을 초기화하게 둘 수 없다.
+    """
+    from web.backend.security import require_local
+    require_local(request)
+    from meeting_minutes_app.common import config_loader
+    restore = bool((body or {}).get("restore_backup")) if isinstance(body, dict) else False
+    return config_loader.recover(restore_backup=restore)
+
+
 @router.get("/config/schema")
 def get_config_schema():
     """웹 Settings 자동 렌더링용 스키마(그룹/필드) 반환."""

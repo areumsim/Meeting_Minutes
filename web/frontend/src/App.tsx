@@ -22,6 +22,10 @@ export default function App() {
   const [viewState, setViewState] = useState<View>("dashboard");
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
   const [ffmpegMissing, setFfmpegMissing] = useState(false);
+  // config.json 을 읽지 못한 상태. 이때는 서버가 저장을 막으므로(기존 설정 보호)
+  // 사용자에게 반드시 알려야 한다 — 포터블은 콘솔이 없어 stderr 경고가 안 보인다.
+  const [configError, setConfigError] = useState<string | null>(null);
+  const [recovering, setRecovering] = useState(false);
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [graphQuery, setGraphQuery] = useState("");   // 위키링크로 지식그래프 진입 시 초기 검색어
   // 데스크톱 사이드바 접기/펴기 (localStorage로 상태 유지)
@@ -31,6 +35,33 @@ export default function App() {
     try { localStorage.setItem("SIDEBAR_COLLAPSED", n ? "1" : "0"); } catch { /* ignore */ }
     return n;
   });
+
+  // 손상된 config 에서 빠져나오기. 어느 쪽이든 손상 파일은 지우지 않고 보관한다.
+  const recoverConfig = async (restoreBackup: boolean) => {
+    if (!window.confirm(restoreBackup
+      ? "마지막 정상 설정(config.json.bak)으로 되돌립니다. 손상된 파일은 지우지 않고 따로 보관합니다. 계속할까요?"
+      : "손상된 설정을 따로 보관하고 빈 설정으로 시작합니다. API 키를 다시 입력해야 합니다. 계속할까요?")) return;
+    setRecovering(true);
+    try {
+      const res = await fetch("/api/config/recover", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ restore_backup: restoreBackup }),
+      });
+      const r = await res.json().catch(() => ({}));
+      if (res.ok && r.ok) {
+        setConfigError(null);
+        alert(r.message || "복구했습니다.");
+        window.location.reload();       // 설정이 바뀌었으니 화면 전체를 다시 읽는다
+      } else {
+        alert(r.message || r.detail || "복구에 실패했습니다.");
+      }
+    } catch (e: any) {
+      alert(`복구에 실패했습니다: ${e?.message || e}`);
+    } finally {
+      setRecovering(false);
+    }
+  };
 
   const view = viewState;
   const setView = (v: View) => {
@@ -51,6 +82,7 @@ export default function App() {
         if (res.ok) {
           const h = await res.json();
           setFfmpegMissing(h.ffmpeg_available === false);
+          setConfigError(h.config_error || null);
         }
       } catch { /* 백엔드 없음(모바일) — 무시 */ }
 
@@ -147,6 +179,27 @@ export default function App() {
 
       {/* Main Content */}
       <main className={`flex-1 w-full ${collapsed ? "md:ml-20" : "md:ml-64"} p-4 md:p-8 lg:p-12 pt-[calc(env(safe-area-inset-top,0px)+1rem)] relative transition-[margin] duration-200`}>
+        {configError && (
+          <div className="mb-4 rounded-xl border border-red-300 bg-red-50 text-red-800 px-4 py-3 text-sm">
+            <div>
+              ⛔ <strong>설정 파일(config.json)을 읽지 못했습니다.</strong> ({configError})
+            </div>
+            <div className="mt-1">
+              기본값으로 동작 중이며, 기존 설정을 보호하기 위해 <strong>설정 저장이 차단</strong>돼 있습니다.
+              파일을 직접 고치거나 아래에서 복구하세요.
+            </div>
+            <div className="mt-2 flex flex-wrap gap-2">
+              <button onClick={() => recoverConfig(true)} disabled={recovering}
+                className="px-3 py-1.5 rounded-lg bg-red-100 font-semibold hover:bg-red-200 disabled:opacity-50">
+                마지막 정상 설정으로 되돌리기
+              </button>
+              <button onClick={() => recoverConfig(false)} disabled={recovering}
+                className="px-3 py-1.5 rounded-lg bg-red-100 font-semibold hover:bg-red-200 disabled:opacity-50">
+                보관하고 새로 시작
+              </button>
+            </div>
+          </div>
+        )}
         {ffmpegMissing && (
           <div className="mb-4 rounded-xl border border-amber-300 bg-amber-50 text-amber-800 px-4 py-3 text-sm">
             ⚠️ <strong>ffmpeg가 설치되어 있지 않습니다.</strong> 오디오 파일 업로드/변환 기능이 동작하지 않을 수 있습니다.

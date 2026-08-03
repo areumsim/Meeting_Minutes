@@ -1,6 +1,9 @@
 # ── 비밀 설정 (절대 git에 올리지 말 것) ─────────
 config.json
 config.local.json
+# 손상 시 보관본(config_loader.recover). 실제 API 키가 그대로 들어 있는데 위
+# `config.json` 은 정확 이름 매칭이라 걸리지 않았다(.bak/.tmp 는 아래 규칙이 잡는다).
+config.json.corrupt-*
 .env
 .env.*
 .mcp.json

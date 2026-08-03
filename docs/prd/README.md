@@ -102,7 +102,7 @@
 | 외부 호출은 백엔드 경유 | `grep -rn 'api.openai.com' web/frontend/src/` | **4줄 = 주석 1 + 실제 호출 3**(`api.ts` 665·976·1025) → 단독 모드 존재를 인정해야 한다. 줄 수만 세면 호출 수와 어긋난다 |
 | TLS 검증 비활성 경로 0건 | `grep -n 'verify_ssl\|"verify"' meeting_minutes_app/common/config_schema.py` | **2건, 그중 1건 기본 False** |
 | PDF/PPTX 추출 파이프라인 있음 | `grep -n 'pypdf\|python-pptx' pyproject.toml requirements*.txt` | **0건** → Natively FR-B3 ❌ 표기가 정당 |
-| 테스트 수 | `python -m pytest --collect-only -q` 마지막 줄 | **893** — `CLAUDE.md` 와 일치해야 한다(수치 정본은 CLAUDE.md) |
+| 테스트 수 | `python -m pytest --collect-only -q` 마지막 줄 | **896** — `CLAUDE.md` 와 일치해야 한다(수치 정본은 CLAUDE.md) |
 | 월 한도 서버 강제 | `grep -rn 'monthly_cap_usd' meeting_minutes_app/` | 존재 → G-13 "PRD에 요구사항 없음" 표기는 폐기됐다 |
 | `MM-*` 오류 코드 | `grep -rn 'MM-[A-Z]*-[0-9]' web/backend/` | **0건** → OPS-004 는 신규 구축 |
 

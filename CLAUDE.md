@@ -25,7 +25,7 @@ Obsidian 기반 **회의록 자동화 + LLM Wiki 지식순환** 시스템. 오�
 pip install -e .                       # 개발 설치
 python run_meeting.py <cmd> [args]     # CLI (run_meeting.bat 도 동일)
 webUI_실행.bat                          # 웹 UI 로컬 실행 (데이터 = 리포 루트)
-python -m pytest                       # 테스트 (2026-08-03: 893 collected, 1 skipped) ← 수치 정본
+python -m pytest                       # 테스트 (2026-08-03: 896 collected, 1 skipped) ← 수치 정본
 python run_meeting.py reindex          # 위키/그래프 인덱스 재빌드
 ```
 
@@ -82,6 +82,21 @@ python run_meeting.py reindex          # 위키/그래프 인덱스 재빌드
     `update_session_status`는 덮어쓰기라 부적합), 세션이 없으면 `spend_guard.record()`.
     `ingestion_pipeline`은 `web.backend.database`를 import하지 않아 **DB 세션이 안 생긴다** —
     그래서 워처 과금이 월 합계에서 영구히 안 보였다. 세션 없는 경로는 반드시 후자를 쓴다.
+- **경로는 CWD 가 아니라 데이터 베이스 기준으로 해석한다.** 두 웹 런처가 시작 시
+  데이터 폴더로 `os.chdir` 하므로(`run_ui_exe.setup_paths`), DB·설정에 담긴 **상대 경로를
+  CWD 로 풀면 엔트리포인트에 따라 다른 곳을 가리킨다.** `api/batch.py` 는
+  `app_paths.get_output_dir()`, `web/backend/trash.py` 는 `_resolve()` 로 같은 규칙을 쓴다 —
+  실제로 갈라져서, 완전 삭제가 폴더가 있는데도 "없다"고 판정해 **고아 폴더를 남기면서
+  성공을 보고**했다(2026-08-03 포터블 실기 검증에서 발견).
+- **삭제는 두 단계다.** `DELETE /api/sessions/{id}` = 휴지통(soft delete, `deleted_at` 만
+  세우고 전사·문서·관련노트는 남긴다), `.../purge` = 완전 삭제. purge 는 **폴더를 OS
+  휴지통으로 옮긴 뒤에** DB 행을 지운다 — 순서를 바꾸면 이동 실패 시 고아 폴더가 남는다.
+  재부활 방지의 핵심은 `session_scanner` 가 `db.known_output_dirs()`(**삭제분 포함**)를
+  보는 것이다. `list_sessions()` 를 쓰면 지운 회의가 재시작 후 되살아난다.
+- **중복 실행은 데이터 폴더 단위 락으로 막는다**(`server_launch.acquire_instance_lock`).
+  포트로 판정할 수 없다 — `find_free_port` 가 점유 시 다른 포트로 옮기므로 첫 인스턴스가
+  랜덤 포트에 있을 수 있다. 두 서버가 같은 폴더에 뜨면 워처가 둘이 되어 중복 과금하고,
+  두 번째 `init_db()` 가 첫 인스턴스의 진행 중 세션을 `error` 로 바꾼다.
 - **자동 실행 경로는 두 관문을 지난다** — `spend_guard.automation_paused()`(전역 일시정지,
   설정값이라 재시작에도 유지된다)와 `spend_guard.blocked()`(한도). 워처는 한도 초과·기존 파일을
   `status="queued"` 확인 대기열에 넣고, `queued`는 **터미널 상태**다(매 폴링 재판정 방지).

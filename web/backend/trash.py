@@ -19,9 +19,31 @@ from pathlib import Path
 from typing import Optional
 
 
+def _resolve(path: str | Path) -> Path:
+    """상대 경로를 **데이터 베이스 기준**으로 해석한다(CWD 기준이 아니다).
+
+    이 리포에 이미 있는 규칙이다 — `api/batch.py` 가 새 출력 폴더를 만들 때
+    `app_paths.get_output_dir()` 를 쓰는 이유가 "엔트리포인트에 따라 CWD 가 달라지면
+    산출물·스캐너 위치가 어긋난다"이다. 여기서 그 규칙을 쓰지 않아 실제로 갈라졌다:
+
+    포터블은 `run_ui_exe.setup_paths()` 가 데이터 폴더로 `os.chdir` 하므로, DB 에
+    상대 `output_dir` 이 들어 있으면 CWD 기준으로 풀려 **폴더가 있는데도 "없다"** 고
+    판정했다. 그러면 purge 가 그대로 진행돼 **고아 폴더가 남고** 응답은
+    `folder_removed: true` 로 거짓 보고를 했다 — FR-001 이 없애려던 결함 그 자체다.
+    """
+    p = Path(path)
+    if p.is_absolute():
+        return p
+    try:
+        from meeting_minutes_app.common import app_paths
+        return app_paths.get_base_dir() / p
+    except Exception:
+        return p
+
+
 def move_to_trash(path: str | Path) -> tuple[bool, str]:
     """(성공?, 사람이 읽을 결과 설명). 경로가 없으면 성공으로 본다(치울 것이 없다)."""
-    p = Path(path)
+    p = _resolve(path)
     if not p.exists():
         return True, "폴더가 이미 없습니다."
 

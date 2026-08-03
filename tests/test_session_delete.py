@@ -208,3 +208,69 @@ class TestPurgeOrdering:
         assert r.status_code == 200 and r.json()["folder_removed"] is True
         assert moved == [str(out)]
         assert db.get_session(sid) is None
+
+
+class TestTrashPathResolution:
+    """상대 `output_dir` 을 **데이터 베이스 기준**으로 해석하는지.
+
+    [실기 검증에서 발견 2026-08-03] 포터블은 `run_ui_exe.setup_paths()` 가 데이터
+    폴더로 `os.chdir` 한다. `trash.move_to_trash` 가 상대 경로를 CWD 기준으로 풀어
+    **폴더가 있는데도 "없다"** 고 판정했고, purge 가 그대로 진행돼 고아 폴더를 남기면서
+    응답은 `folder_removed: true` 로 거짓 보고했다 — FR-001 이 없애려던 결함 그 자체다.
+
+    `api/batch.py` 는 같은 함정을 `app_paths.get_output_dir()` 로 피하고 있었다(주석까지
+    달려 있다). 규칙이 두 곳에서 갈라진 사례.
+
+    테스트는 **OS 휴지통을 쓰지 않는다** — 실제 send2trash 를 타면 개발자 PC 의 휴지통에
+    테스트 폴더가 쌓인다. import 를 막아 로컬 폴백(`data/.trash/`)으로 흘린다.
+    """
+
+    @pytest.fixture
+    def no_os_trash(self, monkeypatch):
+        import builtins
+        real_import = builtins.__import__
+
+        def _blocked(name, *a, **k):
+            if name == "send2trash":
+                raise ImportError("테스트: OS 휴지통을 쓰지 않는다")
+            return real_import(name, *a, **k)
+
+        monkeypatch.setattr(builtins, "__import__", _blocked)
+
+    def test_relative_path_resolves_against_data_base_not_cwd(
+            self, tmp_path, monkeypatch, no_os_trash):
+        from meeting_minutes_app.common import app_paths
+        from web.backend import trash
+
+        base = tmp_path / "MeetingMinutesData"
+        target = base / "output" / "20260803_회의"
+        target.mkdir(parents=True)
+        (target / "회의록.md").write_text("본문", encoding="utf-8")
+
+        monkeypatch.setattr(app_paths, "get_base_dir", lambda: base)
+        monkeypatch.setattr(app_paths, "get_data_dir", lambda: base / "data")
+        # CWD 는 전혀 다른 곳 — 예전 구현은 여기서 "폴더가 이미 없습니다"로 떨어졌다.
+        monkeypatch.chdir(tmp_path)
+
+        ok, msg = trash.move_to_trash(r"output/20260803_회의")
+        assert ok, msg
+        assert not target.exists(), f"상대 경로를 못 찾아 폴더가 그대로 남았다: {msg}"
+        kept = list((base / "data" / ".trash").glob("*_20260803_회의/회의록.md"))
+        assert kept and kept[0].read_text(encoding="utf-8") == "본문"
+
+    def test_absolute_path_is_used_as_is(self, tmp_path, monkeypatch, no_os_trash):
+        from meeting_minutes_app.common import app_paths
+        from web.backend import trash
+        target = tmp_path / "abs_out"
+        target.mkdir()
+        monkeypatch.setattr(app_paths, "get_data_dir", lambda: tmp_path / "data")
+        ok, msg = trash.move_to_trash(target)
+        assert ok and not target.exists(), msg
+
+    def test_genuinely_missing_folder_is_still_success(self, tmp_path, monkeypatch):
+        """사용자가 손으로 지운 폴더는 정상 케이스다 — 정규화 후에도 없으면 성공."""
+        from meeting_minutes_app.common import app_paths
+        from web.backend import trash
+        monkeypatch.setattr(app_paths, "get_base_dir", lambda: tmp_path)
+        ok, msg = trash.move_to_trash("output/없는폴더")
+        assert ok and "이미 없" in msg

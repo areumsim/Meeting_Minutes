@@ -48,8 +48,9 @@ def llm_calls(monkeypatch):
     """트리아지 LLM 호출을 가로챈다 — 실제 API 로 나가면 안 된다."""
     calls = []
 
-    def _fake(model, system, user, max_tokens=800):
-        calls.append({"model": model, "system": system, "user": user})
+    def _fake(model, system, user, max_tokens=None):
+        calls.append({"model": model, "system": system, "user": user,
+                      "max_tokens": max_tokens})
         return "[]"
 
     monkeypatch.setattr(facilitation, "_call_llm", _fake)
@@ -191,6 +192,78 @@ class TestCostMetering:
         _offer_and_drain(orch, ["판교 데이터센터 전력 계약은 2027년 만료입니다."])
         assert llm_calls == []
         assert "캡" in orch.status()["skip_reason"]
+
+
+class TestChargedModelIsThePricedModel:
+    """표시 금액 = 실제 과금. 고른 모델과 호출되는 모델이 다를 수 있다(§2-B)."""
+
+    def test_claude_triage_model_resolves_to_the_model_actually_called(self, cfg):
+        cfg({"facilitation.triage_model": "claude-haiku-4-5",
+             "models.claude_model": "claude-opus-4-8"})
+        # llm_client 는 claude 경로에서 model 오버라이드를 무시하고 models.claude_model
+        # 로 호출한다 → 추정도 그 모델 단가여야 한다.
+        assert facilitation.effective_triage_model("claude-haiku-4-5") \
+            == "claude-opus-4-8"
+        assert facilitation.effective_triage_model("gpt-4o-mini") == "gpt-4o-mini"
+
+    def test_recorded_cost_uses_effective_model(self, cfg, llm_calls, fac_db):
+        from meeting_minutes_app.common import pricing
+        cfg({"facilitation.enabled": True,
+             "facilitation.triage_model": "claude-haiku-4-5",
+             "models.claude_model": "claude-opus-4-8"})
+        orch = FacilitationOrchestrator(session_id="c1")
+        assert orch._triage_model == "claude-opus-4-8"
+        _offer_and_drain(orch, ["판교 데이터센터 전력 계약은 2027년 만료입니다."])
+        spent = usage_log.month_to_date_by_kind()[spend_guard.KIND_FACILITATION]
+        assert spent == pytest.approx(
+            pricing.facilitation_triage_call_cost("claude-opus-4-8"), abs=1e-9)
+        # haiku 단가로 계산했다면 1/12 로 과소 기록됐다(초기 구현의 결함).
+        assert spent > pricing.facilitation_triage_call_cost("claude-haiku-4-5")
+        # 관찰 로그에도 실제 호출 모델이 남는다
+        assert facilitation.triages(session_id="c1")[0]["model"] \
+            == "claude-opus-4-8"
+
+    def test_call_max_tokens_equals_pricing_output_assumption(self, cfg, fac_db,
+                                                             monkeypatch):
+        """호출 상한과 추정 출력 토큰이 같은 상수에서 나온다(갈라지면 비용이 추정 초과)."""
+        from meeting_minutes_app.common import llm_client as _lc
+        from meeting_minutes_app.common import pricing
+        seen = {}
+
+        class _FakeLLM:
+            def __init__(self, preferred="gpt"):
+                seen["preferred"] = preferred
+
+            def chat(self, system, user, temp=0.3, model=None, max_tokens=None):
+                seen["max_tokens"] = max_tokens
+                seen["model"] = model
+                return "[]"
+
+        monkeypatch.setattr(_lc, "LLMClient", _FakeLLM)
+        facilitation._call_llm("gpt-4o-mini", "sys", "user")
+        assert seen["max_tokens"] == pricing.FACILITATION_TRIAGE_MAX_OUTPUT_TOKENS
+        assert pricing.FACILITATION_TRIAGE_OUTPUT_TOKENS \
+            == pricing.FACILITATION_TRIAGE_MAX_OUTPUT_TOKENS
+        assert seen["model"] == "gpt-4o-mini"
+
+    def test_failed_triage_refunds_the_meeting_cap(self, cfg, fac_db, monkeypatch):
+        """실패한 호출이 캡을 소진시키면 남은 회의 내내 트리아지가 막힌다."""
+        cfg({"facilitation.enabled": True,
+             "facilitation.max_cost_usd_per_meeting": 0.001})
+        calls = []
+
+        def _boom(*a, **k):
+            calls.append(1)
+            raise RuntimeError("모든 LLM API 호출 실패")
+        monkeypatch.setattr(facilitation, "_call_llm", _boom)
+        orch = FacilitationOrchestrator(session_id="c2")
+        active = orch.active_personas()
+        w = [facilitation.Utterance("발화", 0.0, 1.0, False)]
+        orch._triage_task(w, active)
+        assert orch._session_cost == 0.0        # 환불됨
+        orch._triage_task(w, active)
+        assert len(calls) == 2                  # 두 번째도 시도된다
+        assert usage_log.month_to_date_spend() == 0.0   # 과금은 없다
 
 
 class TestObserveModeIsSilent:

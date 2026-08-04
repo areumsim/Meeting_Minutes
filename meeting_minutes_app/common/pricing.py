@@ -125,18 +125,33 @@ def minutes_cost(llm: str = "gpt", model: str | None = None) -> float:
            (MINUTES_OUTPUT_TOKENS / 1_000_000) * price["out"]
 
 
-# 회의 진행 페르소나(facilitation) 트리아지 1회 대략 토큰 — PRD §10 추정치
-# (최근 발화 창 ~2000자 + 페르소나 목록 ≈ 입력 1.5k, 후보 JSON 출력 ≈ 150).
-# 창 길이(facilitation.TRIAGE_WINDOW_CHARS)를 바꾸면 이 값도 같이 조정한다.
-FACILITATION_TRIAGE_INPUT_TOKENS  = 1_500
-FACILITATION_TRIAGE_OUTPUT_TOKENS = 150
+# 회의 진행 페르소나(facilitation) 트리아지 1회 토큰 — **상한**으로 잡는다.
+# 한도 판정에서 과소평가는 한도를 넘겨 버리고, 과대평가는 트리아지가 한 번 미뤄질
+# 뿐이다(EMBEDDING_CHARS_PER_TOKEN 과 같은 규칙).
+#
+# 입력 2,300 의 근거: 최근 발화 창 2,000자(facilitation.TRIAGE_WINDOW_CHARS)를
+# 한국어 기준 ~1.2자/토큰으로 보면 ≈1,670, + 시스템 프롬프트 ≈200, + 활성 페르소나
+# 8종 목록·트리거 ≈350, + 회의 주제. PRD §10 의 1.5k 는 한국어 토큰화를 낙관적으로
+# 본 값이었다 `[미검증 — 실사용 usage 로 재교정 필요]`.
+# 창 길이를 바꾸면 이 값도 같이 조정한다.
+FACILITATION_TRIAGE_INPUT_TOKENS  = 2_300
+# 출력은 호출의 max_tokens 와 **같은 상수**를 쓴다 — 추정이 실제 상한과 갈라지지
+# 않게(초기 구현은 추정 150 / 상한 800 으로 5배 갈라져 있었다).
+FACILITATION_TRIAGE_MAX_OUTPUT_TOKENS = 800
+FACILITATION_TRIAGE_OUTPUT_TOKENS = FACILITATION_TRIAGE_MAX_OUTPUT_TOKENS
 
 
 def facilitation_triage_call_cost(model: str | None) -> float:
     """트리아지 1회 예상 비용(USD).
 
     한도 판정(spend_guard.blocked 의 입력)과 세션 추정(estimate_session_cost 의
-    facilitation 항)이 **같은 함수**를 써야 표시 금액과 판정이 안 갈라진다(CLAUDE.md)."""
+    facilitation 항)이 **같은 함수**를 써야 표시 금액과 판정이 안 갈라진다(CLAUDE.md).
+
+    `model` 은 **실제로 과금될 모델**이어야 한다. 설정에서 고른 모델과 다를 수 있다 —
+    triage_model 이 claude-* 면 llm_client 가 models.claude_model 로 호출하므로
+    (모델 오버라이드는 GPT 계열만 지원) 호출부는 `facilitation.effective_triage_model()`
+    로 해석한 값을 넘긴다. haiku 를 골랐는데 opus 로 호출되던 시절 추정이 실제의
+    1/12 였다."""
     price = llm_token_price(model)
     return (FACILITATION_TRIAGE_INPUT_TOKENS / 1_000_000) * price["in"] + \
            (FACILITATION_TRIAGE_OUTPUT_TOKENS / 1_000_000) * price["out"]

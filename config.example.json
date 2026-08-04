@@ -450,7 +450,7 @@
     "max_level": 3,
     "_max_interventions_comment": "세션당 화면 개입 예산(M1 이후 적용) — 초과분은 기록으로 강등된다.",
     "max_interventions_per_session": 12,
-    "_triage_model_comment": "트리아지(1차 선별) 경량 모델 — 상시 비용 결정 요인. claude-haiku-4-5 선택 시 현재는 models.claude_model 이 대신 적용된다(모델 오버라이드는 GPT 계열만 지원).",
+    "_triage_model_comment": "트리아지(1차 선별) 경량 모델 — 상시 비용 결정 요인. claude-haiku-4-5 를 고르면 현재는 models.claude_model 이 대신 호출된다(모델 오버라이드는 GPT 계열만 지원) — 추정·한도·기록도 그 실효 모델 단가를 쓴다(facilitation.effective_triage_model).",
     "_triage_model_options": [
       "gpt-4o-mini",
       "claude-haiku-4-5"

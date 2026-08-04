@@ -394,15 +394,39 @@ def report(session_id: Optional[str] = None,
     }
 
 
-def _call_llm(model: str, system: str, user: str, max_tokens: int = 800) -> str:
+def effective_triage_model(configured: str) -> str:
+    """**실제로 과금될** 트리아지 모델. 설정에서 고른 값과 다를 수 있다.
+
+    `llm_client.chat` 의 model 파라미터는 GPT 전용이다 — claude-* 를 고르면
+    preferred="claude" 로 라우팅되지만 실제 모델은 `models.claude_model` 을 따른다
+    (Claude 모델 오버라이드는 llm_client 확장이 필요해 M1 몫). 초기 구현은 이 대체를
+    주석·설정 설명에만 적고 **단가는 고른 모델(haiku)로 계산**해서, 실제 opus 호출의
+    1/12 로 추정했다 — 표시 금액과 실제 과금이 갈라지는 것은 CLAUDE.md 가 금지하는
+    바로 그것이다. 추정·한도·기록·로그가 모두 이 함수의 값을 쓴다.
+
+    남는 한계 `[미검증]`: `chat()` 은 한쪽 벤더가 실패하면 **다른 벤더로 조용히
+    폴백**하고(gpt→claude, claude→gpt) 어느 쪽이 실제로 응답했는지 돌려주지 않는다.
+    그 회차의 단가는 실제와 다를 수 있다. 폴백 감지는 llm_client 가 사용 벤더를
+    반환하도록 바꿔야 하므로 별건이며, 상시 경로가 아니라 예외 경로다.
+    """
+    m = str(configured or "").strip()
+    if m.lower().startswith("claude"):
+        return str(_c("models.claude_model", "claude-opus-4-8")
+                   or "claude-opus-4-8")
+    return m
+
+
+def _call_llm(model: str, system: str, user: str,
+              max_tokens: Optional[int] = None) -> str:
     """트리아지 LLM 1회 호출 — 반드시 common.llm_client 경유(우회 금지, PRD §7).
 
-    llm_client.chat 의 model 파라미터는 GPT 전용이다 — claude-* 를 고르면
-    preferred="claude" 로 라우팅되지만 실제 모델은 models.claude_model 을 따른다
-    (Claude 모델 오버라이드는 llm_client 확장이 필요해 M1 몫). 그래서 기본값은
-    지정 모델이 그대로 반영되는 gpt-4o-mini 다(§16 미결 #4 — 사내 기본도 GPT).
+    max_tokens 기본값은 pricing 의 추정 상한과 **같은 상수**다 — 호출 상한과 추정이
+    갈라지면 비용이 조용히 추정을 넘는다.
     """
+    from meeting_minutes_app.common import pricing
     from meeting_minutes_app.common.llm_client import LLMClient
+    if max_tokens is None:
+        max_tokens = pricing.FACILITATION_TRIAGE_MAX_OUTPUT_TOKENS
     preferred = "claude" if str(model or "").lower().startswith("claude") else "gpt"
     llm = LLMClient(preferred=preferred)
     if preferred == "gpt":
@@ -425,8 +449,11 @@ class FacilitationOrchestrator:
 
         self._gate = bool(_c("facilitation.enabled", False))
         self._period = max(float(_c("facilitation.triage_period_sec", 25) or 25), 1.0)
-        self._triage_model = str(_c("facilitation.triage_model", "gpt-4o-mini")
-                                 or "gpt-4o-mini")
+        # 설정값과 실제 과금 모델은 다를 수 있다 — 추정·한도·기록·로그는 전부
+        # 실효 모델을 쓴다(effective_triage_model 독스트링 참조).
+        self._configured_model = str(_c("facilitation.triage_model", "gpt-4o-mini")
+                                     or "gpt-4o-mini")
+        self._triage_model = effective_triage_model(self._configured_model)
         self._meeting_cap = float(_c("facilitation.max_cost_usd_per_meeting", 0.50)
                                   or 0.0)
 
@@ -563,9 +590,15 @@ class FacilitationOrchestrator:
 
         비용 3관문(자동 일시정지 → 월 한도 → 회의당 캡)을 지나야만 LLM 을 부른다.
         어느 관문에 막혔든 `facilitation_triage` 에 사유가 남는다 — 조용히
-        건너뛰면 나중에 데이터가 왜 비었는지 알 수 없다."""
+        건너뛰면 나중에 데이터가 왜 비었는지 알 수 없다.
+
+        회의당 캡은 **예약(reserve) 방식**이다: 검사와 누적을 락 안에서 한 번에 하고
+        호출이 실패하면 환불한다. 풀이 2워커라 검사→호출→누적 순이면 두 워커가 같은
+        잔액을 보고 함께 통과해 캡을 넘길 수 있다(트리아지가 주기보다 오래 걸릴 때 —
+        이 리포엔 실시간 STT 타임아웃 전례가 있다)."""
         window_text, t0, t1, provisional = self._window_meta(window)
         est = 0.0
+        reserved = False
         try:
             from meeting_minutes_app.common import pricing, spend_guard
 
@@ -586,8 +619,16 @@ class FacilitationOrchestrator:
             if reason:
                 _skip(reason)
                 return
-            if self._meeting_cap > 0 and self._session_cost + est > self._meeting_cap:
-                _skip(f"이 회의의 facilitation 비용 ${self._session_cost:.4f}이 "
+            with self._lock:
+                if (self._meeting_cap > 0
+                        and self._session_cost + est > self._meeting_cap):
+                    over = self._session_cost
+                else:
+                    self._session_cost += est          # 예약
+                    reserved = True
+                    over = None
+            if not reserved:
+                _skip(f"이 회의의 facilitation 비용 ${over:.4f}이 "
                       f"회의당 캡 ${self._meeting_cap:.2f}에 도달")
                 return
 
@@ -599,8 +640,8 @@ class FacilitationOrchestrator:
                 spend_guard.KIND_FACILITATION, est, model=self._triage_model,
                 units=1, unit_kind="triage_call",
                 note=spend_guard.session_note(self.session_id))
-            self._session_cost += est
-            self._triage_count += 1
+            with self._lock:
+                self._triage_count += 1
             self._skip_reason = ""
 
             cands = self._parse_candidates(raw, active)
@@ -614,10 +655,11 @@ class FacilitationOrchestrator:
                     need_search=bool(cand.get("need_search")),
                     level=self.persona_level(cand["persona"]),
                     t0=t0, t1=t1, provisional=provisional)
-                if r == "new":
-                    self._observed_count += 1
-                elif r == "repeat":
-                    self._repeat_count += 1
+                with self._lock:
+                    if r == "new":
+                        self._observed_count += 1
+                    elif r == "repeat":
+                        self._repeat_count += 1
             record_triage(self.session_id, model=self._triage_model, cost_usd=est,
                           candidates=len(cands), personas=len(active),
                           window_chars=len(window_text), t0=t0, t1=t1,
@@ -625,6 +667,11 @@ class FacilitationOrchestrator:
         except Exception as e:
             # LLM 실패(양 벤더 모두 실패 시 llm_client 가 raise)·파싱 예외 —
             # 시도 자체는 분모에 남긴다. ok=0 이 "호출했지만 결과 없음"을 뜻한다.
+            # 예약분은 환불한다 — 실패한 호출로 캡을 소진시키면 남은 회의 내내
+            # 트리아지가 막힌다(과금은 record() 를 지나지 않았으므로 집계에도 없다).
+            if reserved:
+                with self._lock:
+                    self._session_cost = max(0.0, self._session_cost - est)
             try:
                 record_triage(self.session_id, model=self._triage_model,
                               cost_usd=0.0, personas=len(active),

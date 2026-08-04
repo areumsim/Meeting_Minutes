@@ -24,6 +24,19 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from web.backend.api import realtime as rt  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def isolate_usage_db(tmp_path, monkeypatch):
+    """과금 기록을 임시 DB 로 격리 — **사용자 실제 DB 를 오염시키지 않는다.**
+
+    웹 검색 보완이 spend_guard.record() 를 지나게 된 뒤(회의 중 외부 유료 검색이
+    무계량이던 결함 수정), 이 파일의 테스트가 개발 PC 의 web/meeting_assistant.db 에
+    실제 과금 행을 남겼다 — 월 합계가 부풀면 **다른 경로의 한도 판정까지** 왜곡된다.
+    autouse 로 걸어 새 테스트가 이 격리를 잊어도 안전하게 한다."""
+    from meeting_minutes_app.common import usage_log
+    monkeypatch.setattr(usage_log, "_resolve_db_path",
+                        lambda p=None: tmp_path / "usage.db")
+
+
 def make_session(monkeypatch):
     """WS/DB를 건드리지 않는 최소 세션 인스턴스 + 전송 캡처."""
     s = rt.BrowserRealtimeSession(ws=MagicMock(), config={})
@@ -205,6 +218,85 @@ class TestWebIsSupplement:
             s._segment_counter = i
             s._maybe_web_research(f"발화{i}")
         assert len(submitted) == 2       # 3, 6번째만
+
+class TestWebResearchIsMetered:
+    """회의 중 웹 검색은 외부 유료 호출인데 계량이 아예 없었다(PRD §10 — realtime.py 에
+    spend_guard 참조 0건). 안 보이는 지출은 다른 경로의 한도 판정까지 왜곡한다."""
+
+    def _fake_llm(self, monkeypatch, searched=True):
+        fake = MagicMock()
+        fake.web_research.return_value = {
+            "text": "외부 자료 요약", "sources": ["https://example.com/a"],
+            "searched": searched}
+        from meeting_minutes_app.meeting_pipeline import meeting_minutes as mm
+        monkeypatch.setattr(mm, "LLMClient", lambda **kw: fake)
+        return fake
+
+    def test_call_is_recorded_under_its_own_kind(self, monkeypatch):
+        from meeting_minutes_app.common import spend_guard, usage_log
+        import meeting_minutes_app.common.config_loader as cl
+        monkeypatch.setattr(cl, "get", lambda k, d=None: d)
+        monkeypatch.setattr(spend_guard, "_c", lambda k, d=None: d)
+        s, _ = make_session(monkeypatch)
+        self._fake_llm(monkeypatch)
+        s._web_research_segment("발화")
+        by_kind = usage_log.month_to_date_by_kind()
+        assert by_kind.get(spend_guard.KIND_WEB_RESEARCH, 0.0) > 0.0
+        assert usage_log.month_to_date_spend() > 0.0
+
+    def test_degraded_call_costs_less_than_live_search(self, monkeypatch):
+        """searched=False(라이브 검색 실패 후 모델 지식 폴백)에 검색 요금을 물리지 않는다."""
+        from meeting_minutes_app.common import pricing, spend_guard, usage_log
+        import meeting_minutes_app.common.config_loader as cl
+        monkeypatch.setattr(cl, "get", lambda k, d=None: d)
+        monkeypatch.setattr(spend_guard, "_c", lambda k, d=None: d)
+        s, _ = make_session(monkeypatch)
+        self._fake_llm(monkeypatch, searched=False)
+        s._web_research_segment("발화")
+        spent = usage_log.month_to_date_by_kind()[spend_guard.KIND_WEB_RESEARCH]
+        # 강등된 회차는 최종 폴백 chat() 경로 = models.llm(기본 gpt) 기준.
+        assert spent == pytest.approx(
+            pricing.web_research_call_cost(None, searched=False, llm="gpt"), abs=1e-9)
+        # 라이브 검색 회차(1순위 Anthropic + 검색 요금)보다 싸다.
+        assert spent < pricing.web_research_call_cost(None, searched=True,
+                                                     llm="claude")
+
+    def test_spend_cap_blocks_the_call_with_a_reason(self, monkeypatch, capsys):
+        from meeting_minutes_app.common import spend_guard, usage_log
+        import meeting_minutes_app.common.config_loader as cl
+        monkeypatch.setattr(cl, "get", lambda k, d=None: d)
+        monkeypatch.setattr(spend_guard, "blocked",
+                            lambda est, **kw: "월 한도 초과(테스트)")
+        s, _ = make_session(monkeypatch)
+        fake = self._fake_llm(monkeypatch)
+        s._web_research_segment("발화")
+        assert fake.web_research.call_count == 0        # 호출 자체가 없다
+        assert usage_log.month_to_date_spend() == 0.0
+        # 조용히 건너뛰지 않는다 — 사유를 남긴다
+        assert "월 한도" in capsys.readouterr().out
+
+    def test_automation_pause_stops_in_meeting_web_search(self, monkeypatch):
+        from meeting_minutes_app.common import spend_guard, usage_log
+        import meeting_minutes_app.common.config_loader as cl
+        monkeypatch.setattr(cl, "get", lambda k, d=None: d)
+        monkeypatch.setattr(spend_guard, "automation_paused", lambda: True)
+        s, _ = make_session(monkeypatch)
+        fake = self._fake_llm(monkeypatch)
+        s._web_research_segment("발화")
+        assert fake.web_research.call_count == 0
+        assert usage_log.month_to_date_spend() == 0.0
+
+    def test_skip_reason_is_logged_once_not_per_segment(self, monkeypatch, capsys):
+        """웹 검색은 interval 마다 돈다 — 같은 사유를 매번 찍으면 로그가 도배된다."""
+        from meeting_minutes_app.common import spend_guard
+        import meeting_minutes_app.common.config_loader as cl
+        monkeypatch.setattr(cl, "get", lambda k, d=None: d)
+        monkeypatch.setattr(spend_guard, "automation_paused", lambda: True)
+        s, _ = make_session(monkeypatch)
+        self._fake_llm(monkeypatch)
+        for _ in range(5):
+            s._web_research_segment("발화")
+        assert capsys.readouterr().out.count("일시정지") == 1
 
     def test_web_finding_emitted_as_web_source(self, monkeypatch):
         """웹 결과도 같은 바에 표시되지만 출처유형이 web(🌐) 이어야 한다."""

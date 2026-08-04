@@ -30,6 +30,7 @@ const KIND_LABELS: Record<string, string> = {
   // 회의 '중'에 쓰는 돈이지만 세션 비용(sessions.cost_estimate)에는 넣지 않는다 —
   // 이중 집계 방지. 그래서 이 목록에 뜬다(회의 상세에는 실측값이 따로 표시된다).
   facilitation: "회의 진행 페르소나(회의 중 트리아지)",
+  web_research: "회의 중 웹 검색 보완",
 };
 
 export default function CostSummary() {

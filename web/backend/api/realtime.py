@@ -179,6 +179,7 @@ class BrowserRealtimeSession:
         # config.wiki.realtime_vault_search 로 활성화. run()에서 topic 확정 후 생성.
         self._searcher = None
         self._web_findings: List[Dict] = []
+        self._web_skip_notified = ""   # 웹검색 건너뜀 사유 중복 출력 방지(_note_web_skip)
         self._notes_lock = threading.Lock()
         self._web_pool = ThreadPoolExecutor(max_workers=1)  # 웹 검색 보완용
         # 회의 진행 페르소나 오케스트레이터(M0 관찰모드) — wiki_core.facilitation.
@@ -797,6 +798,16 @@ class BrowserRealtimeSession:
         except Exception:
             pass
 
+    def _note_web_skip(self, message: str) -> None:
+        """웹 검색 보완을 건너뛴 사유를 한 세션에 한 번만 알린다.
+
+        매 세그먼트 출력하면 로그·화면이 같은 줄로 도배된다(웹 검색은 interval 마다
+        돈다). 그러나 아예 조용하면 "기능이 없는 것처럼" 보인다 — 이 리포의 반복 규칙."""
+        if getattr(self, "_web_skip_notified", "") == message:
+            return
+        self._web_skip_notified = message
+        print(f"[realtime] {message}")
+
     def _maybe_web_research(self, text: str) -> None:
         """웹 보완 검색 트리거 — 게이트/스로틀 + '내부에서 못 찾았을 때만' 정책(FR-11).
 
@@ -836,15 +847,55 @@ class BrowserRealtimeSession:
 
         결과는 회의록 memo 병합용으로 누적하고, 화면에는 내부 결과와 같은 바에
         웹(🌐) 출처로 뒤이어 표시한다(FR-10 — 내부가 앞줄).
+
+        **비용 3종을 지난다.** 이 호출은 회의 중 자동으로 나가는 외부 유료 검색인데
+        (Anthropic web_search 는 검색 1,000회당 $10) 지금까지 한도 검사도 기록도 없었다 —
+        PRD §10 감사가 "realtime.py 에 spend_guard 참조 0건"으로 지적한 그 자리다.
+        그래서 회의 중 웹검색 비용은 월 합계에서 보이지 않았고, 안 보이는 만큼
+        **다른 경로의 한도 판정까지 왜곡**했다(합계가 실제보다 작게 나온다).
         """
         try:
             from meeting_minutes_app.common import config_loader as _rc
+            from meeting_minutes_app.common import pricing, spend_guard
             from meeting_minutes_app.meeting_pipeline import meeting_minutes as mm
-            llm = mm.LLMClient(preferred=_rc.get("models.llm", "gpt") or "gpt")
+
+            # 회의 중 자동 실행 — facilitation 트리아지와 같은 관문을 지난다.
+            if spend_guard.automation_paused():
+                self._note_web_skip("자동 실행 일시정지로 웹 검색 보완을 건너뜁니다")
+                return
+            # 단가 기준을 llm_client.web_research 의 **실제 경로**에 맞춘다:
+            #  · 라이브 검색이 됐다면 1순위인 Anthropic web_search 를 지났을 가능성이
+            #    높다(models.llm 과 무관하게 먼저 시도한다). GPT responses 폴백도
+            #    searched=True 를 낼 수 있으나 그쪽이 더 싸므로 claude 기준이 보수적이다.
+            #  · 검색 없이 강등됐다면 최종 폴백이 chat() 이므로 models.llm 기준이다.
+            _pref = _rc.get("models.llm", "gpt") or "gpt"
+            _claude_model = _rc.get("models.claude_model") or None
+            _pref_model = (_claude_model if str(_pref).startswith("claude")
+                           else _rc.get("models.gpt_model")) or None
+            # 한도 판정에는 상한(라이브 검색 성공 가정)을 넣고, 기록은 실제 결과의
+            # searched 로 다시 계산한다 — 강등된 회차를 검색 요금까지 물릴 이유가 없다.
+            _est = pricing.web_research_call_cost(_claude_model, searched=True,
+                                                  llm="claude")
+            _reason = spend_guard.blocked(_est, check_per_item=False)
+            if _reason:
+                # 조용히 건너뛰지 않는다 — 사유를 남긴다(CLAUDE.md).
+                self._note_web_skip(f"지출 한도로 웹 검색 보완 보류: {_reason}")
+                return
+            llm = mm.LLMClient(preferred=_pref)
             # 쿼리 길이는 내부 검색과 같은 설정을 쓴다 — 60자 하드코딩이던 과거엔
             # 실측(60→180자에서 R@3 +0.17)이 웹 경로에만 반영되지 않았다.
             _qchars = max(int(_rc.get("wiki.realtime_query_chars", 180) or 180), 20)
             result = llm.web_research(text[:_qchars])
+            # 호출은 이미 나갔다 — 결과가 비어도 과금은 발생했으므로 먼저 기록한다.
+            _searched = bool((result or {}).get("searched"))
+            spend_guard.record(
+                spend_guard.KIND_WEB_RESEARCH,
+                pricing.web_research_call_cost(
+                    _claude_model if _searched else _pref_model,
+                    searched=_searched, llm=("claude" if _searched else _pref)),
+                model=str((_claude_model if _searched else _pref_model) or ""),
+                units=1, unit_kind="web_research_call",
+                note=spend_guard.session_note(self.session_id or ""))
             if result and result.get("text"):
                 sources = result.get("sources", [])[:3]
                 with self._notes_lock:

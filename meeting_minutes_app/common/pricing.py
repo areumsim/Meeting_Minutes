@@ -141,6 +141,38 @@ FACILITATION_TRIAGE_MAX_OUTPUT_TOKENS = 800
 FACILITATION_TRIAGE_OUTPUT_TOKENS = FACILITATION_TRIAGE_MAX_OUTPUT_TOKENS
 
 
+# 웹 리서치 1회(llm_client.web_research) 대략 비용 — **상한**으로 잡는다.
+# 회의 중 웹 보완 검색은 지금까지 계량이 아예 없었다(realtime.py 에 spend_guard 참조 0건).
+# 개략치라도 없으면 한도 판정에 입력을 줄 수 없다.
+#   입력 8k: 검색 결과 본문이 컨텍스트로 주입된다(max_uses=3 × 결과 수 페이지).
+#   출력 1.5k: llm_client.web_research 의 max_tokens 기본값.
+#   검색 도구: Anthropic web_search 는 검색 1,000회당 $10(2026-06 공개 단가),
+#             호출당 max_uses 회까지 쓴다.
+# `[미검증 — 실사용 usage 로 재교정 필요]`
+WEB_RESEARCH_INPUT_TOKENS  = 8_000
+WEB_RESEARCH_OUTPUT_TOKENS = 1_500
+WEB_SEARCH_PRICE_PER_1K    = 10.00
+WEB_RESEARCH_MAX_USES      = 3
+
+
+def web_research_call_cost(model: str | None = None, *, searched: bool = True,
+                           llm: str = "claude") -> float:
+    """웹 리서치 1회 예상 비용(USD).
+
+    `searched=False` 면 라이브 검색 없이 모델 지식으로 답한 회차다(회사망 차단·크레딧
+    소진 시 llm_client 가 조용히 강등한다) — 검색 도구 요금이 없고 입력도 작다.
+    호출 **전** 한도 판정에는 searched=True(상한)를, **기록**에는 실제 반환된
+    `searched` 값을 넘긴다.
+    """
+    price = llm_token_price(model, llm)
+    tok_in = WEB_RESEARCH_INPUT_TOKENS if searched else 1_000
+    cost = (tok_in / 1_000_000) * price["in"] + \
+           (WEB_RESEARCH_OUTPUT_TOKENS / 1_000_000) * price["out"]
+    if searched:
+        cost += WEB_RESEARCH_MAX_USES * (WEB_SEARCH_PRICE_PER_1K / 1_000)
+    return cost
+
+
 def facilitation_triage_call_cost(model: str | None) -> float:
     """트리아지 1회 예상 비용(USD).
 

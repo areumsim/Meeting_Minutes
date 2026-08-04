@@ -35,6 +35,11 @@ KIND_REGENERATE = "regenerate"
 #: (무인 실행 집계)에는 넣지 않지만, 상시 호출이라 오케스트레이터가
 #: automation_paused() 관문을 별도로 지난다(PRD §10).
 KIND_FACILITATION = "facilitation"
+#: 회의 중 웹 보완 검색(llm_client.web_research) — 실시간 경로에서 자동으로 도는
+#: 외부 검색이다. 계량이 아예 없어서 월 합계에서 안 보였다(PRD §10 감사: realtime.py
+#: 에 spend_guard 참조 0건). facilitation 과 같은 이유로 AUTOMATION_KINDS 에는 넣지
+#: 않지만 automation_paused() 관문은 지난다.
+KIND_WEB_RESEARCH = "web_research"
 
 #: 사용자가 화면을 보고 있지 않을 때 돌아가는 경로. FR-011 의 "자동 실행분 별도 집계"가
 #: 이 목록을 쓴다. 재생성은 사용자가 버튼을 눌러 시작하므로 자동 실행이 아니다.

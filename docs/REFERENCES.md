@@ -210,6 +210,15 @@ CLAUDE.md가 경고하던 중복은 실측상 대부분 단일 소스로 수렴�
 | 설정값 `realtime.two_pass` vs 런타임 `self._two_pass` | 순수 WS 세션에 돌지도 않은 보정 요금 부과 | `sessions.stt_two_pass` 컬럼에 런타임 값 기록 |
 | 세션 과금 kind 를 호출부가 손으로 열거 | `web_research` 가 회의 상세에서 누락 | `usage_log.session_spend_by_kind()` |
 | kind→라벨 표가 프런트 2곳 | 한쪽에만 kind 추가되는 시작점 | `web/frontend/src/lib/costKinds.ts` |
+| 콘솔 UTF-8 블록이 8개 파일에 3가지 철자 | `meeting_minutes.py` 만 `getattr` 가드가 없어 `pythonw`(stdout=None)에서 import 실패 | `common/console.py` |
+| `_resolve_db_path()` 가 2곳에 문자 단위 동일 | (아직 갈라지진 않음) | `common/sqlite_util.resolve_db_path` |
+
+**고치지 않기로 한 것**: `def _c(key, default)` config 접근자가 17개 파일에 있다.
+2줄짜리이고 변형이 실제로 다르다(모듈 로드 시 `_cfg_ok` 플래그 vs 호출마다
+`try/except`) — 후자는 `config_loader` import 실패까지 흡수한다. 합치려면 17개
+호출부의 실패 의미를 하나로 정해야 하는데, 그 판단 근거가 될 사고 이력이 없다.
+**갈라져서 사고가 난 적이 없는 중복은 지금 구조 신호가 아니다** — 근거가 생기면 그때
+합친다(이 리포의 '수정 필요성 더블체크' 규율).
 
 → 아래는 "미해결 버그"가 아니라 **구조 부채·예방·로드맵 확장점**이다.
 
@@ -276,7 +285,7 @@ CLAUDE.md가 경고하던 중복은 실측상 대부분 단일 소스로 수렴�
 
 # 부록. 검증 메모
 - 대형 파일 줄 수·spend_guard(realtime.py 8건)·pricing import·`trash._resolve`는 2026-08-04 실측.
-- 2026-08-04 재실측: 테스트 `1036 passed, 1 skipped`(pytest) · `82 passed`(npm test) ·
+- 2026-08-04 재실측: 테스트 `1038 passed, 1 skipped`(pytest) · `82 passed`(npm test) ·
   `constraints-web.txt` 고정 52건. 이 문서가 수치를 인용할 때는 **실행한 날**을 함께 적는다.
 - 라이선스 비상업(CC-BY-NC): Jina Reranker v2 base, Jina embeddings v3 → 사내 배포 시 확인.
 - turbovec: MIT 확인, `win_amd64` 휠·AVX2 하한 실물 확인 필요. Milvus Lite: Windows 미지원(issue #169). Zep CE deprecated → 실체는 Graphiti(기본 Neo4j).

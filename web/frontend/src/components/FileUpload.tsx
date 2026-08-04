@@ -7,6 +7,7 @@ import { uploadFile, confirmUpload, cancelPendingUpload, getProfiles } from "../
 import { MODE_PRESETS } from "../lib/types";
 import type { Profile } from "../lib/types";
 import ModeSelector from "./ModeSelector";
+import Modal from "./ui/Modal";
 
 export default function FileUpload({ onComplete }: { onComplete: (id: string) => void }) {
   const [file, setFile] = useState<File | null>(null);
@@ -101,60 +102,53 @@ export default function FileUpload({ onComplete }: { onComplete: (id: string) =>
 
   return (
     <div className="max-w-4xl mx-auto px-1 md:px-0">
-      {/* 예상 비용 확인 모달 */}
-      <AnimatePresence>
-        {pending && (
-          <motion.div
-            initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-            className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
-          >
-            {/* 백드롭 클릭으로는 닫지 않는다 — 오클릭 시 업로드된 파일이 서버에서 삭제돼
-                대용량 파일을 처음부터 다시 올려야 하는 사고를 방지(명시적 버튼으로만 결정). */}
-            <motion.div
-              initial={{ scale: 0.95, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.95, opacity: 0 }}
-              className="bg-white rounded-2xl shadow-xl max-w-sm w-full p-6"
+      {/* 예상 비용 확인 모달 — 돈을 쓰기 전 마지막 관문.
+          백드롭 클릭으로는 닫지 않는다(오클릭 시 업로드된 파일이 서버에서 삭제돼
+          대용량 파일을 처음부터 다시 올려야 하는 사고 방지). Escape 는 닫는다 —
+          명시적 키보드 행동이라 오클릭 방지와 충돌하지 않고, 이것마저 없으면
+          키보드 사용자는 모달에서 빠져나올 수단이 아예 없다(취소 버튼과 동일 동작). */}
+      {pending && (
+        <Modal labelledBy="upload-cost-title" onClose={handleCancelPending}
+          panelClassName="bg-white rounded-2xl shadow-xl max-w-sm w-full p-6">
+          <h3 id="upload-cost-title" className="text-lg font-bold text-brand-900 mb-1">예상 비용 확인</h3>
+          <p className="text-sm text-brand-500 mb-4">
+            이 파일을 처리하면 아래 정도의 API 비용이 발생합니다(대략값이라 실제 청구액과 다를 수 있습니다).
+          </p>
+          <div className="rounded-xl bg-zinc-50 border border-zinc-200 p-4 space-y-2 mb-5">
+            <div className="flex items-baseline justify-between">
+              <span className="text-sm text-brand-500">이 파일 예상 비용</span>
+              <span className="text-2xl font-bold text-brand-900">
+                {pending.estimateUsd > 0 ? fmtUsd(pending.estimateUsd) : "산정 불가"}
+              </span>
+            </div>
+            {pending.durationSec > 0 && (
+              <div className="flex items-center justify-between text-xs text-brand-500">
+                <span>길이</span><span>약 {Math.round(pending.durationSec / 60)}분</span>
+              </div>
+            )}
+            {pending.monthlyCapUsd > 0 && (
+              <div className="flex items-center justify-between text-xs text-brand-500 pt-1 border-t border-zinc-200">
+                <span>이번 달 예상 지출 / 한도</span>
+                <span>{fmtUsd(pending.monthToDateUsd)} / {fmtUsd(pending.monthlyCapUsd)}</span>
+              </div>
+            )}
+          </div>
+          <div className="flex gap-2">
+            <button
+              onClick={handleCancelPending}
+              className="flex-1 py-2.5 rounded-xl border border-zinc-200 text-sm font-semibold text-brand-600 hover:bg-zinc-50 transition-colors"
             >
-              <h3 className="text-lg font-bold text-brand-900 mb-1">예상 비용 확인</h3>
-              <p className="text-sm text-brand-500 mb-4">
-                이 파일을 처리하면 아래 정도의 API 비용이 발생합니다(대략값이라 실제 청구액과 다를 수 있습니다).
-              </p>
-              <div className="rounded-xl bg-zinc-50 border border-zinc-200 p-4 space-y-2 mb-5">
-                <div className="flex items-baseline justify-between">
-                  <span className="text-sm text-brand-500">이 파일 예상 비용</span>
-                  <span className="text-2xl font-bold text-brand-900">
-                    {pending.estimateUsd > 0 ? fmtUsd(pending.estimateUsd) : "산정 불가"}
-                  </span>
-                </div>
-                {pending.durationSec > 0 && (
-                  <div className="flex items-center justify-between text-xs text-brand-400">
-                    <span>길이</span><span>약 {Math.round(pending.durationSec / 60)}분</span>
-                  </div>
-                )}
-                {pending.monthlyCapUsd > 0 && (
-                  <div className="flex items-center justify-between text-xs text-brand-400 pt-1 border-t border-zinc-200">
-                    <span>이번 달 예상 지출 / 한도</span>
-                    <span>{fmtUsd(pending.monthToDateUsd)} / {fmtUsd(pending.monthlyCapUsd)}</span>
-                  </div>
-                )}
-              </div>
-              <div className="flex gap-2">
-                <button
-                  onClick={handleCancelPending}
-                  className="flex-1 py-2.5 rounded-xl border border-zinc-200 text-sm font-semibold text-brand-600 hover:bg-zinc-50 transition-colors"
-                >
-                  취소
-                </button>
-                <button
-                  onClick={handleConfirm}
-                  className="flex-1 py-2.5 rounded-xl bg-zinc-900 text-white text-sm font-bold hover:bg-zinc-800 transition-colors"
-                >
-                  계속 처리
-                </button>
-              </div>
-            </motion.div>
-          </motion.div>
-        )}
-      </AnimatePresence>
+              취소
+            </button>
+            <button
+              onClick={handleConfirm}
+              className="flex-1 py-2.5 rounded-xl bg-zinc-900 text-white text-sm font-bold hover:bg-zinc-800 transition-colors"
+            >
+              계속 처리
+            </button>
+          </div>
+        </Modal>
+      )}
 
       <h2 className="text-2xl font-bold tracking-tight mb-1">파일 업로드</h2>
       <p className="text-brand-500 mb-4 text-sm">오디오/영상 파일을 올리면 전사·번역·회의록을 자동 생성합니다.</p>
@@ -214,8 +208,9 @@ export default function FileUpload({ onComplete }: { onComplete: (id: string) =>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div className="space-y-3">
             <div className="space-y-1.5">
-              <label className="text-xs font-bold text-zinc-400 uppercase tracking-widest">제목</label>
+              <label htmlFor="upload-title" className="text-xs font-bold text-zinc-400 uppercase tracking-widest">제목</label>
               <input
+                id="upload-title"
                 type="text"
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
@@ -224,8 +219,9 @@ export default function FileUpload({ onComplete }: { onComplete: (id: string) =>
               />
             </div>
             <div className="space-y-1.5">
-              <label className="text-xs font-bold text-zinc-400 uppercase tracking-widest">주제 / 맥락</label>
+              <label htmlFor="upload-topic" className="text-xs font-bold text-zinc-400 uppercase tracking-widest">주제 / 맥락</label>
               <textarea
+                id="upload-topic"
                 value={topic}
                 onChange={(e) => setTopic(e.target.value)}
                 placeholder="정확도를 높이려면 회의 배경을 적어주세요..."
@@ -233,8 +229,9 @@ export default function FileUpload({ onComplete }: { onComplete: (id: string) =>
               />
             </div>
             <div className="space-y-1.5">
-              <label className="text-xs font-bold text-zinc-400 uppercase tracking-widest">참석자 <span className="text-brand-300 font-normal normal-case">(선택)</span></label>
+              <label htmlFor="upload-speakers" className="text-xs font-bold text-zinc-400 uppercase tracking-widest">참석자 <span className="text-brand-400 font-normal normal-case">(선택)</span></label>
               <input
+                id="upload-speakers"
                 type="text"
                 value={speakers}
                 onChange={(e) => setSpeakers(e.target.value)}
@@ -261,6 +258,7 @@ export default function FileUpload({ onComplete }: { onComplete: (id: string) =>
               <div>
                 <button
                   onClick={() => setShowProfiles(!showProfiles)}
+                  aria-expanded={showProfiles}
                   className="flex items-center gap-2 text-xs font-bold text-zinc-500 hover:text-zinc-900 transition-colors"
                 >
                   <ChevronDown className={`w-4 h-4 transition-transform ${showProfiles ? "" : "-rotate-90"}`} />

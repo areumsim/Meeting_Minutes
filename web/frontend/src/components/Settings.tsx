@@ -559,7 +559,7 @@ export default function SettingsView() {
       )}
 
       {error && (
-        <div className="mb-3 rounded-xl border border-red-200 bg-red-50 text-red-600 px-4 py-3 text-sm flex items-start gap-2">
+        <div role="alert" className="mb-3 rounded-xl border border-red-200 bg-red-50 text-red-600 px-4 py-3 text-sm flex items-start gap-2">
           <XCircle size={16} className="mt-0.5 shrink-0" /> <span>{error}</span>
         </div>
       )}

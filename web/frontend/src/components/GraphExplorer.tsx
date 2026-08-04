@@ -169,7 +169,7 @@ export default function GraphExplorer({ initialQuery = "" }: { initialQuery?: st
       </div>
 
       {error && (
-        <div className="mb-4 rounded-xl border border-red-200 bg-red-50 text-red-600 px-4 py-3 text-sm">
+        <div role="alert" className="mb-4 rounded-xl border border-red-200 bg-red-50 text-red-600 px-4 py-3 text-sm">
           {error} — 지식 그래프가 비활성화됐거나 아직 데이터가 없을 수 있습니다.
         </div>
       )}

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, lazy, Suspense } from "react";
 import { Mic, FileAudio, List, Settings, FileText, MessageCircleQuestion, ClipboardList, HelpCircle, Network, CalendarClock, Loader2, PanelLeftClose, PanelLeftOpen, MoreHorizontal } from "lucide-react";
-import { motion, AnimatePresence } from "motion/react";
+import { motion, AnimatePresence, MotionConfig } from "motion/react";
 import Dashboard from "./components/Dashboard";
 import Onboarding from "./components/Onboarding";
 import Modal from "./components/ui/Modal";
@@ -138,6 +138,10 @@ export default function App() {
   };
 
   return (
+    // reducedMotion="user": OS 의 '동작 줄이기'를 켠 사용자에게는 모든 motion
+    // 애니메이션(뷰 전환 scale 등)을 생략한다. CSS 쪽(animate-pulse)은 각 사용처의
+    // motion-reduce:animate-none 이 담당한다.
+    <MotionConfig reducedMotion="user">
     <div className="min-h-[100dvh] bg-brand-50 text-brand-950 font-sans selection:bg-emerald-100 flex flex-col md:flex-row pb-[calc(env(safe-area-inset-bottom,0px)+4rem)] md:pb-0">
 
       {/* 첫 실행 설정 마법사 */}
@@ -223,7 +227,7 @@ export default function App() {
             각 화면의 제목은 h2 부터 시작한다. */}
         <h1 className="sr-only">AI Minutes — 회의록 자동화</h1>
         {configError && (
-          <div className="mb-4 rounded-xl border border-red-300 bg-red-50 text-red-800 px-4 py-3 text-sm">
+          <div role="alert" className="mb-4 rounded-xl border border-red-300 bg-red-50 text-red-800 px-4 py-3 text-sm">
             <div>
               ⛔ <strong>설정 파일(config.json)을 읽지 못했습니다.</strong> ({configError})
             </div>
@@ -244,7 +248,7 @@ export default function App() {
           </div>
         )}
         {sslInsecure && (
-          <div className="mb-4 rounded-xl border border-amber-300 bg-amber-50 text-amber-800 px-4 py-3 text-sm">
+          <div role="alert" className="mb-4 rounded-xl border border-amber-300 bg-amber-50 text-amber-800 px-4 py-3 text-sm">
             ⚠️ <strong>SSL 인증서 검증이 꺼져 있습니다.</strong> API 키와 회의 내용이 검증 없는
             연결로 전송됩니다. 이 앱은 Windows 인증서 저장소를 신뢰하므로 사내망에서도 대개
             켠 상태로 동작합니다 — [설정] → 고급에서 <code className="font-mono">SSL 인증서 검증</code>을
@@ -252,7 +256,7 @@ export default function App() {
           </div>
         )}
         {ffmpegMissing && (
-          <div className="mb-4 rounded-xl border border-amber-300 bg-amber-50 text-amber-800 px-4 py-3 text-sm">
+          <div role="alert" className="mb-4 rounded-xl border border-amber-300 bg-amber-50 text-amber-800 px-4 py-3 text-sm">
             ⚠️ <strong>ffmpeg가 설치되어 있지 않습니다.</strong> 오디오 파일 업로드/변환 기능이 동작하지 않을 수 있습니다.
             프로그램 폴더의 <code className="font-mono">vendor/ffmpeg/</code> 에 <code className="font-mono">ffmpeg.exe</code>를 넣거나 시스템 PATH에 ffmpeg를 추가하세요.
           </div>
@@ -285,6 +289,7 @@ export default function App() {
         </AnimatePresence>
       </main>
     </div>
+    </MotionConfig>
   );
 }
 

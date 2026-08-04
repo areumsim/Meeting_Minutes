@@ -426,7 +426,7 @@ export default function SessionDetail({ id, onBack, onOpenGraph }: Props) {
                 {/* STT 단계는 내부 진행률이 없어 퍼센트가 한동안 멈춘 것처럼 보인다.
                     실제로는 동작 중임을 알리도록 이동 애니메이션(pulse)을 겹쳐 보여준다. */}
                 <div
-                  className={`h-full bg-emerald-500 rounded-full transition-all duration-500 ${progress.percent < 100 ? "animate-pulse" : ""}`}
+                  className={`h-full bg-emerald-500 rounded-full transition-all duration-500 ${progress.percent < 100 ? "animate-pulse motion-reduce:animate-none" : ""}`}
                   style={{ width: `${Math.max(3, progress.percent)}%` }}
                 />
               </div>
@@ -646,6 +646,7 @@ export default function SessionDetail({ id, onBack, onOpenGraph }: Props) {
         <div className="mt-6 bg-white border border-brand-200 rounded-3xl shadow-xl overflow-hidden">
           <button
             onClick={() => setRelatedOpen(v => !v)}
+            aria-expanded={relatedOpen}
             className="w-full px-6 py-4 flex items-center justify-between hover:bg-brand-50/60 transition-colors"
           >
             <span className="flex items-center gap-2 text-sm font-bold text-brand-900">

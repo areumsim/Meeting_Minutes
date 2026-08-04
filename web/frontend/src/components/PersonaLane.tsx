@@ -69,7 +69,10 @@ export default function PersonaLane({
             ))}
 
             {notice && (
+              // role="status": 한도·예산으로 멈춘 사유가 조용히 사라지면 안 된다는
+              // 규칙(§19.5)의 스크린리더판 — 시각 칩만으로는 낭독되지 않는다.
               <span
+                role="status"
                 className="shrink-0 mt-1 text-[11px] bg-white border border-zinc-200 text-zinc-500 px-2 py-0.5 rounded-full whitespace-nowrap max-w-[60vw] truncate"
                 title={notice}
               >

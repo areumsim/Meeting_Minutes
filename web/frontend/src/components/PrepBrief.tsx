@@ -131,7 +131,7 @@ export default function PrepBrief({ onSaved }: { onSaved?: (id: string) => void 
       </div>
 
       {error && (
-        <div className="mt-4 rounded-xl border border-red-200 bg-red-50 text-red-600 px-4 py-3 text-sm">{error}</div>
+        <div role="alert" className="mt-4 rounded-xl border border-red-200 bg-red-50 text-red-600 px-4 py-3 text-sm">{error}</div>
       )}
 
       {meta && (

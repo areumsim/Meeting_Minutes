@@ -218,7 +218,7 @@ export default function Dashboard({ onSelectSession, onNewUpload, onNewRecord }:
           <Loader2 className="animate-spin" size={24} />
         </div>
       ) : loadError ? (
-        <div className="text-center py-20">
+        <div role="alert" className="text-center py-20">
           <AlertCircle size={48} className="mx-auto text-red-400 mb-4" />
           <p className="text-lg font-bold text-brand-900">세션 목록을 불러올 수 없습니다</p>
           <p className="text-sm text-brand-500 mt-1">

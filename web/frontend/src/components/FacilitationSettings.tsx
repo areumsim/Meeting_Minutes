@@ -189,7 +189,7 @@ export default function FacilitationSettings() {
       </div>
 
       {error && (
-        <p className="text-xs text-red-600 mt-2">{error}</p>
+        <p role="alert" className="text-xs text-red-600 mt-2">{error}</p>
       )}
 
       <div className="flex items-center gap-2 mt-3">

@@ -179,7 +179,7 @@ function PlanAutoCard() {
         {st && <span className="px-2.5 py-1 rounded-lg font-bold bg-brand-50 text-brand-700">리서치 {st.notes_researched}</span>}
         {st && <span className="px-2.5 py-1 rounded-lg font-bold bg-sky-50 text-sky-700">오디오 {st.audio_processed}</span>}
       </div>
-      {st?.error && <div className="text-xs text-red-600 mb-2">{st.error}</div>}
+      {st?.error && <div role="alert" className="text-xs text-red-600 mb-2">{st.error}</div>}
       <div className="flex items-center gap-3">
         {running
           ? <Btn onClick={stop} busy={busy} variant="dark"><Square size={16} /> 자동화 중지</Btn>

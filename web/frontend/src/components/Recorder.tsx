@@ -1346,12 +1346,15 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
             <div className="flex items-center gap-2.5 md:gap-3 min-w-0">
               <div className="relative shrink-0">
                 <div className={`w-9 h-9 md:w-10 md:h-10 rounded-lg md:rounded-xl flex items-center justify-center transition-all duration-500 ${
-                  isRecording ? (isPaused ? "bg-amber-500" : "bg-red-500 animate-pulse") : "bg-zinc-800"
+                  isRecording ? (isPaused ? "bg-amber-500" : "bg-red-500 animate-pulse motion-reduce:animate-none") : "bg-zinc-800"
                 }`}>
                   <Mic className="w-5 h-5 text-white" />
                 </div>
               </div>
-              <div className="min-w-0">
+              {/* aria-live: 녹음→생성→완료 전이와 진행 문구(wsStatus)가 시각으로만
+                  바뀌었다 — 실시간 피드백 루프 전체가 스크린리더에 무음이었다.
+                  polite: 전사 스트림이 아니라 상태 전이만 이 블록에 있다. */}
+              <div className="min-w-0" aria-live="polite">
                 <h3 className="text-base md:text-lg font-bold tracking-tight leading-tight">
                   {status === "generating" ? "문서 생성 중..." :
                    status === "completed" ? "세션 완료" :
@@ -1496,6 +1499,7 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
                 <button
                   type="button"
                   onClick={() => setWikiExpanded((v) => !v)}
+                  aria-expanded={wikiExpanded}
                   className="ml-auto shrink-0 flex items-center gap-1 text-[11px] font-bold text-emerald-600 hover:text-emerald-800"
                 >
                   <ChevronDown className={`w-3.5 h-3.5 transition-transform ${wikiExpanded ? "" : "-rotate-90"}`} />
@@ -1735,7 +1739,7 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
                         {status === "recording" ? (
                           <>
                             <div className={`w-2 h-2 rounded-full ${
-                              isPaused ? "bg-amber-500" : soundDetected ? "bg-emerald-500 animate-pulse" : "bg-zinc-300"
+                              isPaused ? "bg-amber-500" : soundDetected ? "bg-emerald-500 animate-pulse motion-reduce:animate-none" : "bg-zinc-300"
                             }`} />
                             <span className={`text-[11px] font-bold uppercase tracking-widest ${
                               isPaused ? "text-amber-500" : soundDetected ? "text-emerald-600" : "text-zinc-500"
@@ -1761,7 +1765,7 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
                           </>
                         ) : (
                           <>
-                            <div className={`w-2 h-2 rounded-full ${status === "generating" ? "bg-amber-500 animate-pulse" : status === "completed" ? "bg-emerald-500" : "bg-red-500 animate-pulse"}`} />
+                            <div className={`w-2 h-2 rounded-full ${status === "generating" ? "bg-amber-500 animate-pulse motion-reduce:animate-none" : status === "completed" ? "bg-emerald-500" : "bg-red-500 animate-pulse motion-reduce:animate-none"}`} />
                             <span className="text-[11px] font-bold text-brand-500 uppercase tracking-widest">
                               {status === "generating" ? "처리 중" : status === "completed" ? "완료" : "실시간 스트리밍"}
                             </span>
@@ -1915,7 +1919,7 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
                         </button>
                       </div>
 
-                      <p className="text-[11px] md:text-xs text-brand-500 font-bold uppercase tracking-[0.3em] animate-pulse">
+                      <p className="text-[11px] md:text-xs text-brand-500 font-bold uppercase tracking-[0.3em] animate-pulse motion-reduce:animate-none">
                         {isPaused ? "녹음 일시정지" : "세션 진행 중"}
                       </p>
 

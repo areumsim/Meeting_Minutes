@@ -474,6 +474,32 @@ class TestDisplayChannelM1:
         assert orch.budget_remaining() == 0
         assert orch.status()["shown_count"] == 1
 
+    def test_pending_items_consume_the_budget_at_generation_time(
+            self, cfg, fac_db, monkeypatch):
+        """참견도 2(대기)도 생성 시점에 예산을 쓴다.
+
+        방출 시점에 세면 참견도 2 만 쓰는 회의에서는 예산이 영원히 남아 "회의당 N건"
+        상한이 사라진다 — 대기 항목은 이미 생성됐으므로 돈은 이미 나갔다."""
+        cfg(self._values(level=2, **{
+            "facilitation.max_interventions_per_session": 1,
+            "facilitation.personas.facilitator.level": 2}))
+        calls = self._llm(monkeypatch, [self._cand(),
+                                        self._cand(persona="facilitator",
+                                                   span="주제가 샜다")])
+        shown, status = [], []
+        orch = FacilitationOrchestrator(session_id="d19",
+                                        on_intervention=shown.append,
+                                        on_status=status.append)
+        self._run(orch)
+
+        assert orch.pending_count() == 1                  # 예산 1건까지만 생성
+        assert len([c for c in calls if not c["triage"]]) == 1
+        assert orch.budget_remaining() == 0
+        assert any(s["kind"] == "budget" for s in status)
+        # 방출이 예산을 두 번 깎지 않는다
+        orch.check_now()
+        assert len(shown) == 1 and orch.status()["shown_count"] == 1
+
     def test_at_most_two_cards_per_triage_round(self, cfg, fac_db, monkeypatch):
         """한 회차에 여러 장이 쏟아지면 '흘깃 보고 넘긴다'(§19.1)가 성립하지 않는다."""
         cands = [self._cand(span="담당자 없음"),

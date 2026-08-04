@@ -1043,7 +1043,9 @@ class FacilitationOrchestrator:
     # ── Tier 1: 개입 생성 (M1) ────────────────────────────
 
     def budget_remaining(self) -> int:
-        """남은 화면 개입 예산(0 이면 이후 후보는 관찰로 강등). 0 설정이면 무제한."""
+        """남은 화면 개입 예산(0 이면 이후 후보는 관찰로 강등). 0 설정이면 무제한.
+
+        분모는 '생성된 개입'이다 — 자동 표시분과 [지금 점검] 대기분을 함께 센다."""
         if self._budget <= 0:
             return 10 ** 6
         with self._lock:
@@ -1061,8 +1063,8 @@ class FacilitationOrchestrator:
         추가 과금이 없고, 버튼 한 번이 새 과금을 일으키면 사용자가 비용을 예측할 수
         없다. 새 판정이 필요하면 다음 트리아지 주기에 자연히 돈다."""
         with self._lock:
+            # 예산은 생성 시점에 이미 소모했다(_dispatch) — 여기서 다시 세면 이중 차감.
             out, self._pending = self._pending, []
-            self._shown_count += len(out)
         for item in out:
             self._emit(item)
         return out
@@ -1252,6 +1254,11 @@ class FacilitationOrchestrator:
             return "shown"
         with self._lock:                         # level == 2(소극) → [지금 점검] 대기
             self._pending.append(item)
+            # 대기분도 **생성 시점에** 예산을 소모한다. 방출 시점에 세면 참견도 2 만
+            # 쓰는 회의에서 예산이 영원히 남아 있어 "회의당 12건" 이 무력해진다
+            # (대기 항목은 이미 생성됐으므로 돈은 이미 나갔다 — 세지 않으면 상한이
+            #  회의당 비용 캡뿐이라 기본값에서 1000건까지 열린다).
+            self._shown_count += 1
         self._notify("pending", "점검할 항목이 있습니다",
                      pending=self.pending_count())
         return "pending"

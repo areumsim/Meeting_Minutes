@@ -1855,6 +1855,11 @@ class BrowserRealtimeSession:
                     # 실시간 경로는 2단계 보정 전사를 거쳐 STT 과금이 두 번 난다.
                     # 이 두 인자가 없어서 월 합계·지출 한도가 실제의 1/3로 계산됐다.
                     two_pass=_m["two_pass"], revise_model=_m["revise_model"],
+                    # facilitation= 는 여기서 절대 켜지 않는다 — 트리아지는 이미
+                    # spend_guard.record() 로 usage_log 에 들어가 있고, 이 값은
+                    # sessions.cost_estimate 에 저장된다. month_to_date_spend() 가
+                    # 둘을 더하므로 켜면 이중 집계된다(pricing 독스트링 참조).
+                    # 세션별 실제 발생액은 usage_log.session_spend() 로 조회한다.
                 )["total"]
             except Exception:
                 _est = 0.0

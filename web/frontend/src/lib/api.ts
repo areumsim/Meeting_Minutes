@@ -223,7 +223,13 @@ export const cancelUpload = async (
 };
 
 // 비용 추정 — 세션 최종 비용(USD) / 실시간 요율.
-export interface SessionCost { ok: boolean; duration_sec?: number; stt?: number; translate?: number; minutes?: number; total?: number; stt_model?: string; }
+export interface SessionCost {
+  ok: boolean; duration_sec?: number; stt?: number; translate?: number;
+  minutes?: number; total?: number; stt_model?: string;
+  /** 회의 진행 페르소나(트리아지) — 다른 항목과 달리 추정이 아니라 **실제 기록된** 금액.
+   *  세션 비용 테이블에는 넣지 않고 usage_log 에서 되찾는다(이중 집계 방지). */
+  facilitation?: number;
+}
 export const getSessionCost = async (sessionId: string): Promise<SessionCost | null> => {
   try {
     const res = await apiFetch(`/api/sessions/${sessionId}/cost`);
@@ -263,6 +269,10 @@ export interface CostRates {
   revise_per_min?: number;
   revise_model?: string | null;
   two_pass?: boolean;
+  /** 회의 진행 페르소나(트리아지) 분당 요율. 기능이 꺼져 있으면 0, 구버전 백엔드엔 없다. */
+  facilitation_per_min?: number;
+  facilitation_on?: boolean;
+  facilitation_model?: string;
 }
 export const getCostRates = async (): Promise<CostRates | null> => {
   try {

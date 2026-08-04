@@ -453,6 +453,107 @@ class TestObservationIsMeasurable:
                 == facilitation.span_key("critic", "   ", "논리 비약"))
 
 
+class TestCostIsVisibleWhereItHappens:
+    """세션 중에 쓴 돈이 화면에서 사라지지 않는다 — 단, 이중 집계도 하지 않는다(§2-C·E)."""
+
+    def test_session_note_roundtrip(self, fac_db):
+        """쓰는 쪽(record)과 읽는 쪽(session_spend)이 같은 규약을 쓴다."""
+        spend_guard.record(spend_guard.KIND_FACILITATION, 0.002,
+                           model="gpt-4o-mini", units=1, unit_kind="triage_call",
+                           note=spend_guard.session_note("sX"))
+        assert usage_log.session_spend("sX") == pytest.approx(0.002)
+        assert usage_log.session_spend(
+            "sX", spend_guard.KIND_FACILITATION) == pytest.approx(0.002)
+        assert usage_log.session_spend("다른세션") == 0.0
+        assert usage_log.session_spend("") == 0.0
+        # 다른 kind 로 필터하면 0 — 세션별·kind별 분리가 유지된다
+        assert usage_log.session_spend("sX", spend_guard.KIND_WATCHER) == 0.0
+
+    def test_session_cost_endpoint_includes_actual_facilitation(self, tmp_path,
+                                                                monkeypatch):
+        """회의 상세 금액에 트리아지 실측분이 더해진다(추정이 아니라 기록된 값)."""
+        from fastapi.testclient import TestClient
+        from web.backend import database as db
+        from web.backend.app import app
+
+        dbp = tmp_path / "t.db"
+        monkeypatch.setattr(db, "DB_PATH", dbp)
+        monkeypatch.setattr(usage_log, "_resolve_db_path", lambda p=None: dbp)
+        db.init_db()
+        sid = db.create_session(title="회의", source="web")
+        db.update_session_status(sid, "completed", duration_sec=600,
+                                 cost_estimate=0.05)
+        spend_guard.record(spend_guard.KIND_FACILITATION, 0.0123,
+                           note=spend_guard.session_note(sid))
+
+        body = TestClient(app).get(f"/api/sessions/{sid}/cost").json()
+        assert body["ok"] is True
+        assert body["facilitation"] == pytest.approx(0.0123)
+        # 총액에 포함된다 — 이 항목이 빠져 상세 금액이 실제보다 적게 보였다
+        assert body["total"] >= 0.0123
+        assert body["facilitation_actual"] is True
+
+    def test_finalize_estimate_never_includes_facilitation(self):
+        """sessions.cost_estimate 기록 경로가 facilitation 을 켜면 이중 집계된다.
+
+        realtime.py 의 finalize 추정에 이 인자가 들어가지 않는 것을 코드로 고정한다 —
+        pricing 독스트링의 경고를 다음 사람이 반대로 읽고 '자연스럽게' 켤 수 있다."""
+        import re
+        from pathlib import Path
+        src = Path("web/backend/api/realtime.py").read_text(encoding="utf-8")
+        m = re.search(r"_est = pricing\.estimate_session_cost\((.*?)\)\[",
+                      src, re.S)
+        assert m, "finalize 의 추정 호출을 찾지 못했다(테스트를 갱신할 것)"
+        assert "facilitation" not in m.group(1).replace("# ", "").split("\n")[0]
+        # 인자로 넘기는 코드가 없다(주석의 설명 문구는 허용)
+        assert not re.search(r"^\s*facilitation\s*=", m.group(1), re.M)
+
+    def test_cost_rates_reports_facilitation_per_min_when_on(self, tmp_path,
+                                                            monkeypatch):
+        """녹음 화면 러닝 미터가 상시 트리아지 요율을 반영한다."""
+        import json as _json
+        from fastapi.testclient import TestClient
+        from meeting_minutes_app.common import config_loader, pricing
+        from web.backend.app import app
+
+        cfg_path = tmp_path / "config.json"
+        cfg_path.write_text(_json.dumps({
+            "models": {"stt": "gpt-4o-mini-transcribe"},
+            "facilitation": {"enabled": True, "triage_model": "gpt-4o-mini",
+                             "triage_period_sec": 25},
+        }), encoding="utf-8")
+        monkeypatch.setattr(config_loader, "_CONFIG_PATH", cfg_path)
+        config_loader.reload()
+        try:
+            body = TestClient(app).get("/api/cost/rates").json()
+            assert body["facilitation_on"] is True
+            assert body["facilitation_model"] == "gpt-4o-mini"
+            # 60초 기준 = 분당 요율. 단가는 오케스트레이터 한도 판정과 같은 함수.
+            assert body["facilitation_per_min"] == pytest.approx(
+                round(60 / 25 * pricing.facilitation_triage_call_cost("gpt-4o-mini"), 4),
+                abs=1e-4)
+        finally:
+            config_loader._cache = None      # 다른 테스트가 실제 config 를 보도록
+
+    def test_cost_rates_is_zero_when_feature_off(self, tmp_path, monkeypatch):
+        import json as _json
+        from fastapi.testclient import TestClient
+        from meeting_minutes_app.common import config_loader
+        from web.backend.app import app
+
+        cfg_path = tmp_path / "config.json"
+        cfg_path.write_text(_json.dumps({"models": {"stt": "gpt-4o-mini-transcribe"}}),
+                            encoding="utf-8")
+        monkeypatch.setattr(config_loader, "_CONFIG_PATH", cfg_path)
+        config_loader.reload()
+        try:
+            body = TestClient(app).get("/api/cost/rates").json()
+            assert body["facilitation_on"] is False
+            assert body["facilitation_per_min"] == 0.0
+        finally:
+            config_loader._cache = None
+
+
 class TestRegistryData:
     """personas.py 는 데이터 전용 — PRD §3 로스터와 어긋나지 않는지 고정."""
 

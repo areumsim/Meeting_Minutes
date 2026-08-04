@@ -1219,6 +1219,11 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
                       ? `1차 인식 $${costRates.stt_per_min}/분 + 문장 보정 $${costRates.revise_per_min}/분`
                       : `음성 인식 $${costRates.stt_per_min}/분`)
                     + (preset.translate ? ` + 번역 $${costRates.translate_per_min}/분` : "")
+                    // 회의 진행 페르소나(기본 꺼짐)를 켜면 상시 트리아지 비용이 붙는다 —
+                    // 켠 사용자에게 러닝 미터가 실제보다 적게 보이면 안 된다.
+                    + (costRates.facilitation_per_min
+                      ? ` + 회의 진행 페르소나 $${costRates.facilitation_per_min}/분`
+                      : "")
                     + " + (완료 시) 회의록 생성비. 대략치입니다."
                   }
                 >
@@ -1227,6 +1232,7 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
                       // 구버전 백엔드(필드 없음)에서는 1차 단가로 폴백한다.
                       (costRates.stt_effective_per_min ?? costRates.stt_per_min)
                       + (preset.translate ? costRates.translate_per_min : 0)
+                      + (costRates.facilitation_per_min ?? 0)
                     )
                     + ((status === "generating" || status === "completed") ? costRates.minutes_flat : 0)
                   ).toFixed(3)}

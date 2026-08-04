@@ -328,13 +328,32 @@ def cost_rates():
         # 모델 해석 규칙은 pricing.current_models 하나만 쓴다 — 여기에 복사돼 있던
         # 같은 분기가 two_pass 를 반영하지 않아 러닝 미터가 실제의 1/3을 보여줬다.
         _m = pricing.current_models(cfg)
+        # 회의 진행 페르소나(기본 꺼짐)가 켜져 있으면 상시 트리아지도 분당 요율에
+        # 반영한다 — 켜고 녹음하는 사용자에게 러닝 미터가 실제보다 적게 보이면 안 된다.
+        # 실제 과금 모델은 설정값과 다를 수 있어 effective_triage_model 로 해석한다.
+        _fac_on = bool(cfg.get("facilitation.enabled", False))
+        _fac_model = ""
+        _fac_period = float(cfg.get("facilitation.triage_period_sec", 25) or 25)
+        if _fac_on:
+            from meeting_minutes_app.wiki_core.facilitation import effective_triage_model
+            _fac_model = effective_triage_model(
+                str(cfg.get("facilitation.triage_model", "gpt-4o-mini")
+                    or "gpt-4o-mini"))
         # 실시간 녹음 화면의 러닝 미터용이므로 2단계 보정 전사를 반영한다.
+        # 60초를 넣으므로 결과의 facilitation 항이 그대로 '분당' 요율이 된다.
         _est = pricing.estimate_session_cost(
             60.0, _m["stt_model"], include_minutes=False,
             llm=_m["llm"], minutes_model=_m["minutes_model"],
             two_pass=_m["two_pass"], revise_model=_m["revise_model"],
+            facilitation=_fac_on, facilitation_triage_model=_fac_model,
+            facilitation_period_sec=max(_fac_period, 1.0),
         )
         return {
+            # 회의 진행 페르소나 트리아지 분당 요율(꺼져 있으면 0). 프런트는 이 값을
+            # 분당 합계에 더한다 — 없으면(구버전 백엔드) 0 으로 폴백한다.
+            "facilitation_per_min": _est["facilitation"],
+            "facilitation_on": _fac_on,
+            "facilitation_model": _fac_model,
             "stt_model": _m["stt_model"],
             # 1차(표시) 전사 단가 — 기존 필드 의미를 바꾸지 않는다.
             "stt_per_min": _est["stt_rate_per_min"],

@@ -229,9 +229,15 @@ def estimate_session_cost(duration_sec: float, stt_model: str,
     호출부가 실시간 경로임을 명시할 때만 켜진다(is_two_pass_source 참조).
 
     facilitation=True 면 회의 진행 페르소나 트리아지(시간 기반, 기본 25초에 1회)
-    비용을 더한다 — 실시간 경로에서 config `facilitation.enabled` 가 켜져 있을 때만
-    호출부가 켠다(two_pass 와 같은 규칙). 단가는 facilitation_triage_call_cost()
-    한 곳에서 나온다 — 오케스트레이터의 한도 판정과 같은 함수다.
+    비용을 더한다. 단가는 facilitation_triage_call_cost() 한 곳에서 나온다 —
+    오케스트레이터의 한도 판정과 같은 함수다.
+
+    ⚠ **사전 추정 경로에서만 켠다**(녹음 화면 러닝 미터 `/api/cost/rates`, 세션 비용
+    조회 `/api/sessions/{id}/cost`). `sessions.cost_estimate` 에 **기록**하는 경로
+    (realtime.py 의 finalize)에서는 절대 켜지 말 것 — facilitation 은 이미
+    `spend_guard.record()` 로 usage_log 에 들어가 있고, month_to_date_spend() 가
+    sessions 와 usage_log 를 **둘 다** 더하므로 이중 집계된다. 실제 발생액이 필요하면
+    추정이 아니라 `usage_log.session_spend(session_id, KIND_FACILITATION)` 를 쓴다.
     """
     minutes_dur = max(0.0, float(duration_sec)) / 60.0
     stt_rate = stt_rate_per_min(stt_model)

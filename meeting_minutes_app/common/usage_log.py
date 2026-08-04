@@ -110,6 +110,39 @@ def month_to_date_spend(now: Optional[datetime] = None,
     return total
 
 
+def session_spend(session_id: str, kind: Optional[str] = None,
+                  db_path: Optional[Union[str, Path]] = None) -> float:
+    """특정 세션에 딸린 usage_log 지출 합(USD). 기간 제한 없음.
+
+    이 테이블은 원래 '세션 없는 사용량'을 위한 것이라 session_id 컬럼이 없다. 그런데
+    회의 진행 페르소나처럼 **세션 중에 발생하지만 sessions.cost_estimate 에는 넣지
+    않는** 과금이 생겼다 — 넣으면 month_to_date_spend() 가 둘을 더해 이중 집계된다.
+    그래서 note 에 세션 키를 남기고(`spend_guard.session_note()`) 여기서 되찾는다.
+    이 함수가 없으면 회의 상세의 비용이 실제보다 적게 보인다(그 회의가 쓴 돈인데
+    '회의 외 지출'에만 잡힌다).
+    """
+    sid = str(session_id or "").strip()
+    if not sid:
+        return 0.0
+    from meeting_minutes_app.common import spend_guard
+    note = spend_guard.session_note(sid)
+    c = _connect(db_path)
+    if c is None:
+        return 0.0
+    try:
+        sql = "SELECT COALESCE(SUM(cost_usd), 0) FROM usage_log WHERE note = ?"
+        params: tuple = (note,)
+        if kind:
+            sql += " AND kind = ?"
+            params = (note, kind)
+        row = c.execute(sql, params).fetchone()
+        return float(row[0] or 0.0)
+    except sqlite3.Error:
+        return 0.0                        # usage_log 없는 구버전 DB
+    finally:
+        c.close()
+
+
 def month_to_date_by_kind(now: Optional[datetime] = None,
                           db_path: Optional[Union[str, Path]] = None) -> dict:
     """이번 달 usage_log 를 kind 별로 합산(대시보드 표시용)."""

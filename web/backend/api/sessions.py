@@ -67,8 +67,22 @@ def get_session_cost(session_id: str):
         include_minutes=bool(segs),   # 문서가 생성된(=완료된) 세션만 회의록 비용 포함
         llm=llm, minutes_model=minutes_model,
         two_pass=_two_pass, revise_model=_m["revise_model"],
+        # facilitation 은 추정하지 않는다 — 아래에서 **실제 발생액**으로 채운다.
     )
-    return {"ok": True, "stt_model": stt_model, "llm": llm, **cost}
+    # 회의 진행 페르소나(트리아지)는 세션 중에 발생하지만 sessions.cost_estimate 에는
+    # 넣지 않는다(usage_log 와 이중 집계 방지, pricing 독스트링). 그래서 이 회의가
+    # 쓴 돈인데도 상세 화면에서 빠져 보였다 — 추정이 아니라 기록된 실제 금액을 더한다.
+    try:
+        from meeting_minutes_app.common import spend_guard, usage_log
+        fac = usage_log.session_spend(session_id, spend_guard.KIND_FACILITATION)
+    except Exception:
+        fac = 0.0
+    if fac:
+        cost["facilitation"] = round(fac, 6)
+        cost["total"] = round(float(cost.get("total") or 0.0) + fac, 6)
+    return {"ok": True, "stt_model": stt_model, "llm": llm,
+            # facilitation 항만 추정이 아니라 실측이라는 표시(화면 문구 구분용)
+            "facilitation_actual": True, **cost}
 
 
 @router.get("/sessions/{session_id}/related-notes")

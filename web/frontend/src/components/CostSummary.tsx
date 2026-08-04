@@ -16,6 +16,22 @@ import { typeLabel } from "../lib/format";
  *  - 조회 실패 시 **카드를 아예 렌더하지 않는다** — 비용 조회 실패로 세션 목록이
  *    깨지면 안 된다.
  */
+/**
+ * usage_log.kind → 한국어 라벨. kind 값의 정본은 `common/spend_guard.py` 다
+ * (KIND_WATCHER / KIND_PLAN_AUTOMATION / KIND_REGENERATE / KIND_FACILITATION + 임베딩).
+ * 이 맵이 없어서 한국어 화면에 'facilitation' 같은 영어 키가 그대로 노출됐다.
+ * 새 kind 를 추가하면 여기도 한 줄 추가한다(빠지면 raw key 로 폴백 — 깨지지는 않는다).
+ */
+const KIND_LABELS: Record<string, string> = {
+  embedding: "위키 임베딩(검색 인덱스)",
+  watcher: "폴더 자동 감시",
+  plan_automation: "계획 자동화",
+  regenerate: "회의록 재생성",
+  // 회의 '중'에 쓰는 돈이지만 세션 비용(sessions.cost_estimate)에는 넣지 않는다 —
+  // 이중 집계 방지. 그래서 이 목록에 뜬다(회의 상세에는 실측값이 따로 표시된다).
+  facilitation: "회의 진행 페르소나(회의 중 트리아지)",
+};
+
 export default function CostSummary() {
   const [data, setData] = useState<Summary | null>(null);
   const [open, setOpen] = useState(false);
@@ -115,11 +131,13 @@ export default function CostSummary() {
 
           {data.otherUsd > 0 && (
             <section>
-              <h4 className="text-xs font-semibold text-brand-500 mb-1.5">회의 외 지출</h4>
+              {/* '회의 외'가 아니라 '세션에 안 잡히는' 지출이다 — 회의 진행 페르소나는
+                  회의 중에 발생하지만 이중 집계를 피해 여기로 들어온다. */}
+              <h4 className="text-xs font-semibold text-brand-500 mb-1.5">세션에 잡히지 않는 지출</h4>
               <ul className="space-y-1">
                 {Object.entries(data.otherByKind).map(([kind, usd]) => (
                   <li key={kind} className="flex justify-between text-xs text-brand-700">
-                    <span>{kind === "embedding" ? "위키 임베딩(검색 인덱스)" : kind}</span>
+                    <span>{KIND_LABELS[kind] ?? kind}</span>
                     <span className="font-semibold">${usd.toFixed(4)}</span>
                   </li>
                 ))}

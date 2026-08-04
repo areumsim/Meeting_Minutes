@@ -329,7 +329,11 @@ export default function SessionDetail({ id, onBack, onOpenGraph }: Props) {
             {cost && typeof cost.total === "number" && (
               <span
                 className="flex items-center gap-1 text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-md font-medium"
-                title={`STT $${cost.stt} + 번역 $${cost.translate} + 회의록 $${cost.minutes} (${cost.stt_model}) · 대략치`}
+                title={`STT $${cost.stt} + 번역 $${cost.translate} + 회의록 $${cost.minutes}`
+                  // 회의 진행 페르소나는 이 회의가 쓴 돈이지만 세션 비용 테이블에는
+                  // 안 들어간다(이중 집계 방지) — 빠뜨리면 상세 금액이 실제보다 적다.
+                  + (cost.facilitation ? ` + 회의 진행 페르소나 $${cost.facilitation}(실측)` : "")
+                  + ` (${cost.stt_model}) · 대략치`}
               >
                 💵 예상 ${cost.total?.toFixed(3)}
               </span>

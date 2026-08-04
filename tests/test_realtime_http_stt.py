@@ -87,3 +87,55 @@ class TestFinalizeAlwaysEmitsTerminalEvent:
             if call.args and isinstance(call.args[0], dict)
         ]
         assert "empty" in sent_types
+
+
+# ━━━━━━━━ 버그 3: 폴백 감사 기록이 사실과 달랐다 ━━━━━━━━
+
+class TestSttFallbackAudit:
+    """`stt_fallback_used` 는 회의 상세의 벤더 전환 고지와 노트 frontmatter 의
+    감사 기록에 쓰인다 — 틀리면 "무엇으로 전사됐는지"의 기록이 사실과 달라진다.
+
+    회귀: 판정 기준점을 `config["stt_model"]`(**녹음별 임시 오버라이드**)로 잡아서,
+    사용자가 모델을 바꾸지 않은 평상시에는 기준점이 없어 판정이 "다른 벤더가
+    쓰였는가"로 줄었다. 그래서 OpenAI 내부 폴백(기본 모델 → stt_fallback 모델)이
+    일어난 회의가 '폴백 없음'으로 기록됐다.
+    """
+
+    def _session(self, config=None):
+        realtime = pytest.importorskip("web.backend.api.realtime")
+        return realtime.BrowserRealtimeSession(MagicMock(), config or {})
+
+    def test_openai_internal_fallback_is_recorded_without_override(self):
+        """녹음별 오버라이드가 없어도 OpenAI 내부 폴백을 잡아낸다(평상시 경로)."""
+        s = self._session({})                      # stt_model 오버라이드 없음
+        s._note_stt_primary("OpenAI", "gpt-4o-mini-transcribe")
+        s._note_stt_model("OpenAI", "gpt-4o-mini-transcribe")
+        s._note_stt_model("OpenAI", "gpt-4o-transcribe")   # 폴백 모델로 넘어감
+        usage = s.stt_usage()
+        assert usage["stt_fallback_used"] is True
+        assert usage["stt_models"] == ["gpt-4o-mini-transcribe", "gpt-4o-transcribe"]
+
+    def test_no_fallback_when_only_primary_used(self):
+        s = self._session({})
+        s._note_stt_primary("OpenAI", "gpt-4o-mini-transcribe")
+        s._note_stt_model("OpenAI", "gpt-4o-mini-transcribe")
+        assert s.stt_usage()["stt_fallback_used"] is False
+
+    def test_other_vendor_is_always_a_fallback(self):
+        """Groq 는 기준점을 몰라도 폴백이다 — 회의 음성이 다른 회사로 나갔다."""
+        s = self._session({})
+        s._note_stt_model("Groq", "whisper-large-v3-turbo")
+        assert s.stt_usage()["stt_fallback_used"] is True
+
+    def test_primary_keeps_the_first_attempt(self):
+        """WS 로 먼저 시도한 뒤 HTTP 로 폴백해도 기준점은 첫 시도다."""
+        s = self._session({})
+        s._note_stt_primary("OpenAI", "gpt-4o-transcribe")     # WS 경로
+        s._note_stt_primary("OpenAI", "gpt-4o-mini-transcribe")  # HTTP 폴백 — 무시
+        assert s._stt_primary == ("OpenAI", "gpt-4o-transcribe")
+
+    def test_no_transcription_means_no_fallback(self):
+        """전사가 하나도 없었으면 폴백도 없다(빈 세션이 고지를 띄우면 안 된다)."""
+        s = self._session({})
+        s._note_stt_primary("OpenAI", "gpt-4o-mini-transcribe")
+        assert s.stt_usage()["stt_fallback_used"] is False

@@ -215,19 +215,38 @@ class BrowserRealtimeSession:
         # 설정값 모델을 적으면 폴백이 일어난 회의에 틀린 감사 기록이 남는다.
         # **인스턴스 속성** — 웹은 세션이 동시에 돌아 전역이면 섞인다.
         self._stt_models_used: List[tuple] = []
+        #: 이 세션이 **1순위로 시도한** (제공자, 모델). 폴백 판정의 기준점이다.
+        #: 전송 경로가 정해질 때(WS/HTTP) 한 번만 세운다 — 아래 stt_usage 참조.
+        self._stt_primary: Optional[tuple] = None
 
     def _note_stt_model(self, provider: str, model: str) -> None:
         if provider and (provider, model) not in self._stt_models_used:
             self._stt_models_used.append((provider, model))
 
+    def _note_stt_primary(self, provider: str, model: str) -> None:
+        """1순위 모델을 기록(첫 값만 유지) — 폴백 판정의 기준점."""
+        if self._stt_primary is None and provider and model:
+            self._stt_primary = (provider, model)
+
     def stt_usage(self) -> Dict[str, Any]:
-        """finalize.SessionInputs 에 넣을 실측 STT 메타."""
+        """finalize.SessionInputs 에 넣을 실측 STT 메타.
+
+        `stt_fallback_used` 의 기준점은 **이 세션이 1순위로 시도한 모델**이다
+        (`stt.run_stt` 이 `chain[0]`, CLI 실시간이 `self.stt_model` 을 쓰는 것과 같은
+        규칙). 예전에는 기준점을 `self.config["stt_model"]` — 즉 **녹음별 임시 모델
+        오버라이드** — 로 잡았는데, 그 값은 사용자가 녹음 화면에서 모델을 바꿨을
+        때만 채워진다. 오버라이드가 없는 평상시에는 기준점이 None 이 되어 판정이
+        "OpenAI 가 아닌 제공자가 쓰였는가"로 줄어들었고, 그 결과 **OpenAI 내부
+        폴백(기본 모델 → stt_fallback 모델)이 일어난 회의가 폴백 없음으로 기록**됐다.
+        이 값은 회의 상세의 벤더 전환 고지와 노트 frontmatter 의 감사 기록에 쓰이므로
+        틀리면 "무엇으로 전사됐는지"에 대한 기록이 사실과 달라진다.
+        """
         used = list(self._stt_models_used)
-        configured = str(self.config.get("stt_model") or "").strip()
-        primary = ("OpenAI", configured) if configured else None
+        primary = self._stt_primary
         return {
             "stt_providers": [p for p, _ in used],
             "stt_models": [m for _, m in used],
+            # 다른 벤더가 쓰였거나(항상 폴백), 1순위와 다른 모델이 쓰였으면 폴백이다.
             "stt_fallback_used": bool(used) and (
                 any(p != "OpenAI" for p, _ in used)
                 or (primary is not None and any(u != primary for u in used))
@@ -386,6 +405,7 @@ class BrowserRealtimeSession:
                 conn.session.update(session=session_cfg)
 
                 await self.ws.send_json({"type": "ready", "model": stt_model})
+                self._note_stt_primary("OpenAI", stt_model)
                 self._note_stt_model("OpenAI", stt_model)
 
                 # 현재 이벤트 루프 저장 (스레드→async 브릿지용)
@@ -1105,6 +1125,8 @@ class BrowserRealtimeSession:
         stt_model, _norm_reason = normalize_ws_model(raw_model)
         if _norm_reason:
             print(f"[http-stt] 모델 정규화: {raw_model} → {stt_model} ({_norm_reason})")
+        # 폴백 판정의 기준점 — WS 로 먼저 시도했다면 그때 값이 유지된다(첫 값만).
+        self._note_stt_primary("OpenAI", stt_model)
         await self.ws.send_json({"type": "fallback_http", "model": stt_model})
 
         import wave

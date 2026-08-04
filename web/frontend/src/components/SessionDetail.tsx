@@ -50,6 +50,7 @@ export default function SessionDetail({ id, onBack, onOpenGraph }: Props) {
   const [neighborsError, setNeighborsError] = useState<Record<string, boolean>>({});
   const [progress, setProgress] = useState<{ percent: number; stage: string; elapsed: number } | null>(null);
   const [cost, setCost] = useState<SessionCost | null>(null);
+  const [costOpen, setCostOpen] = useState(false);  // 비용 내역 펼침(터치·키보드 대응)
   const [cancelling, setCancelling] = useState(false);
   const [retrying, setRetrying] = useState(false);
   // 재시도 직후 STT 재사용 여부 안내(처리 화면 상단 배너). 재과금 가능성을 사용자가 알게 한다.
@@ -328,25 +329,45 @@ export default function SessionDetail({ id, onBack, onOpenGraph }: Props) {
             {session.duration_sec > 0 && <span>{formatDuration(session.duration_sec)}</span>}
             {session.translate ? <span className="text-amber-600">번역됨</span> : null}
             {cost && typeof cost.total === "number" && (
-              <span
-                className="flex items-center gap-1 text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-md font-medium"
-                title={`STT $${cost.stt}`
-                  // 실시간 경로는 보정 패스로 STT 과금이 두 번 난다 — 빼고 적으면
-                  // 항목 합이 총액과 안 맞아 "계산이 틀렸다"로 읽힌다.
-                  + (cost.stt_revise ? ` + 보정 전사 $${cost.stt_revise}` : "")
-                  + ` + 번역 $${cost.translate} + 회의록 $${cost.minutes}`
-                  // 회의 중에 쓴 돈이지만 세션 비용 테이블에는 안 들어가는 항목들
-                  // (이중 집계 방지). 서버가 kind 목록을 주므로 화면이 kind 를
-                  // 하나씩 적지 않는다 — 적으면 새 과금 경로를 조용히 빠뜨린다.
-                  + (cost.actual_kinds ?? [])
-                      .map((k) => ` + ${kindLabel(k)} $${cost[k]}(실측)`).join("")
-                  + ` (${cost.stt_model}) · 대략치`}
+              // title 툴팁만으로는 터치(iOS)·키보드에서 내역을 볼 수 없다 —
+              // 버튼으로 만들어 누르면 아래에 항목별 내역을 펼친다.
+              <button
+                type="button"
+                onClick={() => setCostOpen((v) => !v)}
+                aria-expanded={costOpen}
+                title="비용 내역 보기"
+                className="flex items-center gap-1 text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-md font-medium hover:bg-emerald-100 transition-colors"
               >
                 💵 예상 ${cost.total?.toFixed(3)}
-              </span>
+                <ChevronDown size={13} className={`transition-transform ${costOpen ? "" : "-rotate-90"}`} />
+              </button>
             )}
-            {session.source === "cli" && <span className="text-zinc-400">CLI</span>}
+            {session.source === "cli" && <span className="text-zinc-500">CLI</span>}
           </div>
+          {/* 비용 내역 — 예전에는 title 툴팁에만 있어 데스크톱 마우스 사용자만 볼 수
+              있었다. 실시간 경로는 보정 패스로 STT 과금이 두 번 나므로 빼고 적으면
+              항목 합이 총액과 안 맞아 "계산이 틀렸다"로 읽힌다. 회의 중 과금
+              (페르소나·웹 검색)은 서버가 준 kind 목록(actual_kinds)을 그대로 돈다 —
+              화면이 kind 를 하나씩 적으면 새 과금 경로를 조용히 빠뜨린다(전례 있음). */}
+          {costOpen && cost && (
+            <div className="mt-2 max-w-sm rounded-lg border border-emerald-100 bg-emerald-50/60 px-3 py-2 text-xs text-emerald-900 space-y-1">
+              <div className="flex justify-between gap-4"><span>음성 인식(STT) — {cost.stt_model}</span><span className="font-semibold tabular-nums">${cost.stt}</span></div>
+              {!!cost.stt_revise && (
+                <div className="flex justify-between gap-4"><span>2단계 문장 보정</span><span className="font-semibold tabular-nums">${cost.stt_revise}</span></div>
+              )}
+              <div className="flex justify-between gap-4"><span>번역</span><span className="font-semibold tabular-nums">${cost.translate}</span></div>
+              <div className="flex justify-between gap-4"><span>회의록 생성</span><span className="font-semibold tabular-nums">${cost.minutes}</span></div>
+              {(cost.actual_kinds ?? []).map((k) => (
+                <div key={k} className="flex justify-between gap-4">
+                  <span>{kindLabel(k)} <span className="text-emerald-700">(실측)</span></span>
+                  <span className="font-semibold tabular-nums">${String(cost[k])}</span>
+                </div>
+              ))}
+              <div className="flex justify-between gap-4 border-t border-emerald-200 pt-1 font-bold">
+                <span>합계 (대략치)</span><span className="tabular-nums">${cost.total?.toFixed(3)}</span>
+              </div>
+            </div>
+          )}
           {/* 벤더 전환 고지 — 과거엔 폴백 사실이 노트 frontmatter 에만 남아
               업로드·배치 사용자는 자기 회의 음성이 다른 회사로 갔는지 알 수 없었다. */}
           {session.stt_fallback_used ? (

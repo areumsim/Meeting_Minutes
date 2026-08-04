@@ -89,6 +89,7 @@ export default function WikiAsk() {
       <div className={`bg-white border border-brand-100 md:border-zinc-200 rounded-2xl md:rounded-3xl shadow-sm md:shadow-xl p-5 md:p-8 ${vaultConnected === false ? "opacity-60" : ""}`}>
         <div className="flex gap-3">
           <textarea
+            aria-label="위키 질문"
             value={question}
             onChange={(e) => setQuestion(e.target.value)}
             onKeyDown={handleKeyDown}

@@ -885,6 +885,12 @@ function Stat({ label, value, tone }: { label: string; value: number; tone: stri
 function FieldRow({ field, value, onChange, packaged }: { field: Field; value: any; onChange: (v: any) => void; packaged: boolean }) {
   const [reveal, setReveal] = useState(false);
   const [picking, setPicking] = useState(false);
+  // 라벨-입력 연결. <label>이 형제로만 놓여 있어 설정 화면의 모든 입력에 접근 가능한
+  // 이름이 없었다 — 스크린리더는 "편집 가능, 빈칸"만 읽는다. 렌더러가 이 한 곳이라
+  // 여기만 고치면 설정 전체가 해결된다.
+  const inputId = React.useId();
+  const descId = React.useId();
+  const describedBy = field.desc ? descId : undefined;
   // 민감 필드 '보이기': 서버에서 실제 값을 받아 화면에만 덮어씌운다(부모 value는
   // 마스킹 그대로 유지 → 수정 안 하면 저장 시 서버가 기존 값 보존). shown!==null 이면
   // 그 값을 입력창에 표시한다. revealNote는 LAN(모바일)에서 실제값 거부됐을 때 안내.
@@ -906,13 +912,16 @@ function FieldRow({ field, value, onChange, packaged }: { field: Field; value: a
   };
 
   if (field.type === "bool") {
+    // 체크박스는 <label>이 input 을 감싸 이미 암묵 연결이다 — desc 만 연결한다.
     return (
       <label className="flex items-start justify-between gap-4 cursor-pointer">
         <span>
           <span className="text-sm font-medium text-brand-900">{field.label}</span>
-          {field.desc && <span className="block text-xs text-brand-400 mt-0.5">{field.desc}</span>}
+          {field.desc && <span id={descId} className="block text-xs text-brand-400 mt-0.5">{field.desc}</span>}
         </span>
-        <input type="checkbox" checked={!!value} onChange={(e) => onChange(e.target.checked)} className="mt-1 w-5 h-5 rounded border-brand-300 text-brand-900 focus:ring-brand-900 shrink-0" />
+        <input type="checkbox" checked={!!value} onChange={(e) => onChange(e.target.checked)}
+          aria-describedby={describedBy}
+          className="mt-1 w-5 h-5 rounded border-brand-300 text-brand-900 focus:ring-brand-900 shrink-0" />
       </label>
     );
   }
@@ -922,18 +931,21 @@ function FieldRow({ field, value, onChange, packaged }: { field: Field; value: a
     // 문자열 그대로 저장한다.
     return (
       <div className="space-y-2">
-        <label className="text-sm font-medium text-brand-900">
+        <label htmlFor={inputId} className="text-sm font-medium text-brand-900">
           {field.label}
-          {field.required && <span className="text-red-500 ml-0.5">*</span>}
+          {field.required && <span className="text-red-500 ml-0.5" aria-hidden="true">*</span>}
         </label>
         <textarea
+          id={inputId}
           value={value ?? ""}
           onChange={(e) => onChange(e.target.value)}
           placeholder={field.placeholder || ""}
           rows={5}
+          aria-required={field.required || undefined}
+          aria-describedby={describedBy}
           className="w-full px-3 py-2 bg-zinc-50 border border-zinc-200 rounded-lg outline-none focus:ring-2 focus:ring-brand-500 text-sm resize-y leading-relaxed"
         />
-        {field.desc && <p className="text-xs text-brand-400">{field.desc}</p>}
+        {field.desc && <p id={descId} className="text-xs text-brand-400">{field.desc}</p>}
       </div>
     );
   }
@@ -957,16 +969,19 @@ function FieldRow({ field, value, onChange, packaged }: { field: Field; value: a
     };
     return (
       <div className="space-y-2">
-        <label className="text-sm font-medium text-brand-900">
+        <label htmlFor={inputId} className="text-sm font-medium text-brand-900">
           {field.label}
-          {field.required && <span className="text-red-500 ml-0.5">*</span>}
+          {field.required && <span className="text-red-500 ml-0.5" aria-hidden="true">*</span>}
         </label>
         <div className="flex items-stretch gap-2">
           <textarea
+            id={inputId}
             value={text}
             onChange={(e) => onChange(e.target.value)}
             placeholder={field.placeholder || ""}
             rows={3}
+            aria-required={field.required || undefined}
+            aria-describedby={describedBy}
             className="flex-1 px-3 py-2 bg-zinc-50 border border-zinc-200 rounded-lg outline-none focus:ring-2 focus:ring-brand-500 text-sm font-mono tracking-wide resize-y"
           />
           {showPicker && (
@@ -978,19 +993,21 @@ function FieldRow({ field, value, onChange, packaged }: { field: Field; value: a
             </button>
           )}
         </div>
-        {field.desc && <p className="text-xs text-brand-400">{field.desc}</p>}
+        {field.desc && <p id={descId} className="text-xs text-brand-400">{field.desc}</p>}
       </div>
     );
   }
 
   return (
     <div className="space-y-2">
-      <label className="text-sm font-medium text-brand-900">
+      <label htmlFor={inputId} className="text-sm font-medium text-brand-900">
         {field.label}
-        {field.required && <span className="text-red-500 ml-0.5">*</span>}
+        {field.required && <span className="text-red-500 ml-0.5" aria-hidden="true">*</span>}
       </label>
       {field.type === "select" ? (
-        <select value={value ?? ""} onChange={(e) => onChange(e.target.value)} className="w-full px-3 py-2 bg-zinc-50 border border-zinc-200 rounded-lg outline-none focus:ring-2 focus:ring-brand-500 text-sm">
+        <select id={inputId} value={value ?? ""} onChange={(e) => onChange(e.target.value)}
+          aria-required={field.required || undefined} aria-describedby={describedBy}
+          className="w-full px-3 py-2 bg-zinc-50 border border-zinc-200 rounded-lg outline-none focus:ring-2 focus:ring-brand-500 text-sm">
           {(field.options || []).map((o) => {
             const val = typeof o === "string" ? o : o.value;
             const lbl = typeof o === "string" ? o : o.label;
@@ -1001,15 +1018,20 @@ function FieldRow({ field, value, onChange, packaged }: { field: Field; value: a
         <div className="flex items-stretch gap-2">
           <div className="relative flex-1">
             <input
+              id={inputId}
               type={field.type === "password" && !reveal ? "password" : field.type === "number" ? "number" : "text"}
               value={field.type === "password" && shown !== null ? shown : (value ?? "")}
               onChange={(e) => { if (shown !== null) setShown(null); setRevealNote(""); onChange(e.target.value); }}
               placeholder={field.placeholder || (field.type === "password" && looksMasked(value) ? "변경하려면 새 값 입력 (그대로 두면 기존 유지)" : "")}
+              aria-required={field.required || undefined}
+              aria-describedby={describedBy}
               className={`w-full px-3 py-2 bg-zinc-50 border border-zinc-200 rounded-lg outline-none focus:ring-2 focus:ring-brand-500 text-sm font-mono tracking-wide ${field.type === "password" ? "pr-10" : ""}`}
             />
             {field.type === "password" && (
-              <button type="button" onClick={toggleReveal} tabIndex={-1} disabled={revealBusy}
+              // tabIndex=-1 제거 — 키보드 사용자도 키를 확인하며 입력할 수 있어야 한다
+              <button type="button" onClick={toggleReveal} disabled={revealBusy}
                 className="absolute right-2 top-1/2 -translate-y-1/2 text-brand-400 hover:text-brand-700 p-1 disabled:opacity-50"
+                aria-label={reveal ? "키 숨기기" : "키 표시"} aria-pressed={reveal}
                 title={reveal ? "숨기기" : "표시"}>
                 {revealBusy ? <Loader2 size={16} className="animate-spin" /> : reveal ? <EyeOff size={16} /> : <Eye size={16} />}
               </button>
@@ -1026,7 +1048,7 @@ function FieldRow({ field, value, onChange, packaged }: { field: Field; value: a
         </div>
       )}
       {revealNote && <p className="text-xs text-amber-600">{revealNote}</p>}
-      {field.desc && <p className="text-xs text-brand-400">{field.desc}</p>}
+      {field.desc && <p id={descId} className="text-xs text-brand-400">{field.desc}</p>}
     </div>
   );
 }

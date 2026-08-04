@@ -144,6 +144,7 @@ export default function Dashboard({ onSelectSession, onNewUpload, onNewRecord }:
             <Search size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-brand-400" />
             <input
               type="text"
+              aria-label="세션 검색"
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder="세션 검색..."

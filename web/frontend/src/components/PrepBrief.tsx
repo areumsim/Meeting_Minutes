@@ -62,8 +62,9 @@ export default function PrepBrief({ onSaved }: { onSaved?: (id: string) => void 
 
       <div className="bg-white border border-zinc-200 rounded-2xl shadow-sm p-4 md:p-5 space-y-3">
         <div className="space-y-1.5">
-          <label className="text-xs font-bold text-zinc-400 uppercase tracking-widest">회의 제목</label>
+          <label htmlFor="prep-title" className="text-xs font-bold text-zinc-400 uppercase tracking-widest">회의 제목</label>
           <input
+                id="prep-title"
             type="text"
             value={title}
             onChange={(e) => setTitle(e.target.value)}
@@ -76,8 +77,9 @@ export default function PrepBrief({ onSaved }: { onSaved?: (id: string) => void 
         </div>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           <div className="space-y-1.5">
-            <label className="text-xs font-bold text-zinc-400 uppercase tracking-widest">회의 날짜 (선택)</label>
+            <label htmlFor="prep-date" className="text-xs font-bold text-zinc-400 uppercase tracking-widest">회의 날짜 (선택)</label>
             <input
+                id="prep-date"
               type="date"
               value={date}
               onChange={(e) => setDate(e.target.value)}
@@ -85,8 +87,9 @@ export default function PrepBrief({ onSaved }: { onSaved?: (id: string) => void 
             />
           </div>
           <div className="space-y-1.5">
-            <label className="text-xs font-bold text-zinc-400 uppercase tracking-widest">참석자 (선택)</label>
+            <label htmlFor="prep-attendees" className="text-xs font-bold text-zinc-400 uppercase tracking-widest">참석자 (선택)</label>
             <input
+                id="prep-attendees"
               type="text"
               value={attendees}
               onChange={(e) => setAttendees(e.target.value)}
@@ -96,8 +99,9 @@ export default function PrepBrief({ onSaved }: { onSaved?: (id: string) => void 
           </div>
         </div>
         <div className="space-y-1.5">
-          <label className="text-xs font-bold text-zinc-400 uppercase tracking-widest">주제 / 키워드 (선택)</label>
+          <label htmlFor="prep-topic" className="text-xs font-bold text-zinc-400 uppercase tracking-widest">주제 / 키워드 (선택)</label>
           <input
+                id="prep-topic"
             type="text"
             value={topic}
             onChange={(e) => setTopic(e.target.value)}
@@ -107,8 +111,9 @@ export default function PrepBrief({ onSaved }: { onSaved?: (id: string) => void 
           />
         </div>
         <div className="space-y-1.5">
-          <label className="text-xs font-bold text-zinc-400 uppercase tracking-widest">추가 노트 / 맥락 (선택)</label>
+          <label htmlFor="prep-notes" className="text-xs font-bold text-zinc-400 uppercase tracking-widest">추가 노트 / 맥락 (선택)</label>
           <textarea
+                id="prep-notes"
             value={notes}
             onChange={(e) => setNotes(e.target.value)}
             placeholder="배경 정보, 확인할 안건, 관련 키워드 등을 자유롭게 적으면 관련 노트 검색·브리핑에 반영됩니다."

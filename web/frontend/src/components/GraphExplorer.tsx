@@ -155,6 +155,7 @@ export default function GraphExplorer({ initialQuery = "" }: { initialQuery?: st
         <div className="relative flex-1">
           <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-brand-400" />
           <input
+            aria-label="지식그래프 노드 검색"
             value={q}
             onChange={(e) => setQ(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && runSearch()}

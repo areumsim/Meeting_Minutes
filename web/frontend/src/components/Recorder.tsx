@@ -119,6 +119,7 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
   const [volume, setVolume] = useState(0);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [wsStatus, setWsStatus] = useState<string>("");
+  const [costOpen, setCostOpen] = useState(false);   // 러닝 미터 내역 펼침(터치·키보드 대응)
   // WebSocket 실시간 전사가 안 돼 HTTP 청크 방식으로 자동 전환됐는지 여부.
   // (에러가 아니라 정상 폴백이므로 사용자에게 안내로만 노출한다.)
   const [httpFallback, setHttpFallback] = useState(false);
@@ -1379,25 +1380,15 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
                 </div>
               </div>
               {costRates && (isRecording || status === "generating" || status === "completed") && (
-                <span
-                  className="text-[11px] text-zinc-400 mt-1 font-mono tabular-nums"
-                  title={
-                    // 2단계 보정 전사가 켜져 있으면 STT 과금이 두 번 난다. 과거에는
-                    // 1차 단가만 곱해 실제의 약 1/3을 보여줬다.
-                    (costRates.two_pass
-                      ? `1차 인식 $${costRates.stt_per_min}/분 + 문장 보정 $${costRates.revise_per_min}/분`
-                      : `음성 인식 $${costRates.stt_per_min}/분`)
-                    + (preset.translate ? ` + 번역 $${costRates.translate_per_min}/분` : "")
-                    // 회의 진행 페르소나(기본 꺼짐)를 켜면 상시 트리아지 비용이 붙는다 —
-                    // 켠 사용자에게 러닝 미터가 실제보다 적게 보이면 안 된다.
-                    + (costRates.facilitation_per_min
-                      ? ` + 회의 진행 페르소나 $${costRates.facilitation_per_min}/분`
-                      : "")
-                    // 개입(옆 카드)은 시간 비례가 아니라 건수 기반이라 분당 요율에
-                    // 넣을 수 없다 — 실제로 뜬 카드의 금액만 더한다(서버 계산값).
-                    + (facCostUsd ? ` + 개입 ${facSeenIdsRef.current.size}건 $${facCostUsd.toFixed(4)}` : "")
-                    + " + (완료 시) 회의록 생성비. 대략치입니다."
-                  }
+                // 내역이 title 툴팁에만 있으면 터치(iOS)·키보드에서는 금액의 구성을
+                // 확인할 수 없다 — 버튼으로 만들어 누르면 헤더 아래 한 줄로 펼친다.
+                <button
+                  type="button"
+                  onClick={() => setCostOpen((v) => !v)}
+                  aria-expanded={costOpen}
+                  aria-label="비용 내역 보기"
+                  className="text-[11px] text-zinc-400 hover:text-zinc-200 mt-1 font-mono tabular-nums underline decoration-dotted decoration-zinc-600 underline-offset-2 transition-colors"
+                  title="누르면 항목별 내역이 열립니다"
                 >
                   💵 ~${(
                     (duration / 60) * (
@@ -1410,11 +1401,33 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
                     + facCostUsd
                   ).toFixed(3)}
                   {costRates.two_pass && <span className="text-zinc-500"> (2패스)</span>}
-                </span>
+                </button>
               )}
             </div>
           </div>
         </div>
+
+        {/* 비용 내역 — title 툴팁의 내용을 터치·키보드에서도 볼 수 있는 자리.
+            헤더와 같은 어두운 톤의 얇은 줄로 붙인다(전사 본문을 밀지 않는 규격).
+            2단계 보정이 켜져 있으면 STT 과금이 두 번 난다 — 빼고 적으면 항목 합이
+            금액과 안 맞아 "계산이 틀렸다"로 읽힌다. */}
+        {costOpen && costRates && (isRecording || status === "generating" || status === "completed") && (
+          <div className="bg-zinc-800 text-zinc-300 text-[11px] px-4 md:px-5 py-1.5 shrink-0 flex flex-wrap items-center gap-x-4 gap-y-0.5 font-mono tabular-nums">
+            <span>1차 인식 ${costRates.stt_per_min}/분</span>
+            {costRates.two_pass && <span>+ 문장 보정 ${costRates.revise_per_min}/분</span>}
+            {preset.translate && <span>+ 번역 ${costRates.translate_per_min}/분</span>}
+            {!!costRates.facilitation_per_min && (
+              <span>+ 회의 진행 페르소나 ${costRates.facilitation_per_min}/분</span>
+            )}
+            {/* 개입(옆 카드)은 시간 비례가 아니라 건수 기반 — 실제로 뜬 카드의
+                금액만 더한다(서버 계산값). */}
+            {!!facCostUsd && (
+              <span>+ 개입 {facSeenIdsRef.current.size}건 ${facCostUsd.toFixed(4)}</span>
+            )}
+            <span>+ 완료 시 회의록 생성 ${Number(costRates.minutes_flat ?? 0).toFixed(3)}</span>
+            <span className="text-zinc-500">· 대략치</span>
+          </div>
+        )}
 
         {/* HTTP 청크 모드 안내 — 얇은 한 줄(설정상 기본값이거나 WS 폴백 모두 포함). 과거엔
             헤더에 큰 배너로 떠서 제일 먼저 화면을 채웠다. */}
@@ -1936,9 +1949,13 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
                   exit={{ opacity: 0, scale: 0.9 }}
                   className="flex flex-col items-center gap-8"
                 >
+                  {/* 주 동작 버튼 — 아이콘뿐이라 접근 가능한 이름이 없었다(정지·일시정지는
+                      고쳤는데 정작 가장 먼저 누르는 이 버튼만 빠져 있었다). */}
                   <button
                     onClick={startRecording}
                     disabled={status === "connecting"}
+                    aria-label={status === "connecting" ? "연결 중" : "녹음 시작"}
+                    title="녹음 시작"
                     className="w-32 h-32 bg-zinc-900 text-white rounded-full flex items-center justify-center hover:bg-zinc-800 transition-all shadow-2xl hover:scale-105 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed group"
                   >
                     {status === "connecting" ? (

@@ -63,8 +63,9 @@ export default function TextInput({ onComplete }: { onComplete: (id: string) => 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
           <div className="lg:col-span-2 space-y-3 flex flex-col">
             <div className="space-y-1.5">
-              <label className="text-xs font-bold text-zinc-400 uppercase tracking-widest">제목</label>
+              <label htmlFor="text-title" className="text-xs font-bold text-zinc-400 uppercase tracking-widest">제목</label>
               <input
+                id="text-title"
                 type="text"
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
@@ -73,8 +74,9 @@ export default function TextInput({ onComplete }: { onComplete: (id: string) => 
               />
             </div>
             <div className="space-y-1.5">
-              <label className="text-xs font-bold text-zinc-400 uppercase tracking-widest">주제 / 맥락</label>
+              <label htmlFor="text-topic" className="text-xs font-bold text-zinc-400 uppercase tracking-widest">주제 / 맥락</label>
               <input
+                id="text-topic"
                 type="text"
                 value={topic}
                 onChange={(e) => setTopic(e.target.value)}
@@ -84,7 +86,7 @@ export default function TextInput({ onComplete }: { onComplete: (id: string) => 
             </div>
             <div className="space-y-1.5 flex-1 flex flex-col">
               <div className="flex items-center justify-between">
-                <label className="text-xs font-bold text-zinc-400 uppercase tracking-widest">본문</label>
+                <label htmlFor="text-body" className="text-xs font-bold text-zinc-400 uppercase tracking-widest">본문</label>
                 <button
                   onClick={handlePaste}
                   className="flex items-center gap-1.5 text-xs font-bold text-brand-600 hover:text-brand-800 bg-brand-50 hover:bg-brand-100 px-3 py-1.5 rounded-lg transition-colors border border-brand-100"
@@ -93,6 +95,7 @@ export default function TextInput({ onComplete }: { onComplete: (id: string) => 
                 </button>
               </div>
               <textarea
+                id="text-body"
                 value={text}
                 onChange={(e) => setText(e.target.value)}
                 placeholder="회의 메모, 전사 텍스트 등을 여기에 붙여넣으세요..."

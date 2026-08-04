@@ -25,7 +25,7 @@ Obsidian 기반 **회의록 자동화 + LLM Wiki 지식순환** 시스템. 오�
 pip install -e .                       # 개발 설치
 python run_meeting.py <cmd> [args]     # CLI (run_meeting.bat 도 동일)
 webUI_실행.bat                          # 웹 UI 로컬 실행 (데이터 = 리포 루트)
-python -m pytest                       # 테스트 (2026-08-03: 905 collected, 1 skipped) ← 수치 정본
+python -m pytest                       # 테스트 (2026-08-04: 961 passed, 1 skipped) ← 수치 정본
 python run_meeting.py reindex          # 위키/그래프 인덱스 재빌드
 ```
 
@@ -82,12 +82,33 @@ python run_meeting.py reindex          # 위키/그래프 인덱스 재빌드
     `update_session_status`는 덮어쓰기라 부적합), 세션이 없으면 `spend_guard.record()`.
     `ingestion_pipeline`은 `web.backend.database`를 import하지 않아 **DB 세션이 안 생긴다** —
     그래서 워처 과금이 월 합계에서 영구히 안 보였다. 세션 없는 경로는 반드시 후자를 쓴다.
+  - **한 과금을 두 곳에 적지 않는다.** `usage_log.month_to_date_spend()`는 `sessions` 합계와
+    `usage_log` 합계를 **더한다**. 그래서 회의 중 도는 경로(`facilitation` 트리아지,
+    `web_research` 웹 보완)는 세션이 있어도 `record()`만 쓰고 `cost_estimate`에는 넣지
+    않는다 — 넣으면 월 합계가 두 번 센다. 대신 `note`에 세션 키를
+    `spend_guard.session_note()` 규약으로 남기고, 회의별 금액은 `usage_log.session_spend()`
+    로 되찾아 화면에 **실측값**으로 보여준다. 같은 이유로 `estimate_session_cost(facilitation=)`
+    는 **사전 추정 경로(러닝 미터)에서만** 켠다 — finalize 기록 경로에서 켜면 이중 집계다.
+  - **모델 이름은 '설정값'이 아니라 '실제 과금될 모델'을 쓴다.** `llm_client.chat`의 `model`
+    인자는 GPT 전용이라 claude 계열을 고르면 `models.claude_model`이 대신 호출된다
+    (`facilitation.effective_triage_model()`이 이 해석의 단일 소스). haiku 를 골랐는데
+    opus 로 불리면서 추정은 haiku 단가였던 전례가 있다(실제의 1/12).
+  - **테스트는 사용자 실제 DB에 과금을 기록하지 않는다** — `tests/conftest.py`의 autouse
+    격리가 `usage_log` 기본 경로를 임시 DB로 돌린다. 이게 없던 동안 전체 스위트 1회당 가짜
+    워처 지출이 개발 DB에 쌓여(발견 시 361행 ≈ $112.5) **한도 판정을 왜곡**했다.
 - **경로는 CWD 가 아니라 데이터 베이스 기준으로 해석한다.** 두 웹 런처가 시작 시
   데이터 폴더로 `os.chdir` 하므로(`run_ui_exe.setup_paths`), DB·설정에 담긴 **상대 경로를
   CWD 로 풀면 엔트리포인트에 따라 다른 곳을 가리킨다.** `api/batch.py` 는
   `app_paths.get_output_dir()`, `web/backend/trash.py` 는 `_resolve()` 로 같은 규칙을 쓴다 —
   실제로 갈라져서, 완전 삭제가 폴더가 있는데도 "없다"고 판정해 **고아 폴더를 남기면서
   성공을 보고**했다(2026-08-03 포터블 실기 검증에서 발견).
+- **세션 사이드카 테이블은 완전 삭제에서 함께 지운다.** `purge_session()`이 `segments`·
+  `documents`·`related_notes`·`facilitation_log`·`facilitation_triage`를 지운다. 뒤의 두 개는
+  core(`wiki_core.facilitation`)가 같은 sqlite 파일에 만드는 테이블이라 이 목록에서 빠져
+  있었는데, `span` 컬럼에 **발화 원문 인용(≤500자)**이 들어간다 — 회의를 완전 삭제했는데
+  회의 내용이 DB에 남았다. 새 사이드카를 만들면 이 목록에 추가한다(core 쪽은
+  `delete_session_observations()`처럼 정리 함수를 노출하고, purge 는 **트랜잭션을 닫은 뒤**
+  호출한다 — 별도 커넥션이라 트랜잭션 안에서 부르면 SQLITE_BUSY 로 30초 매달린다).
 - **삭제는 두 단계다.** `DELETE /api/sessions/{id}` = 휴지통(soft delete, `deleted_at` 만
   세우고 전사·문서·관련노트는 남긴다), `.../purge` = 완전 삭제. purge 는 **폴더를 OS
   휴지통으로 옮긴 뒤에** DB 행을 지운다 — 순서를 바꾸면 이동 실패 시 고아 폴더가 남는다.

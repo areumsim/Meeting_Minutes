@@ -46,18 +46,10 @@ def _resolve_db_path(db_path: Optional[Union[str, Path]] = None) -> Optional[Pat
 
 
 def _connect(db_path: Optional[Union[str, Path]] = None) -> Optional[sqlite3.Connection]:
-    p = _resolve_db_path(db_path)
-    if p is None:
-        return None
-    try:
-        p.parent.mkdir(parents=True, exist_ok=True)
-        # timeout: 실시간 finalize 스레드·REST 조회와 같은 파일을 공유한다
-        # (web/backend/database.py 와 같은 값).
-        c = sqlite3.connect(str(p), check_same_thread=False, timeout=30.0)
-        c.execute("PRAGMA journal_mode=WAL")
-        return c
-    except sqlite3.Error:
-        return None
+    """접속 정책(WAL·timeout·실패 시 None)은 common/sqlite_util 하나만 쓴다 —
+    facilitation.py 에 같은 코드가 복제돼 있던 자리다."""
+    from meeting_minutes_app.common import sqlite_util
+    return sqlite_util.connect(_resolve_db_path(db_path))
 
 
 def record(kind: str, model: str = "", units: float = 0.0, unit_kind: str = "",

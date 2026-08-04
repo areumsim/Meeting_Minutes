@@ -8,8 +8,9 @@ import {
   createRealtimeWS, backendAvailable, createBackendRealtimeWS, mirrorServerSession,
   getCostRates, getConfig, type CostRates,
 } from "../lib/api";
-import { MODE_PRESETS, type RealtimeSegment } from "../lib/types";
+import { MODE_PRESETS, type Facilitation, type FacilitationStatus, type RealtimeSegment } from "../lib/types";
 import ModeSelector from "./ModeSelector";
+import PersonaLane from "./PersonaLane";
 import { KeepAwake } from '@capacitor-community/keep-awake';
 import { Haptics, ImpactStyle, NotificationType } from '@capacitor/haptics';
 
@@ -129,6 +130,25 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
   const [wikiExpanded, setWikiExpanded] = useState(false);
   // 서버 경유 녹음인지 (관련 노트 바 표시 조건 — 단독 OpenAI 경로는 vault 검색 없음)
   const [backendMode, setBackendMode] = useState(false);
+  // 회의 진행 페르소나(facilitation) — 기본 꺼짐이라 서버가 보내지 않으면 레인 자체가
+  // 렌더되지 않는다. 카드는 최근 것이 앞(가로 스크롤 왼쪽)에 오도록 앞에 붙인다.
+  const [interventions, setInterventions] = useState<Facilitation[]>([]);
+  const [facStatus, setFacStatus] = useState<FacilitationStatus | null>(null);
+  const [facPending, setFacPending] = useState(0);
+  // '이번 회의 끔' — 세션 중 끄면 그 세션에서는 다시 켜지 않는다(PRD §4·§19.4).
+  // ref 를 함께 두는 이유: WS onmessage 는 렌더와 무관하게 도는 클로저라 state 만으로는
+  // 끈 직후 도착한 카드를 놓친다(관련 노트 바의 backendModeRef 와 같은 이유).
+  const [facMuted, setFacMuted] = useState(false);
+  const facMutedRef = useRef(false);
+  // 이번 회의에서 실제 발생한 개입 비용 합계(USD) — 카드를 닫아도 줄지 않는다.
+  // 개입은 시간 비례가 아니라 건수 기반이어서 분당 요율로는 표현할 수 없다(서버가
+  // 각 이벤트에 costUsd 를 실어 보낸다).
+  const [facCostUsd, setFacCostUsd] = useState(0);
+  // 이미 받은 개입 id — 비용 중복 합산 방지(카드를 닫아도 여기서는 지우지 않는다).
+  const facSeenIdsRef = useRef<Set<string>>(new Set());
+  // 발화 점프로 강조한 전사 줄(start 초). 잠깐 테두리를 주고 지운다.
+  const [flashStart, setFlashStart] = useState<number | null>(null);
+  const flashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [costRates, setCostRates] = useState<CostRates | null>(null);
   // 이번 녹음에 쓸 STT 모델(설정 기본값이 자동 채워지며, 이 값만 바꿔도 설정은 안 바뀜)
   const [sttModel, setSttModel] = useState<string>("");
@@ -225,6 +245,78 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
     atBottomRef.current = true;
     setUnseenCount(0);
     setFollowLatest(true);
+  };
+
+  // ── 회의 진행 페르소나 상호작용 (PRD §19.4) ────────────────────────────
+  // 공통 규칙: 어느 동작도 새 LLM 호출을 만들지 않는다. 회의 중 버튼 한 번이 과금을
+  // 일으키면 사용자가 비용을 예측할 수 없다.
+
+  /** 발화 점프 — **전사 패널 안에서만** 스크롤한다(녹음 중 외부 이동 금지 정책). */
+  const jumpToSpan = (span: { t0: number; t1: number }) => {
+    const panel = transcriptPanelRef.current;
+    if (!panel) return;
+    // 근거 구간 시작 시각 이하의 마지막 줄 = 그 발화가 있는 줄. 전사 줄은 화면에
+    // 최근 MAX_VISIBLE_LINES 개만 그리므로 밀려난 구간은 못 찾을 수 있다.
+    const rows = Array.from(
+      panel.querySelectorAll<HTMLElement>("[data-seg-start]"));
+    let target: HTMLElement | null = null;
+    for (const el of rows) {
+      const t = Number(el.dataset.segStart);
+      if (Number.isFinite(t) && t >= 0 && t <= span.t0 + 0.5) target = el;
+    }
+    if (!target) {
+      setFacStatus({
+        kind: "jump",
+        message: "그 발화는 전사 화면에서 밀려났습니다 — 종료 후 전사에서 볼 수 있습니다",
+      });
+      return;
+    }
+    // scrollIntoView 는 페이지까지 함께 스크롤해 화면이 튄다(위 자동 스크롤 주석과
+    // 같은 이유) — 패널 좌표계로 직접 계산한다.
+    panel.scrollTo({
+      top: Math.max(0, target.offsetTop - panel.offsetTop - 24),
+      behavior: "smooth",
+    });
+    // 사용자가 과거를 보고 있는 동안 새 전사가 오면 다시 아래로 끌려간다 → 따라가기를
+    // 끊고, 돌아갈 [최신 전사로] 버튼을 띄운다.
+    atBottomRef.current = false;
+    setFollowLatest(false);
+    setFlashStart(Number(target.dataset.segStart));
+    if (flashTimerRef.current) clearTimeout(flashTimerRef.current);
+    flashTimerRef.current = setTimeout(() => setFlashStart(null), 2500);
+  };
+  useEffect(() => () => {
+    if (flashTimerRef.current) clearTimeout(flashTimerRef.current);
+  }, []);
+
+  /** [지금 점검] — 서버가 모아둔 참견도 2 개입을 방출한다(추가 과금 없음). */
+  const facCheckNow = () => {
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    try { ws.send(JSON.stringify({ type: "facilitation_check" })); } catch (e) {}
+  };
+
+  /** 이번 회의 끔 — 설정은 그대로 두고 이 세션의 표시만 멈춘다(§19.4 업계 교훈). */
+  const facMute = () => {
+    facMutedRef.current = true;
+    setFacMuted(true);
+    setInterventions([]);
+    setFacPending(0);
+    setFacStatus(null);
+  };
+
+  /** 확인(✓)·닫기(✕) — 카드를 화면에서 뺀다. 비용 합계는 줄지 않는다(이미 발생분). */
+  const facRemove = (id: string) =>
+    setInterventions(prev => prev.filter(p => p.id !== id));
+
+  const resetFacilitation = () => {
+    facMutedRef.current = false;
+    facSeenIdsRef.current = new Set();
+    setFacMuted(false);
+    setInterventions([]);
+    setFacStatus(null);
+    setFacPending(0);
+    setFacCostUsd(0);
   };
 
   // 스크롤 위치로 '최신 따라가기' 상태 갱신 — 사용자가 위를 읽는 동안엔 배지를 띄운다.
@@ -561,6 +653,29 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
           }
           break;
 
+        case "facilitation": {
+          // 페르소나 개입 1건. 사용자가 이번 회의에 끄면 그 뒤로는 받지 않는다.
+          if (facMutedRef.current) break;
+          const item = msg as Facilitation;
+          if (!item.id) break;
+          // dedup 은 ref 로 한다 — setState 업데이터 안에서 판정하면 StrictMode 가
+          // 업데이터를 두 번 돌릴 때 비용이 두 번 더해진다.
+          if (facSeenIdsRef.current.has(item.id)) break;
+          facSeenIdsRef.current.add(item.id);
+          setInterventions(prev => [item, ...prev].slice(0, 30));  // 최신 우선, 상한 30
+          if (item.costUsd) setFacCostUsd(c => c + item.costUsd!);
+          // 대기(소극) 항목이 방출되면 배지를 줄인다
+          setFacPending(p => (item.level < 3 && p > 0 ? p - 1 : p));
+          break;
+        }
+
+        case "facilitation_status": {
+          const st = msg as FacilitationStatus;
+          if (st.kind === "pending") setFacPending(st.pending || 0);
+          else setFacStatus(st);
+          break;
+        }
+
         case "status":
         case "generating":
           setWsStatus(msg.message || "");
@@ -679,6 +794,7 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
       setRelatedNotes([]);
       setWikiStatus(null);
       setWikiExpanded(false);
+      resetFacilitation();
       setBackendMode(false);
       setDuration(0);
       setHttpFallback(false);
@@ -1123,6 +1239,7 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
     setRelatedNotes([]);
     setWikiStatus(null);
     setWikiExpanded(false);
+    resetFacilitation();
     setDuration(0);
     setSessionId(null);
     setWsStatus("");
@@ -1144,6 +1261,7 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
     setRelatedNotes([]);
     setWikiStatus(null);
     setWikiExpanded(false);
+    resetFacilitation();
     setDuration(0);
     setSessionId(null);
     setWsStatus("");
@@ -1224,6 +1342,9 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
                     + (costRates.facilitation_per_min
                       ? ` + 회의 진행 페르소나 $${costRates.facilitation_per_min}/분`
                       : "")
+                    // 개입(옆 카드)은 시간 비례가 아니라 건수 기반이라 분당 요율에
+                    // 넣을 수 없다 — 실제로 뜬 카드의 금액만 더한다(서버 계산값).
+                    + (facCostUsd ? ` + 개입 ${facSeenIdsRef.current.size}건 $${facCostUsd.toFixed(4)}` : "")
                     + " + (완료 시) 회의록 생성비. 대략치입니다."
                   }
                 >
@@ -1235,6 +1356,7 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
                       + (costRates.facilitation_per_min ?? 0)
                     )
                     + ((status === "generating" || status === "completed") ? costRates.minutes_flat : 0)
+                    + facCostUsd
                   ).toFixed(3)}
                   {costRates.two_pass && <span className="text-zinc-500"> (2패스)</span>}
                 </span>
@@ -1351,6 +1473,21 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
             )}
           </div>
         )}
+
+        {/* 페르소나 레인 — 관련 노트 바 바로 아래(PRD §19.2). 기능이 꺼져 있으면
+            서버가 아무 이벤트도 보내지 않고, 레인은 내용이 없으면 스스로 렌더를
+            건너뛴다(빈 바가 전사 영역을 잠식하지 않게). */}
+        <PersonaLane
+          items={interventions}
+          status={facStatus}
+          pending={facPending}
+          muted={facMuted}
+          onCheckNow={facCheckNow}
+          onMute={facMute}
+          onJump={jumpToSpan}
+          onAck={facRemove}
+          onDismiss={facRemove}
+        />
 
         <div className="flex-1 flex flex-col p-4 md:p-10">
           {/* Settings Toggle */}
@@ -1591,7 +1728,12 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
                             // 안정 id 기반 key — 과거 시간+내용 키는 스트리밍으로 텍스트가
                             // 변할 때마다 행이 리마운트돼 깜빡였다.
                             key={item.id ?? `${item.start.toFixed(2)}-${item.text.slice(0, 16)}`}
-                            className="flex flex-col w-full"
+                            // 페르소나 카드의 [⟲ 발화 보기]가 이 좌표로 줄을 찾는다.
+                            data-seg-start={item.start}
+                            className={`flex flex-col w-full ${
+                              flashStart !== null && item.start === flashStart
+                                ? "ring-2 ring-slate-300 rounded-lg -mx-1 px-1"
+                                : ""}`}
                           >
                             {item.speaker && (
                               <div className="flex items-center gap-2 mb-1">

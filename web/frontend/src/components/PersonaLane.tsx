@@ -1,0 +1,93 @@
+import React from "react";
+import { Users } from "lucide-react";
+import PersonaCard from "./PersonaCard";
+import type { Facilitation, FacilitationStatus } from "../lib/types";
+
+/**
+ * 페르소나 레인 — 관련 노트 스트립 바로 아래 한 줄 (PRD §19.2).
+ *
+ * 관련 노트 바(emerald)와 **같은 시각 언어**를 쓰고 색만 다르게 한다(slate) —
+ * 이미 작동하는 채널 위에 카드 한 장을 더 얹는 구조라 신규 UI 위험이 거의 없다.
+ *
+ * 규칙:
+ *  - 개입이 0건이고 알릴 상태도 없으면 **렌더하지 않는다**(빈 바가 공간을 먹지 않게).
+ *  - 소리·팝업·포커스 이동 없음. 참견도 4·5(알림음·음성)는 M3 이고 코드에 없다.
+ *  - 끄는 버튼은 **항상 보인다**(§19.4 — 업계 교훈: 끌 수 없는 자동 개입은 반발을 산다).
+ *  - 한도·예산으로 멈췄으면 그 사유를 같은 줄에 회색 칩으로 남긴다(§19.5).
+ */
+export default function PersonaLane({
+  items, status, pending, muted, onCheckNow, onMute, onJump, onAck, onDismiss,
+}: {
+  items: Facilitation[];
+  status?: FacilitationStatus | null;
+  pending?: number;
+  muted?: boolean;
+  onCheckNow?: () => void;
+  onMute?: () => void;
+  onJump?: (span: { t0: number; t1: number }) => void;
+  onAck?: (id: string) => void;
+  onDismiss?: (id: string) => void;
+}) {
+  const notice = status && status.kind !== "pending" ? status.message : "";
+  if (!items.length && !notice && !pending && !muted) return null;
+
+  return (
+    <div className="bg-slate-50 border-b border-slate-200 shrink-0">
+      <div className="px-4 md:px-8 py-1.5 flex items-start gap-2 overflow-x-auto">
+        <span className="flex items-center gap-1.5 text-[10px] font-black uppercase tracking-widest text-slate-500 shrink-0 mt-1">
+          <Users className="w-3.5 h-3.5" /> 페르소나
+        </span>
+
+        {muted ? (
+          <span className="shrink-0 mt-1 text-[11px] bg-white border border-zinc-200 text-zinc-500 px-2 py-0.5 rounded-full">
+            이번 회의에는 표시하지 않습니다
+          </span>
+        ) : (
+          <>
+            {items.map((it) => (
+              <PersonaCard
+                key={it.id}
+                item={it}
+                onJump={onJump}
+                onAck={onAck}
+                onDismiss={onDismiss}
+              />
+            ))}
+
+            {notice && (
+              <span
+                className="shrink-0 mt-1 text-[11px] bg-white border border-zinc-200 text-zinc-500 px-2 py-0.5 rounded-full whitespace-nowrap max-w-[60vw] truncate"
+                title={notice}
+              >
+                {notice}
+              </span>
+            )}
+
+            {!!pending && onCheckNow && (
+              <button
+                type="button"
+                onClick={onCheckNow}
+                className="shrink-0 mt-1 text-[11px] font-semibold bg-white border border-slate-300 text-slate-700 px-2 py-0.5 rounded-full hover:border-slate-500 transition-colors whitespace-nowrap"
+                title="모아둔 점검 항목을 지금 보여줍니다(추가 비용 없음)"
+              >
+                지금 점검 {pending}
+              </button>
+            )}
+          </>
+        )}
+
+        <div className="flex-1" />
+        {onMute && !muted && (
+          <button
+            type="button"
+            onClick={onMute}
+            className="shrink-0 mt-1 text-[11px] text-zinc-400 hover:text-zinc-700 font-medium whitespace-nowrap"
+            title="이번 회의에서는 페르소나 카드를 더 띄우지 않습니다(설정은 그대로)"
+          >
+            이번 회의 끔
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}

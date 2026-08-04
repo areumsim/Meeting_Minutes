@@ -1,14 +1,19 @@
-"""회의 진행 페르소나(M0 관찰모드) 회귀 테스트.
+"""회의 진행 페르소나 회귀 테스트 (M1 — 관찰 + 옆 카드 개입).
 
-PRD(docs/prd/PRD_회의진행_페르소나에이전트_20260803.md) §14 수용 기준 중 M0 몫을
-고정한다. 이 리포에서 반복적으로 깨진 지점(§10 — 실시간·자동 경로가 비용 계량을
-통째로 우회)이 이 기능의 최대 리스크라, 다음 네 가지를 회귀로 못박는다:
+PRD(docs/prd/PRD_회의진행_페르소나에이전트_20260803.md) §14 수용 기준을 고정한다.
+이 리포에서 반복적으로 깨진 지점(§10 — 실시간·자동 경로가 비용 계량을 통째로 우회)이
+이 기능의 최대 리스크라, 비용 관련 계약을 우선해 못박는다:
 
   1. 기본값(facilitation.enabled=false)에서 LLM 호출이 **한 번도** 없다.
   2. 참견도 0(금지) 페르소나는 트리아지 입력에 등장하지 않는다(진짜 0 비용).
   3. 트리아지 1건 후 usage_log.month_to_date_by_kind()['facilitation'] 이 증가한다
      (무계량 회귀 방지 — 워처 과금이 월 합계에서 영구히 안 보였던 그 결함의 재발 방지).
   4. 참견도 1(관찰)에서 화면 채널(on_intervention) 호출 0건 — 판정은 DB 로그에만.
+
+M1 이 추가한 축은 **"돈을 쓰기 전에 이 산출물을 볼 사람이 있는가"** 다. 같은 판정이
+네 곳에 있고(채널 없음·mute·예산 소진·참견도 미달) 하나라도 빠지면 아무도 못 보는
+카드에 Tier 1 비용이 나간다 — TestDisplayChannelM1 / TestMuteStopsSpending /
+TestReplayPastMeetings 가 그 네 게이트를 각각 고정한다.
 """
 
 import json
@@ -1886,3 +1891,46 @@ class TestRegistryData:
         """화자 비귀속·판정 문구 금지는 전 페르소나 공통 제약이다(§8)."""
         for p in personas.all_personas():
             assert personas.COMMON_RULES in p.system_prompt
+
+    def _example_personas(self):
+        import json as _json
+        from pathlib import Path
+        cfg = _json.loads(
+            Path("config.example.json").read_text(encoding="utf-8"))
+        return cfg["facilitation"]["personas"]
+
+    def test_example_config_seeds_every_persona(self):
+        """시드가 레지스트리와 갈라지면 '설정에 없는 페르소나'가 생긴다.
+
+        그러면 그 페르소나만 OBSERVE_LEVEL 폴백으로 떨어지는데, 설정 화면은
+        configuredLevel 로 Persona.default_level 을 보여줘 화면과 실효값이 어긋난다.
+        """
+        assert set(self._example_personas()) == set(personas.PERSONAS)
+
+    def test_example_config_never_seeds_above_hard_cap(self):
+        """위험 페르소나(팩트체커·비판자)를 시드로 화면에 열 수 없다.
+
+        코드가 persona_level 에서 클램프하므로 실동작은 안전하지만, 시드가 상한을
+        넘으면 설정 화면이 "3으로 적혀 있는데 적용값은 2" 를 계속 띄우게 되고
+        사용자는 버그로 읽는다. 시드 자체를 상한 안에 둔다.
+        """
+        for key, row in self._example_personas().items():
+            cap = personas.PERSONAS[key].hard_cap
+            if cap is not None:
+                assert int(row["level"]) <= cap, f"{key} 시드가 hard_cap 을 넘는다"
+
+    def test_example_config_seed_matches_documented_split(self):
+        """personas.py 모듈 주석이 서술한 시드 구성을 값으로 고정한다.
+
+        주석이 "전원 1(관찰)로 시드한다"라고 적혀 있던 동안 실제 시드는 5종이 3
+        (자동 표시)이었다 — 그 문장을 믿고 "켜도 화면에는 안 뜬다"고 판단하면
+        비용·동작을 정반대로 예상하게 된다. 문구 대신 값을 검증한다.
+        """
+        seeded = {k: int(v["level"]) for k, v in self._example_personas().items()}
+        display = {k for k, lvl in seeded.items()
+                   if lvl >= facilitation.DISPLAY_LEVEL}
+        assert display == {"facilitator", "scribe", "junior", "senior",
+                           "summarizer"}
+        observe = {k for k, lvl in seeded.items() if lvl <= 1}
+        assert observe == {"domain_expert", "fact_checker", "devils_advocate",
+                           "critic"}

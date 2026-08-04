@@ -6,14 +6,20 @@ PRD(docs/prd/PRD_회의진행_페르소나에이전트_20260803.md §3·§5)의 
 여기에는 판정·비용·게이트 로직이 없다. 그건 전부 `facilitation.FacilitationOrchestrator`
 의 몫이고, 이 모듈은 그 오케스트레이터(와 M1의 생성 단계)가 읽는 정의만 담는다.
 
-두 가지 '기본 참견도'를 혼동하지 말 것:
-  - `Persona.default_level` — PRD §3 로스터의 권장 기본값(M1 화면 개방 시 참조용 데이터).
-  - config `facilitation.personas.<key>.level` — **실효값의 정본**. M0 관찰모드에서는
-    config.example.json 이 전원 1(관찰)로 시드하고, 키가 없어도 오케스트레이터가
-    1로 폴백한다(facilitation.OBSERVE_LEVEL). 화면 개입은 오탐률 실측(§15) 뒤에만 연다.
+세 가지 '기본 참견도'를 혼동하지 말 것 — 값이 서로 다르다:
+  - `Persona.default_level` — PRD §3 로스터의 권장값. **데이터일 뿐 실효값이 아니다.**
+  - `config.example.json` 의 시드 — 정상 설치의 실제 기본값. M1 기준 저위험 4종
+    (촉진자·서기·주니어·시니어) + 🧾 중간 요약이 **3(옆 카드 자동 표시)**, 위험·중위험
+    4종(팩트체커·비판자·도메인·악마의 변호인)이 **1(관찰)** 이다.
+  - `facilitation.OBSERVE_LEVEL`(=1) — config 에 키가 **없을 때만** 쓰는 폴백.
+    설정에 적히지 않은 페르소나를 화면에 열지 않기 위한 보수적 기본이다.
+실효값의 정본은 언제나 `facilitation.persona_level(key)` 다(아래 hard_cap·전역
+max_level 클램프까지 반영된 값). 이 함수를 거치지 않고 config 를 직접 읽으면
+"3으로 올렸는데 안 뜬다"가 되고, 그건 이 리포가 반복해서 없애온 갈라짐이다.
 
 `hard_cap` 은 위험 페르소나(팩트체커·비판자)의 코드상 상한이다 — 설정만으로는
-이 값을 넘는 참견도로 올릴 수 없다(PRD §4). 실측 통과 전 최대 2(소극).
+이 값을 넘는 참견도로 올릴 수 없다(PRD §4). 오탐률 실측(§15) 통과 전 최대 2(소극)
+이며, 그래서 이 둘은 M1 에서도 옆 카드로 자동 표시되지 않는다.
 """
 
 from __future__ import annotations
@@ -44,7 +50,8 @@ class Persona:
     role: str                   # 한 줄 역할 — 트리아지 프롬프트에 그대로 들어간다
     triggers: Tuple[str, ...]   # 주 트리거(트리아지 판정 힌트)
     evidence: Tuple[str, ...]   # 근거 소스: "dialog" | "vault" | "web"
-    system_prompt: str          # Tier 1 생성용(M1) — M0 관찰모드에서는 쓰지 않는다
+    system_prompt: str          # Tier 1 개입 생성용. 참견도 2 이상에서만 쓰인다
+                                # (1=관찰 후보는 판정만 기록하고 생성하지 않는다)
     default_level: int          # PRD §3 로스터 권장 기본 참견도(위 모듈 주석 참고)
     model: str                  # Tier 1 기본 모델(§5). 트리아지 모델은 별도
                                 # (facilitation.triage_model — 전 페르소나 공용 1회 호출)

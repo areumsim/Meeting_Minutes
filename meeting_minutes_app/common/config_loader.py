@@ -222,11 +222,16 @@ def save(cfg: dict, *, force: bool = False) -> None:
     `force=True` 는 `init --force` 전용이다 — 손상된 config 를 **의도적으로 재작성**하는
     경로이므로 손상 상태 저장 차단(_guard_save)을 적용하면 복구 수단이 사라진다.
     """
-    global _cache
+    global _cache, _load_error
     if not force:
         _guard_save("설정 저장")
     _atomic_write(cfg)
     _cache = cfg
+    # 저장이 끝났으면 디스크의 파일은 방금 우리가 쓴 정상 JSON 이다 — 손상 표시를
+    # 남겨 두면 `init --force` 로 복구한 **같은 프로세스**에서 이어지는 저장이
+    # ConfigCorrupted 로 막힌다(recover() 는 reload() 를 거쳐 지워지는데 force 경로만
+    # 빠져 있었다). 이 값은 "지금 디스크를 읽을 수 있는가"의 캐시일 뿐이다.
+    _load_error = None
 
 
 def get(key_path: str, default: Any = None) -> Any:

@@ -1616,6 +1616,26 @@ class TestPersonaMatrixApi:
             from meeting_minutes_app.common import config_loader
             config_loader._cache = None
 
+    def test_unset_persona_does_not_look_clamped(self, tmp_path, monkeypatch):
+        """키가 없는 페르소나는 configured == level 이어야 한다.
+
+        설정 화면은 `level != configuredLevel` 일 때 "적용값 N" 경고 배지를 띄운다
+        (상한에 걸려 내려갔다는 뜻). 폴백이 persona_level 과 달랐던 동안에는
+        미설정 페르소나마다 configured=3(로스터 권장값) vs level=1(관찰 폴백) 이 돼,
+        상한에 걸리지도 않았는데 전부 경고가 떴다.
+        """
+        client, _ = self._client(tmp_path, monkeypatch, {
+            "facilitation": {"enabled": True, "max_level": 3, "personas": {}}})
+        try:
+            rows = {p["key"]: p
+                    for p in client.get("/api/facilitation/personas").json()["personas"]}
+            for key, row in rows.items():
+                assert row["configuredLevel"] == row["level"] == \
+                    facilitation.OBSERVE_LEVEL, f"{key} 가 클램프된 것처럼 보인다"
+        finally:
+            from meeting_minutes_app.common import config_loader
+            config_loader._cache = None
+
     def test_risky_persona_reports_its_hard_cap_and_clamped_level(
             self, tmp_path, monkeypatch):
         """설정으로 5 를 적어도 실효값은 hard_cap 이다 — 화면이 그 차이를 보여줄 수 있어야

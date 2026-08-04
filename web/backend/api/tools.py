@@ -387,11 +387,17 @@ def facilitation_personas():
         for key, p in pz.PERSONAS.items():
             # 설정에 적힌 값과 실제 적용값을 함께 준다 — 상한에 걸려 내려간 경우
             # 화면이 "왜 3으로 안 올라가나"를 설명할 수 있어야 한다.
-            configured = cfg.get(f"facilitation.personas.{key}.level", p.default_level)
+            #
+            # 키가 없을 때의 폴백은 **persona_level 과 같은 값**이어야 한다.
+            # p.default_level(로스터 권장값)로 두면, 설정에 키가 없는 페르소나에서
+            # configured(3) != level(1) 이 되어 화면이 "적용값 1" 경고 배지를 띄운다 —
+            # 상한에 걸린 것이 아닌데 걸린 것처럼 보인다(설정 화면 §181 분기).
+            configured = cfg.get(f"facilitation.personas.{key}.level",
+                                 fac.OBSERVE_LEVEL)
             try:
                 configured = int(configured)
             except (TypeError, ValueError):
-                configured = p.default_level
+                configured = fac.OBSERVE_LEVEL
             rows.append({
                 "key": key,
                 "label": p.label,

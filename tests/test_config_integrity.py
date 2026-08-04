@@ -78,6 +78,23 @@ class TestCorruptConfigBlocksSave:
         config_loader.save({"api": {"openai_api_key": "sk-new"}}, force=True)
         assert json.loads(cfg_file.read_text(encoding="utf-8"))["api"]["openai_api_key"] == "sk-new"
 
+    def test_force_rewrite_clears_the_corrupt_flag(self, cfg_file):
+        """복구 직후의 저장이 다시 막히면 안 된다.
+
+        손상 표시는 "지금 디스크를 읽을 수 있는가"의 캐시일 뿐인데, force 저장이
+        그것을 지우지 않아 **같은 프로세스**에서 이어지는 저장이 ConfigCorrupted 로
+        막혔다(`init --force` 뒤 set_nested 를 부르는 경로). recover() 는 reload() 를
+        거쳐 지워지는데 force 경로만 빠져 있었다."""
+        _write(cfg_file, "{{{ 깨진 파일")
+        assert config_loader.load_error() is not None
+        config_loader.save({"api": {"openai_api_key": "sk-new"}}, force=True)
+        assert config_loader.load_error() is None
+        # 복구 직후의 평범한 저장이 통과한다
+        config_loader.set_nested("models.stt", "whisper-1")
+        saved = json.loads(cfg_file.read_text(encoding="utf-8"))
+        assert saved["models"]["stt"] == "whisper-1"
+        assert saved["api"]["openai_api_key"] == "sk-new"   # 기존 값도 보존
+
     def test_missing_file_is_not_an_error(self, cfg_file):
         """파일 없음 = 첫 실행. 잃을 것이 없으므로 저장을 막지 않는다."""
         assert config_loader.load_error() is None

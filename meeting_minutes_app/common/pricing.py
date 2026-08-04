@@ -59,6 +59,25 @@ DEFAULT_LLM_TOKEN_PRICE = {"in": 2.50, "out": 10.00}  # 미지원 모델 폴백(
 LLM_COST_PER_1K_TOKENS = {"gpt-4o": 0.005, "claude": 0.003}
 
 # 회의록 1회 생성 시 대략적 토큰 사용량 (입력 컨텍스트 + 생성)
+#
+# ⚠ **이 값은 LLM 호출 1회분이고, 종료 후 파이프라인은 그보다 많이 부른다.**
+# `finalize.run_post_session` 은 LLM 을 쓰는 단계를 8개 지난다 —
+#   context · refine · minutes · actions · claim_verify · summary · publish(enrich) ·
+#   wiki_proposal
+# (일부는 내부에서 배치로 여러 번 부른다: refine 은 세그먼트를 나눠 돌고,
+#  claim_verify 는 주장 수에 비례한다.) 그런데 `estimate_session_cost` 의 `minutes`
+# 항은 `minutes_cost()` = **1회분**만 더한다.
+#
+# 즉 세션 비용 추정의 LLM 부분은 체계적으로 과소평가다. 배수를 여기에 지어 넣지
+# 않는 이유는 단계마다 입력 크기가 크게 다르고(refine 은 전사 전체, summary 는
+# 회의록만) **실측이 없기 때문**이다 — 근거 없는 상수를 넣는 것은 이 리포가 금지한
+# '실측 없는 휴리스틱'이다(docs/검색랭킹_이론과근거.md 의 1.2배 가산 전례).
+# 재교정하려면 `llm_client` 가 응답의 usage 를 누적하도록 바꿔 실사용 토큰을 모은 뒤
+# 단계별 상수를 정한다. `[미검증 — 실사용 usage 로 재교정 필요]`
+#
+# 영향 범위: 월 지출 한도(`cost.monthly_cap_usd`)가 실제보다 늦게 걸린다. STT 는
+# 분당 단가라 정확하므로, 오차는 회의록 LLM 이 비싼 모델일수록 커진다
+# (gpt-4o-mini 면 회의당 수 센트, claude-opus-4-8 이면 회의당 $1 안팎).
 MINUTES_INPUT_TOKENS  = 20_000
 MINUTES_OUTPUT_TOKENS = 3_000
 

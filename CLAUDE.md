@@ -25,7 +25,7 @@ Obsidian 기반 **회의록 자동화 + LLM Wiki 지식순환** 시스템. 오�
 pip install -e .                       # 개발 설치
 python run_meeting.py <cmd> [args]     # CLI (run_meeting.bat 도 동일)
 webUI_실행.bat                          # 웹 UI 로컬 실행 (데이터 = 리포 루트)
-python -m pytest                       # 테스트 (2026-08-04: 1038 passed, 1 skipped) ← 수치 정본
+python -m pytest                       # 테스트 (2026-08-04: 1050 passed, 1 skipped) ← 수치 정본
 cd web/frontend && npm test            # 프런트 테스트 (2026-08-04: 82 passed)
 python run_meeting.py reindex          # 위키/그래프 인덱스 재빌드
 ```
@@ -131,3 +131,17 @@ python run_meeting.py reindex          # 위키/그래프 인덱스 재빌드
   `status="queued"` 확인 대기열에 넣고, `queued`는 **터미널 상태**다(매 폴링 재판정 방지).
   승인은 `reprocess()`로 상태를 지우는 것이며, 그 뒤 한도 검사를 **다시** 지난다 —
   승인이 한도를 우회하는 뒷문이 되면 안 된다.
+- **워처의 재시도 계약**(무인 경로라 셋 다 돈과 직결된다):
+  - `processing`은 터미널이 **아니다**(크래시 후 재시도되어야 한다). 그래서 상태만으로는
+    중복 제출을 못 막는다 — 같은 프로세스 안의 중복은 `_claim()`/`_inflight` 선점이 막는다.
+    이게 없던 동안 60분짜리 파일 하나가 처리되는 내내 매 스캔마다 재제출돼 **STT가 중복
+    과금**됐다. 새 트리거(이벤트·재스캔)를 추가할 때 반드시 `_handle_file()`을 거친다.
+  - `failed`는 **유한 재시도**다(`MAX_PROCESS_ATTEMPTS`). 실패가 STT *이후* 단계에서 나면
+    재시도마다 STT를 다시 태우기 때문이다. 상한을 넘으면 `queued`(확인 대기열)로 보내
+    사람이 승인하게 한다. `_mark_processed()`는 항목을 새로 만들므로 `attempts`를
+    **이어받아야** 한다 — 안 그러면 `processing` 표시가 카운터를 지워 상한이 안 걸린다.
+  - watchdog 모드에도 **안전 재스캔**이 필요하다(`SAFETY_RESCAN_MIN_SEC`). `on_created`는
+    파일이 만들어지는 순간 와서 아직 쓰이는 중이고(`_is_stable()`=False), `on_modified`는
+    듣지 않는다 — 재스캔이 없으면 녹음기가 폴더에 직접 쓰는 파일을 영영 놓친다.
+    재스캔은 `_scan_once()`가 풀을 `with`로 열어 블로킹하므로 **별도 스레드**에서 돈다
+    (대기 루프에서 직접 부르면 처리 중에 `stop()`이 먹지 않는다).

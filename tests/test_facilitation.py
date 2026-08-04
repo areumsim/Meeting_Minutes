@@ -554,6 +554,40 @@ class TestCostIsVisibleWhereItHappens:
             config_loader._cache = None
 
 
+class TestSettingsExposeOnlyWhatWorks:
+    """켰는데 아무 일도 안 일어나는 토글을 설정 화면에 올리지 않는다(§3)."""
+
+    #: 값을 읽는 코드가 아직 없는 키 → 구현하는 마일스톤에서 이 목록에서 빼고
+    #: config_schema 에 필드를 올린다(그때 이 테스트가 그 짝을 강제한다).
+    UNIMPLEMENTED = ("max_interventions_per_session", "voice_enabled",
+                     "web_search_enabled", "web_search_interval")
+
+    def test_unimplemented_keys_are_not_in_settings_ui(self):
+        from meeting_minutes_app.common import config_schema
+        keys = {f["key"] for f in config_schema.iter_fields()
+                if f["section"] == "facilitation"}
+        for k in self.UNIMPLEMENTED:
+            assert k not in keys, (
+                f"{k} 를 설정 화면에 올렸다면 이 값을 읽는 코드가 있어야 한다")
+
+    def test_unimplemented_keys_are_still_documented_in_example(self):
+        """UI 에서 내렸다고 사라지면 안 된다 — 기본값·의미는 example 주석에 남는다."""
+        import json
+        from pathlib import Path
+        ex = json.loads(Path("config.example.json").read_text(encoding="utf-8"))
+        for k in self.UNIMPLEMENTED:
+            assert k in ex["facilitation"]
+        assert "_unimplemented_comment" in ex["facilitation"]
+
+    def test_implemented_keys_are_in_settings_ui(self):
+        """반대 방향 — 오케스트레이터가 읽는 키는 화면에 있어야 한다."""
+        from meeting_minutes_app.common import config_schema
+        keys = {f["key"] for f in config_schema.iter_fields()
+                if f["section"] == "facilitation"}
+        assert {"enabled", "max_level", "triage_model", "triage_period_sec",
+                "max_cost_usd_per_meeting"} <= keys
+
+
 class TestRegistryData:
     """personas.py 는 데이터 전용 — PRD §3 로스터와 어긋나지 않는지 고정."""
 

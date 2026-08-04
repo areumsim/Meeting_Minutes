@@ -455,6 +455,9 @@
     ],
     "_max_interventions_comment": "회의당 화면 개입 표시 상한 — 초과분은 기록으로 강등된다(0=무제한).",
     "max_interventions_per_session": 12,
+    "_brief_comment": "중간 요약(🧾 summarizer 페르소나) — 주기마다 '지금까지의 논점·결정·액션·미결 질문'을 카드로 정리한다. 음성브리핑 PRD 트랙 A 를 별도 모듈이 아니라 이 오케스트레이터의 주기 페르소나 1종으로 합친 것이다(다른 점은 주기 하나뿐). 0 이면 주기 요약만 끄고 녹음 화면 [지금 정리] 버튼은 유지된다. 요약은 트리아지 후보가 아니므로 오탐률 분모와 섞이지 않고, 개입 예산(max_interventions_per_session)도 소모하지 않는다 — 횟수가 주기로 이미 묶여 있다.",
+    "brief_period_sec": 600,
+    "brief_min_new_chars": 600,
     "_min_confidence_comment": "판정 신뢰도 하한(0~1). 이보다 낮은 후보는 화면에 안 띄우고 기록만 한다. 페르소나별 상수를 임의로 만들지 않고 전역 1개만 둔 것은 의도다 — 실측 전에 8개 숫자를 지어내면 근거 없는 랭킹 휴리스틱이 된다(모든 후보의 confidence 는 관찰 로그에 남으므로 나중에 분포를 보고 나눌 수 있다).",
     "min_confidence": 0.6,
     "_triage_model_comment": "트리아지(1차 선별) 경량 모델 — 상시 비용 결정 요인. claude-haiku-4-5 를 고르면 현재는 models.claude_model 이 대신 호출된다(모델 오버라이드는 GPT 계열만 지원) — 추정·한도·기록도 그 실효 모델 단가를 쓴다(facilitation.effective_triage_model).",
@@ -475,7 +478,7 @@
     "_personas_comment": [
       "페르소나별 참견도(level): 0=금지(트리아지에서 제외, 비용 0) 1=관찰(기록만, 화면 표시 없음)",
       "2=소극([지금 점검] 누를 때 모아서 표시) 3=표준(옆 카드 자동, 무음) 4·5=알림음·음성(미구현).",
-      "M1 기본값: 저위험 4종(촉진자·서기·주니어·시니어)만 3(표준). 위험·중위험 4종",
+      "M1 기본값: 저위험 4종(촉진자·서기·주니어·시니어) + 🧾 중간 요약이 3(표준). 위험·중위험 4종",
       "(팩트체커·비판자·도메인·악마의 변호인)은 1(관찰) 고정 — 오탐률 실측(PRD §15)을",
       "통과해야 M2 에서 연다. model 은 Tier 1 생성 모델(claude 는 models.claude_model 로 대체됨).",
       "hard_cap: 위험 페르소나(팩트체커·비판자)는 설정으로 이 값을 넘는 참견도로 올릴 수 없다."
@@ -488,7 +491,8 @@
       "devils_advocate": {"level": 1, "model": "claude-sonnet-5"},
       "junior":          {"level": 3, "model": "gpt-4o-mini"},
       "senior":          {"level": 3, "model": "claude-sonnet-5"},
-      "critic":          {"level": 1, "model": "claude-opus-4-8", "hard_cap": 2}
+      "critic":          {"level": 1, "model": "claude-opus-4-8", "hard_cap": 2},
+      "summarizer":      {"level": 3, "model": "gpt-4o-mini"}
     }
   },
   "mcp": {

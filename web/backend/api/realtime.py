@@ -286,6 +286,7 @@ class BrowserRealtimeSession:
         # API 키 확인을 통과한 뒤에 만든다 — 위의 조기 return 경로에서 유휴
         # 스레드풀이 남지 않게 한다(게이트가 꺼져 있으면 어차피 no-op).
         self._facilitator = self._create_facilitator(topic)
+        self._announce_facilitation()
 
         ssl_verify = cfg.get("ssl.verify", True)  # 안전 기본값: 키 누락 시 검증 켜짐
 
@@ -446,6 +447,8 @@ class BrowserRealtimeSession:
                                 self._facilitation_check()
                             elif msg.get("type") == "facilitation_feedback":
                                 self._facilitation_feedback(msg)
+                            elif msg.get("type") == "facilitation_brief_now":
+                                self._facilitation_brief_now()
                             elif msg.get("type") == "audio":
                                 # base64 인코딩된 오디오
                                 if self._diarize_pp:
@@ -794,6 +797,46 @@ class BrowserRealtimeSession:
             if not items:
                 self._emit_facilitation_status(
                     {"kind": "empty", "message": "지금은 점검할 항목이 없습니다"})
+        except Exception:
+            pass
+
+    def _announce_facilitation(self) -> None:
+        """이 녹음에서 페르소나가 어떤 상태로 도는지 시작 시 1회 알린다.
+
+        프런트가 config 를 직접 읽어 판단하면 hard_cap·전역 상한 클램프를 두 벌로
+        계산하게 된다 — 실효값은 코어만 안다. [지금 정리] 버튼의 표시 조건도 이 값이다."""
+        f = self._facilitator
+        if f is None or not getattr(f, "enabled", False):
+            return
+        try:
+            st = f.status()
+            self._emit_facilitation_status({
+                "kind": "ready",
+                "message": "",
+                "briefOn": bool(st.get("brief_on")),
+                "briefPeriodSec": st.get("brief_period_sec"),
+                "displayPersonas": st.get("display_personas") or [],
+                "budget": st.get("budget"),
+            })
+        except Exception:
+            pass
+
+    def _facilitation_brief_now(self) -> None:
+        """[지금 정리] — 주기를 기다리지 않고 중간 요약 1회.
+
+        [지금 점검](대기분 방출, 과금 0)과 달리 **새 LLM 호출이 생긴다** — 건너뛴
+        사유는 항상 화면으로 돌려준다(연타 방지·내용 없음·한도)."""
+        if self._facilitator is None:
+            self._emit_facilitation_status(
+                {"kind": "empty", "message": "회의 진행 페르소나가 꺼져 있습니다"})
+            return
+        try:
+            reason = self._facilitator.brief_now()
+            if reason:
+                self._emit_facilitation_status({"kind": "empty", "message": reason})
+            else:
+                self._emit_facilitation_status(
+                    {"kind": "briefing", "message": "지금까지 내용을 정리하는 중…"})
         except Exception:
             pass
 
@@ -1578,6 +1621,8 @@ class BrowserRealtimeSession:
                         self._facilitation_check()
                     elif msg.get("type") == "facilitation_feedback":
                         self._facilitation_feedback(msg)
+                    elif msg.get("type") == "facilitation_brief_now":
+                        self._facilitation_brief_now()
                     elif msg.get("type") == "audio":
                         _b = base64.b64decode(msg["data"])
 

@@ -192,6 +192,23 @@ def facilitation_intervention_cost(model: str | None) -> float:
            (FACILITATION_INTERVENTION_OUTPUT_TOKENS / 1_000_000) * price["out"]
 
 
+# 회의 중간 요약(summarizer 페르소나) 1회 토큰 — 음성브리핑 PRD 트랙 A 의 개략치와
+# 같은 자리다. 입력은 마지막 요약 이후 발화(상한 BRIEF_WINDOW_CHARS≈4,000자 ≈ 3,300)
+# + 이전 요약 1개 + 시스템 프롬프트. 전체 전사를 매번 넣지 않으므로 회의 길이에
+# 비례해 늘지 않는다. `[미검증 — 실사용 usage 로 재교정 필요]`
+FACILITATION_BRIEF_INPUT_TOKENS = 4_000
+FACILITATION_BRIEF_MAX_OUTPUT_TOKENS = 500
+FACILITATION_BRIEF_OUTPUT_TOKENS = FACILITATION_BRIEF_MAX_OUTPUT_TOKENS
+
+
+def facilitation_brief_cost(model: str | None) -> float:
+    """중간 요약 1회 예상 비용(USD). 개입과 마찬가지로 **실효 모델**을 넘겨야 한다
+    (`facilitation.effective_persona_model('summarizer')`)."""
+    price = llm_token_price(model)
+    return (FACILITATION_BRIEF_INPUT_TOKENS / 1_000_000) * price["in"] + \
+           (FACILITATION_BRIEF_OUTPUT_TOKENS / 1_000_000) * price["out"]
+
+
 def facilitation_triage_call_cost(model: str | None) -> float:
     """트리아지 1회 예상 비용(USD).
 

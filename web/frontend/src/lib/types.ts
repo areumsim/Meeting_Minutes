@@ -102,7 +102,17 @@ export const MODE_PRESETS: Record<number, { label: string; language: string; tra
 /** 회의 진행 페르소나 키 — 서버 `wiki_core/personas.py` 의 레지스트리 키와 1:1. */
 export type PersonaKey =
   | "facilitator" | "scribe" | "domain_expert" | "fact_checker"
-  | "devils_advocate" | "junior" | "senior" | "critic";
+  | "devils_advocate" | "junior" | "senior" | "critic"
+  /** 주기 페르소나 — 개입 후보가 아니라 시간 주기로 도는 중간 요약 */
+  | "summarizer";
+
+/** 중간 요약 1건의 내용 (WS `facilitation` 의 kind="brief"). 빈 배열은 '해당 없음'. */
+export interface BriefBody {
+  points?: string[];
+  decisions?: string[];
+  actions?: string[];
+  open_questions?: string[];
+}
 
 /**
  * 페르소나 개입 1건 (WS `facilitation`, PRD §8).
@@ -117,9 +127,13 @@ export interface Facilitation {
   personaLabel: string;
   /** 이 개입을 낸 참견도(3=표준 자동 카드, 2=소극 — [지금 점검]으로 모아 표시) */
   level: number;
-  kind: "flow" | "missing" | "question" | "counterpoint" | "contrast" | string;
+  kind: "flow" | "missing" | "question" | "counterpoint" | "contrast" | "brief" | string;
   risk?: "low" | "medium" | "high" | string;
   text: string;
+  /** kind="brief" 에만 있다 — 절별로 렌더한다(없으면 text 로 폴백) */
+  brief?: BriefBody;
+  /** 중간 요약이 [지금 정리] 버튼으로 만들어졌는지(주기 자동과 구분) */
+  onDemand?: boolean;
   evidence?: { source: "note" | "web" | string; title: string; url?: string; score?: number; snippet?: string }[];
   /** 근거가 된 발화 구간(초) — 전사 패널 점프용 */
   span?: { t0: number; t1: number };
@@ -149,8 +163,17 @@ export interface Facilitation {
  */
 export interface FacilitationStatus {
   type?: "facilitation_status";
-  /** jump 는 프런트 자체 안내(밀려난 발화로 점프 불가) — 서버가 보내지 않는다. */
-  kind: "blocked" | "capped" | "budget" | "pending" | "empty" | "jump" | string;
+  /**
+   * jump 는 프런트 자체 안내(밀려난 발화로 점프 불가) — 서버가 보내지 않는다.
+   * briefing 은 [지금 정리]를 눌러 요약 생성이 시작됐다는 신호(카드가 곧 온다).
+   */
+  kind: "blocked" | "capped" | "budget" | "pending" | "empty" | "jump"
+      | "briefing" | "ready" | string;
   message: string;
   pending?: number;
+  /** kind="ready" — 이 녹음에서 중간 요약이 도는지(서버 실효값) */
+  briefOn?: boolean;
+  briefPeriodSec?: number;
+  displayPersonas?: string[];
+  budget?: number;
 }

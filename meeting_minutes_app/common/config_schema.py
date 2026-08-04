@@ -283,6 +283,8 @@ SCHEMA: List[Dict[str, Any]] = [
             {"section": "facilitation", "key": "triage_period_sec", "label": "트리아지 주기(초)", "type": "number", "default": 25, "desc": "이 간격마다 최대 1회 판정합니다(발화가 없으면 0회). 시간 기반이라 1시간 회의의 호출 수 상한이 고정됩니다(기본 25초 = 최대 ~144회)."},
             {"section": "facilitation", "key": "max_interventions_per_session", "label": "회의당 개입 표시 상한", "type": "number", "default": 12, "desc": "한 회의에서 화면에 띄울 개입 총량입니다. 넘으면 이후 판정은 화면에 뜨지 않고 기록만 남습니다(회의를 시끄럽게 만들지 않기 위한 장치). 0이면 무제한."},
             {"section": "facilitation", "key": "min_confidence", "label": "개입 최소 신뢰도(0~1)", "type": "number", "default": 0.6, "desc": "판정 신뢰도가 이 값보다 낮은 후보는 화면에 띄우지 않습니다(기록은 남습니다). 아직 실측으로 정한 값이 아니라 조절용 기본값입니다 — 카드가 너무 자주 뜨면 올리세요."},
+            {"section": "facilitation", "key": "brief_period_sec", "label": "중간 요약 주기(초)", "type": "number", "default": 600, "desc": "이 간격마다 '지금까지의 논점·결정·액션·미결 질문'을 카드로 정리합니다(기본 600초=10분). 0이면 주기 요약을 끕니다(녹음 화면의 [지금 정리] 버튼은 계속 쓸 수 있습니다). 아래 [페르소나별 참견도]의 🧾 중간 요약이 2 이상이어야 동작합니다."},
+            {"section": "facilitation", "key": "brief_min_new_chars", "label": "중간 요약 최소 새 글자수", "type": "number", "default": 600, "desc": "지난 정리 이후 이만큼 발화가 쌓이지 않으면 주기가 되어도 요약하지 않습니다 — 침묵·짧은 잡담 구간에 빈 요약이 나가고 비용만 드는 것을 막습니다."},
             # 아래 3개는 **일부러 여기에 없다**: voice_enabled · web_search_enabled ·
             # web_search_interval. 읽는 코드가 아직 0줄(M2~M3 몫)이라 설정 화면에
             # 올리면 "켰는데 아무 일도 안 일어나는 토글"이 된다 — 이 리포가 반복해서

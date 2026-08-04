@@ -12,6 +12,7 @@ PRD(docs/prd/PRD_회의진행_페르소나에이전트_20260803.md) §14 수용 
 """
 
 import json
+import time
 
 import pytest
 
@@ -960,6 +961,295 @@ class TestCostIsVisibleWhereItHappens:
             config_loader._cache = None
 
 
+class TestMidwayBrief:
+    """중간 요약(주기 페르소나 summarizer) — 음성브리핑 PRD 트랙 A 를 오케스트레이터에
+    1종으로 합친 것. 트랙 A 의 게이트(경과 시간 + 새 발화량)와 '요약은 후보가 아니다'가
+    이 클래스의 고정 대상이다."""
+
+    BRIEF = {"points": ["출시 일정 논의"], "decisions": ["9월 1일로 확정"],
+             "actions": ["일정표 갱신"], "open_questions": ["예산 승인?"]}
+
+    def _values(self, triage=False, **overrides):
+        """기본은 요약만 켠 설정 — 트리아지 페르소나를 전원 0(금지)으로 두면 트리아지
+        LLM 호출 자체가 없어(수용 기준 §14) 요약 경로만 남는다. 시간 게이트는 첫
+        세그먼트에서 즉시 1회 도므로 주기를 크게 잡는 것으로는 격리되지 않는다."""
+        values = {"facilitation.enabled": True,
+                  "facilitation.triage_period_sec": 100000,
+                  "facilitation.brief_period_sec": 600,
+                  "facilitation.brief_min_new_chars": 600,
+                  "facilitation.max_cost_usd_per_meeting": 0.0}
+        for k in personas.PERSONAS:
+            values[f"facilitation.personas.{k}.level"] = 1 if triage else 0
+        values["facilitation.personas.summarizer.level"] = 3
+        values.update(overrides)
+        return values
+
+    def _llm(self, monkeypatch, payload=None, boom=False):
+        """요약 호출만 가려낸다 — 트리아지와 같은 `_call_llm` 을 쓴다."""
+        calls = []
+
+        def _fake(model, system, user, max_tokens=None):
+            brief = "중간 요약" in system
+            calls.append({"model": model, "user": user, "brief": brief,
+                          "max_tokens": max_tokens})
+            if not brief:
+                return "[]"
+            if boom:
+                raise RuntimeError("요약 실패")
+            return json.dumps(self.BRIEF if payload is None else payload,
+                              ensure_ascii=False)
+
+        monkeypatch.setattr(facilitation, "_call_llm", _fake)
+        return calls
+
+    def _orch(self, fac_db, session, now, shown, status=None):
+        return FacilitationOrchestrator(
+            session_id=session, clock=lambda: now["t"],
+            on_intervention=shown.append,
+            on_status=(status.append if status is not None else None),
+            db_path=fac_db)
+
+    def _drive(self, orch, now, chars=700, period=600.0):
+        """첫 발화(주기 시작점) → 주기 경과 후 충분한 발화 → 요약 1회."""
+        orch.offer_segment("회의를 시작합니다.")
+        now["t"] += period + 1
+        orch.offer_segment("가" * chars)
+        orch.shutdown(wait=True)
+
+    def test_periodic_brief_emits_a_structured_card(self, cfg, fac_db, monkeypatch):
+        cfg(self._values())
+        calls = self._llm(monkeypatch)
+        now, shown = {"t": 0.0}, []
+        orch = self._orch(fac_db, "b1", now, shown)
+        self._drive(orch, now)
+
+        assert len(shown) == 1
+        item = shown[0]
+        assert item["persona"] == "summarizer" and item["kind"] == "brief"
+        assert item["brief"]["decisions"] == ["9월 1일로 확정"]
+        assert item["onDemand"] is False and item["draft"] is True
+        # 카드 접힘 줄·로그·다음 요약 입력이 쓰는 텍스트가 절 제목을 갖는다
+        assert "[결정] 9월 1일로 확정" in item["text"]
+        assert [c["brief"] for c in calls] == [True]     # 트리아지는 안 돌았다
+        assert orch.status()["brief_count"] == 1
+
+    def test_first_brief_waits_one_period(self, cfg, fac_db, monkeypatch):
+        """녹음 시작 직후에는 정리할 내용이 없다 — 첫 요약은 1주기 뒤다."""
+        cfg(self._values())
+        calls = self._llm(monkeypatch)
+        now, shown = {"t": 0.0}, []
+        orch = self._orch(fac_db, "b2", now, shown)
+        orch.offer_segment("가" * 900)          # 내용은 충분하지만 주기 전이다
+        orch.shutdown(wait=True)
+        assert shown == [] and calls == []
+
+    def test_silence_skips_the_period(self, cfg, fac_db, monkeypatch):
+        """주기가 됐어도 새 발화가 적으면 요약하지 않는다(빈 요약에 돈을 쓰지 않는다)."""
+        cfg(self._values())
+        calls = self._llm(monkeypatch)
+        now, shown = {"t": 0.0}, []
+        orch = self._orch(fac_db, "b3", now, shown)
+        self._drive(orch, now, chars=50)        # 600자 미달
+        assert shown == [] and calls == []
+
+    def test_summarizer_never_enters_the_triage_prompt(self, cfg, fac_db,
+                                                      monkeypatch):
+        """요약은 후보 판정 대상이 아니다 — 넣으면 상시 프롬프트가 길어지고 분모가 오염된다."""
+        cfg(self._values(triage=True, **{"facilitation.triage_period_sec": 1}))
+        calls = self._llm(monkeypatch)
+        now, shown = {"t": 0.0}, []
+        orch = self._orch(fac_db, "b4", now, shown)
+        orch.offer_segment("이 방식이 항상 더 빠릅니다.")
+        orch.shutdown(wait=True)
+        triage = [c for c in calls if not c["brief"]]
+        assert len(triage) == 1
+        assert "summarizer" not in triage[0]["user"]
+        assert "중간 요약" not in triage[0]["user"]
+        assert "summarizer" not in [p.key for p in orch.active_personas()]
+        rows = facilitation.triages(session_id="b4", db_path=fac_db)
+        assert rows[0]["personas"] == 8          # 주기 페르소나는 세지 않는다
+
+    def test_observe_level_makes_no_brief(self, cfg, fac_db, monkeypatch):
+        """참견도 1(관찰)에 '요약을 기록만' 상태는 없다 — 아무도 안 볼 요약에 돈을 안 쓴다."""
+        cfg(self._values(**{"facilitation.personas.summarizer.level": 1}))
+        calls = self._llm(monkeypatch)
+        now, shown = {"t": 0.0}, []
+        orch = self._orch(fac_db, "b5", now, shown)
+        self._drive(orch, now)
+        assert shown == [] and calls == []
+        assert orch.brief_enabled() is False
+
+    def test_period_zero_disables_the_automatic_brief(self, cfg, fac_db, monkeypatch):
+        cfg(self._values(**{"facilitation.brief_period_sec": 0}))
+        calls = self._llm(monkeypatch)
+        now, shown = {"t": 0.0}, []
+        orch = self._orch(fac_db, "b6", now, shown)
+        self._drive(orch, now)
+        assert shown == [] and calls == []
+
+    def test_brief_is_metered_and_recorded_as_a_brief_not_a_candidate(
+            self, cfg, fac_db, monkeypatch):
+        from meeting_minutes_app.common import pricing
+        cfg(self._values())
+        self._llm(monkeypatch)
+        now, shown = {"t": 0.0}, []
+        orch = self._orch(fac_db, "b7", now, shown)
+        self._drive(orch, now)
+
+        expected = pricing.facilitation_brief_cost("gpt-4o-mini")
+        assert usage_log.month_to_date_by_kind()[
+            spend_guard.KIND_FACILITATION] == pytest.approx(expected, abs=1e-9)
+        assert shown[0]["costUsd"] == pytest.approx(expected, abs=1e-9)
+        rows = facilitation.observations(session_id="b7", db_path=fac_db)
+        assert len(rows) == 1 and rows[0]["persona"] == "summarizer"
+        assert rows[0]["trigger_type"] == facilitation.TRIGGER_BRIEF_PERIODIC
+        # 오탐률 분자에 섞이지 않는다
+        r = facilitation.report("b7", db_path=fac_db)
+        assert r["briefs"] == 1 and r["candidates"] == 0
+        assert "summarizer" not in r["by_persona"]
+
+    def test_brief_does_not_consume_the_intervention_budget(
+            self, cfg, fac_db, monkeypatch):
+        """주기 산출물이라 횟수가 이미 시간으로 묶여 있다 — 기회주의적 개입 카드가
+        사용자가 기대하는 요약을 굶기지 않게 한다(상한은 주기와 비용 캡)."""
+        cfg(self._values(**{"facilitation.max_interventions_per_session": 1}))
+        self._llm(monkeypatch)
+        now, shown = {"t": 0.0}, []
+        orch = self._orch(fac_db, "b8", now, shown)
+        self._drive(orch, now)
+        assert len(shown) == 1
+        assert orch.budget_remaining() == 1          # 예산은 그대로다
+        assert orch.status()["shown_count"] == 0
+
+    def test_meeting_cap_holds_the_brief_with_a_reason(self, cfg, fac_db,
+                                                      monkeypatch):
+        from meeting_minutes_app.common import pricing
+        cap = pricing.facilitation_brief_cost("gpt-4o-mini") / 2
+        cfg(self._values(**{"facilitation.max_cost_usd_per_meeting": cap}))
+        calls = self._llm(monkeypatch)
+        now, shown, status = {"t": 0.0}, [], []
+        orch = self._orch(fac_db, "b9", now, shown, status)
+        self._drive(orch, now)
+        assert shown == [] and calls == []           # 캡 검사가 호출 전이다
+        assert any(s["kind"] == "capped" for s in status)
+
+    def test_failed_brief_refunds_and_stays_silent(self, cfg, fac_db, monkeypatch):
+        cfg(self._values(**{"facilitation.max_cost_usd_per_meeting": 1.0}))
+        self._llm(monkeypatch, boom=True)
+        now, shown = {"t": 0.0}, []
+        orch = self._orch(fac_db, "b10", now, shown)
+        self._drive(orch, now)
+        assert shown == []
+        assert orch._session_cost == 0.0             # 환불됨
+        assert usage_log.month_to_date_spend() == 0.0
+
+    def test_empty_summary_is_not_shown(self, cfg, fac_db, monkeypatch):
+        """모든 절이 비면 카드를 내지 않는다 — 빈 카드는 소음이다."""
+        cfg(self._values())
+        self._llm(monkeypatch, payload={"points": [], "decisions": [],
+                                        "actions": [], "open_questions": []})
+        now, shown = {"t": 0.0}, []
+        orch = self._orch(fac_db, "b11", now, shown)
+        self._drive(orch, now)
+        assert shown == []
+
+    def test_brief_now_runs_immediately_and_is_labeled_on_demand(
+            self, cfg, fac_db, monkeypatch):
+        cfg(self._values(**{"facilitation.brief_period_sec": 100000}))
+        calls = self._llm(monkeypatch)
+        now, shown = {"t": 0.0}, []
+        orch = self._orch(fac_db, "b12", now, shown)
+        orch.offer_segment("가" * 200)               # 주기는 멀지만 내용은 있다
+        now["t"] += 100                              # 연타 가드(20초) 밖
+        assert orch.brief_now() == ""
+        orch.shutdown(wait=True)
+
+        assert len(shown) == 1 and shown[0]["onDemand"] is True
+        assert [c["brief"] for c in calls] == [True]
+        rows = facilitation.observations(session_id="b12", db_path=fac_db)
+        assert rows[0]["trigger_type"] == facilitation.TRIGGER_BRIEF_ON_DEMAND
+        r = facilitation.report("b12", db_path=fac_db)
+        assert r["briefs"] == 1 and r["briefs_on_demand"] == 1
+
+    def test_brief_now_is_debounced_and_needs_new_speech(self, cfg, fac_db,
+                                                        monkeypatch):
+        """이 버튼은 새 과금을 만든다 — 연타·빈 내용은 사유를 돌려주고 돌지 않는다."""
+        cfg(self._values(**{"facilitation.brief_period_sec": 100000}))
+        calls = self._llm(monkeypatch)
+        now, shown = {"t": 0.0}, []
+        orch = self._orch(fac_db, "b13", now, shown)
+        orch.offer_segment("가" * 200)
+        now["t"] += 100
+        assert orch.brief_now() == ""
+        reason = orch.brief_now()                    # 곧바로 다시 누름
+        assert "방금 정리했습니다" in reason
+        now["t"] += 100
+        assert "새로 쌓인 발화가 없습니다" in orch.brief_now()   # 그 뒤 발화 없음
+        orch.shutdown(wait=True)
+        assert len([c for c in calls if c["brief"]]) == 1
+
+    def test_brief_now_shows_even_at_collect_level(self, cfg, fac_db, monkeypatch):
+        """눌렀는데 [지금 점검] 대기열로 들어가면 버튼이 고장난 것처럼 보인다."""
+        cfg(self._values(**{"facilitation.personas.summarizer.level": 2,
+                            "facilitation.brief_period_sec": 100000}))
+        self._llm(monkeypatch)
+        now, shown = {"t": 0.0}, []
+        orch = self._orch(fac_db, "b14", now, shown)
+        orch.offer_segment("가" * 200)
+        now["t"] += 100
+        assert orch.brief_now() == ""
+        orch.shutdown(wait=True)
+        assert len(shown) == 1 and orch.pending_count() == 0
+
+    def test_brief_now_is_refused_when_summaries_are_off(self, cfg, fac_db,
+                                                        monkeypatch):
+        cfg(self._values(**{"facilitation.personas.summarizer.level": 1}))
+        self._llm(monkeypatch)
+        now, shown = {"t": 0.0}, []
+        orch = self._orch(fac_db, "b15", now, shown)
+        orch.offer_segment("가" * 200)
+        assert "참견도" in orch.brief_now()
+        orch.shutdown(wait=True)
+        assert shown == []
+
+    def test_previous_summary_is_carried_into_the_next_prompt(
+            self, cfg, fac_db, monkeypatch):
+        """전체 전사를 매번 넣지 않는 대신 이전 요약을 이어받는다(FR-A2)."""
+        cfg(self._values())
+        calls = self._llm(monkeypatch)
+        now, shown = {"t": 0.0}, []
+        orch = self._orch(fac_db, "b16", now, shown)
+        orch.offer_segment("회의를 시작합니다.")
+        now["t"] += 601
+        orch.offer_segment("가" * 700)
+        # 첫 요약이 끝난 뒤에 두 번째를 낸다 — 풀이 2워커라 동시에 제출하면 두 번째가
+        # 이전 요약이 저장되기 전에 프롬프트를 만든다(실사용에서는 600초 간격이라
+        # 겹치지 않는다).
+        for _ in range(200):
+            if orch.status()["brief_count"] >= 1:
+                break
+            time.sleep(0.01)
+        now["t"] += 601
+        orch.offer_segment("나" * 700)
+        orch.shutdown(wait=True)
+
+        briefs = [c for c in calls if c["brief"]]
+        assert len(briefs) == 2
+        assert "이전 요약" not in briefs[0]["user"]
+        assert "이전 요약" in briefs[1]["user"]
+        assert "9월 1일로 확정" in briefs[1]["user"]
+        # 두 번째 요약 입력에 첫 구간(가…)이 다시 들어가지 않는다(버퍼를 비운다)
+        assert "가" * 50 not in briefs[1]["user"]
+
+    def test_brief_now_ws_message_is_wired_in_both_loops(self):
+        from pathlib import Path
+        src = Path("web/backend/api/realtime.py").read_text(encoding="utf-8")
+        assert src.count('"facilitation_brief_now"') == 2
+        assert "def _facilitation_brief_now" in src
+        # 시작 시 [지금 정리] 표시 조건(실효값)을 프런트에 알린다
+        assert "def _announce_facilitation" in src
+
+
 class TestHumanFeedbackLabels:
     """카드의 [✓ 확인]/[✕ 닫기] 가 §15 오탐률 실측의 **사람 라벨**로 남는지 고정.
 
@@ -1353,11 +1643,16 @@ class TestSettingsExposeOnlyWhatWorks:
 class TestRegistryData:
     """personas.py 는 데이터 전용 — PRD §3 로스터와 어긋나지 않는지 고정."""
 
-    def test_eight_personas_registered(self):
-        assert len(personas.PERSONAS) == 8
+    def test_eight_triage_personas_plus_one_periodic(self):
+        """트리아지 후보 8종 + 주기 페르소나 1종(중간 요약). 둘은 섞이지 않는다."""
         assert set(personas.PERSONAS) == {
             "facilitator", "scribe", "domain_expert", "fact_checker",
-            "devils_advocate", "junior", "senior", "critic"}
+            "devils_advocate", "junior", "senior", "critic", "summarizer"}
+        assert [p.key for p in personas.triage_personas()] == [
+            "facilitator", "scribe", "domain_expert", "fact_checker",
+            "devils_advocate", "junior", "senior", "critic"]
+        assert personas.PERSONAS[personas.BRIEF_PERSONA].periodic is True
+        assert all(not p.periodic for p in personas.triage_personas())
 
     def test_risky_personas_have_hard_cap(self):
         assert personas.get_persona("fact_checker").hard_cap == 2

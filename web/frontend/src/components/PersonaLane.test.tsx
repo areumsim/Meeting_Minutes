@@ -128,3 +128,79 @@ describe("PersonaCard", () => {
     expect(screen.queryByText(/미검증/)).toBeNull();
   });
 });
+
+/**
+ * 중간 요약(🧾 summarizer) 카드와 [지금 정리] 버튼.
+ *
+ * 요약은 다른 카드와 성질이 다르다: 절이 4개라 한 줄 접힘으로는 쓸모가 없고, 버튼은
+ * [지금 점검](과금 0)과 달리 **새 비용을 만든다**. 그 두 차이를 고정한다.
+ */
+const brief = (over: Partial<Facilitation> = {}): Facilitation => item({
+  id: "brief_1",
+  persona: "summarizer",
+  personaLabel: "🧾 중간 요약",
+  kind: "brief",
+  text: "[결정] 9월 1일로 확정",
+  brief: {
+    points: ["출시 일정 논의"],
+    decisions: ["9월 1일로 확정"],
+    actions: [],
+    open_questions: ["예산 승인?"],
+  },
+  onDemand: false,
+  ...over,
+});
+
+describe("중간 요약 카드", () => {
+  it("절 제목과 내용을 펼치지 않아도 보여준다", () => {
+    render(<PersonaLane items={[brief()]} />);
+    expect(screen.getByText("논점")).toBeInTheDocument();
+    expect(screen.getByText(/출시 일정 논의/)).toBeInTheDocument();
+    expect(screen.getByText("결정")).toBeInTheDocument();
+    expect(screen.getByText("미결 질문")).toBeInTheDocument();
+    expect(screen.getByText("중간 요약 · 정보")).toBeInTheDocument();
+  });
+
+  it("비어 있는 절은 렌더하지 않는다", () => {
+    render(<PersonaLane items={[brief()]} />);
+    expect(screen.queryByText("액션")).toBeNull();   // actions: []
+  });
+
+  it("brief 본문이 없으면 text 로 폴백한다(구버전 서버 호환)", () => {
+    render(<PersonaLane items={[brief({ brief: undefined })]} />);
+    expect(screen.getByText("[결정] 9월 1일로 확정")).toBeInTheDocument();
+  });
+
+  it("[지금 정리]로 만든 요약은 그 사실을 배지로 남긴다", () => {
+    render(<PersonaLane items={[brief({ onDemand: true })]} />);
+    expect(screen.getByText("지금 정리")).toBeInTheDocument();
+  });
+});
+
+describe("[지금 정리] 버튼", () => {
+  it("요약이 켜져 있으면 개입이 0건이어도 레인과 버튼이 보인다", async () => {
+    const onBriefNow = vi.fn();
+    render(<PersonaLane items={[]} briefOn onBriefNow={onBriefNow} />);
+    const btn = screen.getByRole("button", { name: "지금 정리" });
+    // 새 비용이 발생한다는 사실을 툴팁으로 알린다([지금 점검]과의 차이)
+    expect(btn.getAttribute("title")).toMatch(/비용/);
+    await userEvent.click(btn);
+    expect(onBriefNow).toHaveBeenCalledOnce();
+  });
+
+  it("요약이 꺼져 있으면 버튼도 레인도 없다", () => {
+    const { container } = render(
+      <PersonaLane items={[]} briefOn={false} onBriefNow={vi.fn()} />);
+    expect(container).toBeEmptyDOMElement();
+  });
+
+  it("생성 중에는 잠기고 '정리 중…'으로 바뀐다(연타로 과금되지 않게)", () => {
+    render(<PersonaLane items={[]} briefOn briefBusy onBriefNow={vi.fn()} />);
+    expect(screen.getByRole("button", { name: "정리 중…" })).toBeDisabled();
+  });
+
+  it("이번 회의 끔 상태에서는 버튼을 내린다", () => {
+    render(<PersonaLane items={[]} briefOn muted onBriefNow={vi.fn()} onMute={vi.fn()} />);
+    expect(screen.queryByRole("button", { name: /지금 정리/ })).toBeNull();
+  });
+});

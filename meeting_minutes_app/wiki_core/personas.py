@@ -50,6 +50,9 @@ class Persona:
                                 # (facilitation.triage_model — 전 페르소나 공용 1회 호출)
     risk: str                   # "low" | "medium" | "high"
     hard_cap: Optional[int] = None  # 설정으로 넘을 수 없는 참견도 상한(위험 페르소나만)
+    periodic: bool = False      # True 면 **트리아지 후보가 아니다** — 시간 주기로 스스로
+                                # 돈다(중간 요약). 트리아지 프롬프트·후보 판정에 등장하지
+                                # 않으므로 트리아지 비용·오탐률 분모와 섞이지 않는다.
 
 
 PERSONAS: Dict[str, Persona] = {
@@ -187,12 +190,52 @@ PERSONAS: Dict[str, Persona] = {
         risk="high",
         hard_cap=2,
     ),
+    # 주기 페르소나 — 트리아지 후보가 아니다(periodic=True). 음성브리핑 PRD 트랙 A
+    # (회의 중간 요약)를 별도 모듈·별도 스레드풀이 아니라 이 레지스트리의 1종으로
+    # 합친 것이다(그 PRD 의 미결 #3 결정): 오케스트레이터와 다른 점이 주기 하나뿐이라
+    # 분리하면 훅·비용 배선·건너뜀 UI 가 두 벌이 된다.
+    "summarizer": Persona(
+        key="summarizer",
+        label="🧾 중간 요약",
+        kind="brief",
+        role="지금까지의 논점·결정·액션·미결 질문을 주기적으로 정리한다(판정하지 않는다)",
+        triggers=("경과 시간", "[지금 정리] 버튼"),
+        evidence=("dialog",),
+        system_prompt=(
+            "당신은 회의 중간 요약 담당입니다. 주어진 최근 발화와 (있다면) 이전 요약을 "
+            "이어받아 지금까지를 정리하세요. 새로운 의견·평가·지적을 만들지 말고 나온 "
+            "말만 압축합니다. 추측으로 오너·기한을 채우지 말고 없으면 비워 두세요. "
+            "출력은 JSON 객체 하나만: "
+            '{"points": ["논점 …"], "decisions": ["결정 …"], '
+            '"actions": ["담당/기한이 나온 그대로의 액션 …"], '
+            '"open_questions": ["답이 안 나온 질문 …"]} '
+            "각 배열은 최대 4개, 항목은 한 문장. 해당 없으면 빈 배열. "
+            + COMMON_RULES
+        ),
+        default_level=3,
+        model="gpt-4o-mini",
+        risk="low",
+        periodic=True,
+    ),
 }
+
+#: 주기 페르소나 키(중간 요약). 오케스트레이터가 트리아지 경로에서 제외하고 자체
+#: 주기 게이트로 돌린다.
+BRIEF_PERSONA = "summarizer"
 
 
 def all_personas() -> List[Persona]:
     """레지스트리 등록 순서(≒ PRD §3 로스터 순서) 그대로 반환."""
     return list(PERSONAS.values())
+
+
+def triage_personas() -> List[Persona]:
+    """트리아지(후보 판정) 대상만 — 주기 페르소나는 제외한다.
+
+    중간 요약은 '개입 후보'가 아니라 시간 주기로 도는 정리다. 트리아지 프롬프트에
+    넣으면 (a) 매 회차 요약 후보가 잡혀 오탐률 분모가 오염되고 (b) 프롬프트가 길어져
+    상시 비용이 오른다."""
+    return [p for p in PERSONAS.values() if not p.periodic]
 
 
 def get_persona(key: str) -> Optional[Persona]:

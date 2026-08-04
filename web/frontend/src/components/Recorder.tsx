@@ -146,6 +146,10 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
   const [facCostUsd, setFacCostUsd] = useState(0);
   // 이미 받은 개입 id — 비용 중복 합산 방지(카드를 닫아도 여기서는 지우지 않는다).
   const facSeenIdsRef = useRef<Set<string>>(new Set());
+  // 중간 요약(🧾 summarizer)이 이 녹음에서 도는지 — 서버가 시작 시 실효값으로 알려준다
+  // (참견도 클램프는 코어만 알기 때문에 프런트가 config 로 재계산하지 않는다).
+  const [facBriefOn, setFacBriefOn] = useState(false);
+  const [facBriefBusy, setFacBriefBusy] = useState(false);
   // 발화 점프로 강조한 전사 줄(start 초). 잠깐 테두리를 주고 지운다.
   const [flashStart, setFlashStart] = useState<number | null>(null);
   const flashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -296,6 +300,19 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
     try { ws.send(JSON.stringify({ type: "facilitation_check" })); } catch (e) {}
   };
 
+  /**
+   * [지금 정리] — 주기를 기다리지 않고 중간 요약 1회.
+   * [지금 점검]과 달리 **새 LLM 호출이 생긴다**(요약 1회). 서버가 연타·내용 없음·한도를
+   * 판정해 사유를 돌려주므로 프런트는 중복 가드만 둔다.
+   */
+  const facBriefNow = () => {
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN || facBriefBusy) return;
+    setFacBriefBusy(true);
+    try { ws.send(JSON.stringify({ type: "facilitation_brief_now" })); }
+    catch (e) { setFacBriefBusy(false); }
+  };
+
   /** 이번 회의 끔 — 설정은 그대로 두고 이 세션의 표시만 멈춘다(§19.4 업계 교훈). */
   const facMute = () => {
     facMutedRef.current = true;
@@ -331,6 +348,8 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
     setFacStatus(null);
     setFacPending(0);
     setFacCostUsd(0);
+    setFacBriefOn(false);        // 서버가 새 녹음 시작 시 다시 알려준다(ready)
+    setFacBriefBusy(false);
   };
 
   // 스크롤 위치로 '최신 따라가기' 상태 갱신 — 사용자가 위를 읽는 동안엔 배지를 띄운다.
@@ -678,6 +697,7 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
           facSeenIdsRef.current.add(item.id);
           setInterventions(prev => [item, ...prev].slice(0, 30));  // 최신 우선, 상한 30
           if (item.costUsd) setFacCostUsd(c => c + item.costUsd!);
+          if (item.kind === "brief") setFacBriefBusy(false);
           // 대기(소극) 항목이 방출되면 배지를 줄인다
           setFacPending(p => (item.level < 3 && p > 0 ? p - 1 : p));
           break;
@@ -686,7 +706,14 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
         case "facilitation_status": {
           const st = msg as FacilitationStatus;
           if (st.kind === "pending") setFacPending(st.pending || 0);
-          else setFacStatus(st);
+          else if (st.kind === "ready") setFacBriefOn(!!st.briefOn);
+          else if (st.kind === "briefing") setFacBriefBusy(true);
+          else {
+            // 건너뜀 사유(한도·연타·내용 없음)가 오면 '정리 중…'을 풀어 준다 —
+            // 안 풀면 버튼이 영구히 잠긴 것처럼 보인다.
+            setFacBriefBusy(false);
+            setFacStatus(st);
+          }
           break;
         }
 
@@ -1496,7 +1523,10 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
           status={facStatus}
           pending={facPending}
           muted={facMuted}
+          briefOn={facBriefOn && isRecording}
+          briefBusy={facBriefBusy}
           onCheckNow={facCheckNow}
+          onBriefNow={facBriefNow}
           onMute={facMute}
           onJump={jumpToSpan}
           onAck={(id) => facFeedback(id, "ack")}

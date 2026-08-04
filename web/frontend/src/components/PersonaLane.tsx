@@ -16,20 +16,28 @@ import type { Facilitation, FacilitationStatus } from "../lib/types";
  *  - 한도·예산으로 멈췄으면 그 사유를 같은 줄에 회색 칩으로 남긴다(§19.5).
  */
 export default function PersonaLane({
-  items, status, pending, muted, onCheckNow, onMute, onJump, onAck, onDismiss,
+  items, status, pending, muted, briefOn, briefBusy,
+  onCheckNow, onBriefNow, onMute, onJump, onAck, onDismiss,
 }: {
   items: Facilitation[];
   status?: FacilitationStatus | null;
   pending?: number;
   muted?: boolean;
+  /** 중간 요약이 켜져 있는지(서버 실효값) — [지금 정리] 버튼의 표시 조건 */
+  briefOn?: boolean;
+  briefBusy?: boolean;
   onCheckNow?: () => void;
+  onBriefNow?: () => void;
   onMute?: () => void;
   onJump?: (span: { t0: number; t1: number }) => void;
   onAck?: (id: string) => void;
   onDismiss?: (id: string) => void;
 }) {
   const notice = status && status.kind !== "pending" ? status.message : "";
-  if (!items.length && !notice && !pending && !muted) return null;
+  // [지금 정리]가 가능하면 레인을 띄운다 — 버튼 자체가 내용이다. 그 외에는 낼 것이
+  // 없으면 렌더하지 않는다(빈 바가 전사 영역을 잠식하지 않게).
+  if (!items.length && !notice && !pending && !muted && !(briefOn && onBriefNow))
+    return null;
 
   return (
     <div className="bg-slate-50 border-b border-slate-200 shrink-0">
@@ -77,6 +85,19 @@ export default function PersonaLane({
         )}
 
         <div className="flex-1" />
+        {/* [지금 정리] — 주기를 기다리지 않고 중간 요약 1회. [지금 점검]과 달리
+            **새 비용이 발생**하므로 툴팁에 그 사실을 적는다. */}
+        {briefOn && onBriefNow && !muted && (
+          <button
+            type="button"
+            onClick={onBriefNow}
+            disabled={briefBusy}
+            className="shrink-0 mt-1 text-[11px] font-semibold bg-white border border-slate-300 text-slate-700 px-2 py-0.5 rounded-full hover:border-slate-500 transition-colors whitespace-nowrap disabled:opacity-50"
+            title="지금까지의 논점·결정·액션을 한 번 정리합니다(요약 LLM 호출 1회 = 소액 비용 발생)"
+          >
+            {briefBusy ? "정리 중…" : "지금 정리"}
+          </button>
+        )}
         {onMute && !muted && (
           <button
             type="button"

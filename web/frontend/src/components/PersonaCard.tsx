@@ -1,6 +1,6 @@
 import React, { useState } from "react";
 import {
-  AlertTriangle, Baby, Check, Compass, GraduationCap, NotebookPen,
+  AlertTriangle, Baby, Check, ClipboardList, Compass, GraduationCap, NotebookPen,
   Search, ShieldAlert, Swords, X,
 } from "lucide-react";
 import type { Facilitation } from "../lib/types";
@@ -32,6 +32,7 @@ const PERSONA_ICON: Record<string, React.ComponentType<{ className?: string }>> 
   devils_advocate: Swords,
   fact_checker: Search,
   critic: AlertTriangle,
+  summarizer: ClipboardList,
 };
 
 /** 개입 유형 라벨 — 카드가 무엇을 하려는 건지 한 단어로 알려준다. */
@@ -41,7 +42,16 @@ const KIND_LABEL: Record<string, string> = {
   question: "질문",
   counterpoint: "반론",
   contrast: "자료 대조",
+  brief: "중간 요약",
 };
+
+/** 중간 요약 절 — 서버 `facilitation.BRIEF_SECTIONS` 와 같은 순서·같은 말. */
+const BRIEF_SECTIONS: { key: keyof NonNullable<Facilitation["brief"]>; label: string }[] = [
+  { key: "points", label: "논점" },
+  { key: "decisions", label: "결정" },
+  { key: "actions", label: "액션" },
+  { key: "open_questions", label: "미결 질문" },
+];
 
 export default function PersonaCard({
   item, onJump, onAck, onDismiss,
@@ -51,9 +61,15 @@ export default function PersonaCard({
   onAck?: (id: string) => void;
   onDismiss?: (id: string) => void;
 }) {
-  const [open, setOpen] = useState(false);
+  // 중간 요약은 눌러서 펼치기 전이라도 한 줄로는 쓸모가 없다(절이 4개다) — 처음부터
+  // 펼친 상태로 둔다. 대신 카드 폭은 같아서 레인의 시각 리듬은 유지된다.
+  const isBrief = item.kind === "brief";
+  const [open, setOpen] = useState(isBrief);
   const style = RISK_STYLE[item.risk || "low"] || RISK_STYLE.low;
   const Icon = PERSONA_ICON[item.persona] || Compass;
+  const sections = isBrief
+    ? BRIEF_SECTIONS.filter((s) => (item.brief?.[s.key] || []).length > 0)
+    : [];
 
   return (
     <div className={`shrink-0 max-w-[min(22rem,80vw)] border rounded-xl px-2.5 py-1.5 transition-colors ${style.chip}`}>
@@ -85,10 +101,27 @@ export default function PersonaCard({
               ⚠ 미검증
             </span>
           )}
+          {/* 주기 자동 요약과 사용자가 누른 요약을 구분한다(과금 계기가 다르다) */}
+          {isBrief && item.onDemand && (
+            <span className="text-[10px] bg-white/70 border border-zinc-200 text-zinc-500 px-1 rounded whitespace-nowrap">
+              지금 정리
+            </span>
+          )}
         </div>
-        <p className={`text-xs text-zinc-700 mt-0.5 ${open ? "" : "line-clamp-1"}`}>
-          {item.text}
-        </p>
+        {sections.length > 0 ? (
+          <div className={`mt-1 space-y-0.5 ${open ? "" : "max-h-10 overflow-hidden"}`}>
+            {sections.map((s) => (
+              <p key={s.key} className="text-[11px] text-zinc-700 leading-snug">
+                <b className="text-zinc-500">{s.label}</b>{" "}
+                {(item.brief?.[s.key] || []).join(" · ")}
+              </p>
+            ))}
+          </div>
+        ) : (
+          <p className={`text-xs text-zinc-700 mt-0.5 ${open ? "" : "line-clamp-1"}`}>
+            {item.text}
+          </p>
+        )}
       </button>
 
       {open && (

@@ -75,7 +75,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, List, NamedTuple, Optional, Tuple, Union
 
-from meeting_minutes_app.wiki_core.personas import Persona, all_personas, get_persona
+from meeting_minutes_app.wiki_core.personas import (
+    BRIEF_PERSONA, Persona, all_personas, get_persona, triage_personas)
 
 try:
     from meeting_minutes_app.common import config_loader as _cfg
@@ -112,6 +113,20 @@ COLLECT_LEVEL = 2
 #: 트리아지 1회가 만들 수 있는 화면 개입 수 상한. 한 번에 여러 장이 쏟아지면
 #: '흘깃 보고 넘긴다'(§19.1)가 성립하지 않는다 — 나머지는 기록만 남는다.
 MAX_INTERVENTIONS_PER_TRIAGE = 2
+
+#: 중간 요약(summarizer)에 넣는 '마지막 요약 이후 발화' 상한. 전체 전사를 매번 넣지
+#: 않는 이유는 비용이 회의 길이에 제곱으로 늘기 때문이다(음성브리핑 PRD FR-A2) —
+#: 대신 이전 요약 1개를 이어받아 누적한다.
+BRIEF_WINDOW_CHARS = 4000
+
+#: [지금 정리] 연타로 과금이 쌓이는 것을 막는 최소 간격(초). 주기 요약과 달리
+#: 사용자가 직접 누르는 경로라 게이트가 없으면 클릭 수 = 과금 수가 된다.
+BRIEF_MIN_GAP_SEC = 20.0
+
+#: 중간 요약을 만든 계기 — 관찰 로그 `trigger_type` 에 그대로 남는다(실측에서
+#: 요약 행을 개입 후보와 분리해 세는 근거).
+TRIGGER_BRIEF_PERIODIC = "periodic_brief"
+TRIGGER_BRIEF_ON_DEMAND = "brief_now"
 
 
 class Utterance(NamedTuple):
@@ -285,6 +300,24 @@ def record_observation(session_id: str, persona: str, *, trigger_type: str = "",
         c.close()
 
 
+#: 중간 요약 절 제목 — 화면 카드와 회의록·로그 텍스트가 같은 말을 쓰게 한다.
+BRIEF_SECTIONS = (("points", "논점"), ("decisions", "결정"),
+                  ("actions", "액션"), ("open_questions", "미결 질문"))
+
+
+def _brief_to_text(brief: Dict[str, List[str]]) -> str:
+    """요약 dict → 사람이 읽는 한 덩어리(관찰 로그 span·카드 접힘 줄·다음 요약 입력).
+
+    화면은 `brief` 를 절별로 렌더하지만, 로그·프롬프트·구버전 프런트는 문자열이
+    필요하다 — 두 표현이 갈라지지 않게 여기 한 곳에서 만든다."""
+    lines: List[str] = []
+    for key, label in BRIEF_SECTIONS:
+        vals = brief.get(key) or []
+        if vals:
+            lines.append(f"[{label}] " + " / ".join(vals))
+    return "\n".join(lines)
+
+
 def record_feedback(session_id: str, persona: str, span_hash: str, label: str,
                     db_path: Optional[Union[str, Path]] = None) -> bool:
     """카드에 남긴 사람 라벨을 그 후보 행에 적는다(확인/닫기). 반환: 기록됐는지.
@@ -418,7 +451,11 @@ def report(session_id: Optional[str] = None,
     자동 판정을 넣으면 이 리포의 '실측 없는 휴리스틱 금지' 원칙에 걸린다. 여기서는
     그 라벨링에 필요한 분자·분모·중복·건너뜀을 정직하게 센다.
     """
-    obs = observations(session_id, db_path)
+    all_obs = observations(session_id, db_path)
+    # 중간 요약 행은 **개입 후보가 아니다** — 오탐률의 분자에 섞으면 수치가 오염된다
+    # (요약은 판정이 아니라 정리이고, 주기로 반드시 생성된다).
+    obs = [o for o in all_obs if str(o.get("persona") or "") != BRIEF_PERSONA]
+    brief_obs = [o for o in all_obs if str(o.get("persona") or "") == BRIEF_PERSONA]
     trg = triages(session_id, db_path)
     called = [t for t in trg if not (t.get("skip_reason") or "")]
     skipped = [t for t in trg if (t.get("skip_reason") or "")]
@@ -460,14 +497,20 @@ def report(session_id: Optional[str] = None,
                             if t.get("ok") and not int(t.get("candidates") or 0)),
         "cost_usd": round(sum(float(t.get("cost_usd") or 0.0) for t in trg), 6),
         "candidates": len(obs),
+        # 중간 요약(summarizer)은 후보와 분리해 센다 — 같은 테이블에 있지만 성질이 다르다.
+        "briefs": len(brief_obs),
+        "briefs_on_demand": sum(1 for o in brief_obs
+                                if (o.get("trigger_type") or "")
+                                == TRIGGER_BRIEF_ON_DEMAND),
         "candidate_repeats": sum(int(o.get("repeats") or 0) for o in obs),
         "provisional_candidates": sum(1 for o in obs if o.get("provisional")),
         # 회의 중 카드에 남긴 사람 라벨(§19.4). 화면에 뜬 개입만 라벨될 수 있으므로
         # 분모는 candidates 가 아니라 'shown' 이다 — 여기서는 세지 않고(오케스트레이터
         # 메모리 값이라 DB 에 없다) 라벨 수만 정직하게 센다.
-        "feedback_ack": sum(1 for o in obs
+        # 라벨은 요약 카드에도 붙을 수 있으므로 전체 행(all_obs)에서 센다.
+        "feedback_ack": sum(1 for o in all_obs
                             if (o.get("feedback") or "") == FEEDBACK_ACK),
-        "feedback_dismiss": sum(1 for o in obs
+        "feedback_dismiss": sum(1 for o in all_obs
                                 if (o.get("feedback") or "") == FEEDBACK_DISMISS),
         "by_persona": per_persona,
         "skip_reasons": skip_counts,
@@ -816,6 +859,21 @@ class FacilitationOrchestrator:
         self._shown_count = 0                    # 화면에 낸 개입 수(예산 대비)
         self._pending: List[Dict[str, Any]] = []  # 참견도 2(소극) 대기 — [지금 점검]에서 방출
 
+        #: 중간 요약(summarizer) 상태. 주기·내용 게이트는 트리아지와 **같은 이유**로
+        #: 둔다: 시간만 보면 침묵 구간에 빈 요약이 나가고, 내용만 보면 발화량이 비용을
+        #: 정한다(RealtimeVaultSearcher 도 같은 2단 게이트를 쓴다).
+        self._brief_period = float(_c("facilitation.brief_period_sec", 600) or 0.0)
+        try:
+            self._brief_min_chars = int(
+                _c("facilitation.brief_min_new_chars", 600))
+        except (TypeError, ValueError):
+            self._brief_min_chars = 600
+        self._brief_buf: List[Utterance] = []    # 마지막 요약 이후 발화
+        self._brief_chars = 0                    # 그 글자 수(내용 게이트)
+        self._last_brief: Optional[float] = None  # None = 첫 주기가 아직 안 지났음
+        self._brief_count = 0
+        self._last_brief_text = ""               # 이전 요약(누적 압축용, FR-A2)
+
         # 게이트가 꺼져 있으면 풀 자체를 만들지 않는다 — LLM 호출 0회가 구조적으로
         # 보장된다(수용 기준 §14 첫 항목, 테스트 고정).
         self._pool: Optional[ThreadPoolExecutor] = None
@@ -834,8 +892,23 @@ class FacilitationOrchestrator:
         return persona_level(key)
 
     def active_personas(self) -> List[Persona]:
-        """참견도 > 0 인 페르소나만 — 0(금지)은 트리아지 입력에서 제외돼 비용이 0이다."""
-        return [p for p in all_personas() if self.persona_level(p.key) > 0]
+        """트리아지 대상 중 참견도 > 0 인 것만 — 0(금지)은 입력에서 제외돼 비용이 0이다.
+
+        주기 페르소나(중간 요약)는 여기 등장하지 않는다(`personas.triage_personas`) —
+        후보 판정이 아니라 자체 주기로 돌기 때문이다."""
+        return [p for p in triage_personas() if self.persona_level(p.key) > 0]
+
+    def brief_level(self) -> int:
+        """중간 요약의 실효 참견도. 2 미만이면 요약을 **만들지 않는다**.
+
+        관찰(1)에 '요약을 기록만 한다'는 상태를 두지 않는 이유: 요약은 오탐 판정의
+        대상이 아니라 사용자가 읽어야 의미가 있는 산출물이고, 아무도 보지 않는 요약에
+        Tier 1 비용을 쓰는 것은 예산 소진 시 생성을 멈추는 것과 같은 이유로 손실이다."""
+        return persona_level(BRIEF_PERSONA)
+
+    def brief_enabled(self) -> bool:
+        return (self.enabled and self._brief_period > 0
+                and self.brief_level() >= COLLECT_LEVEL)
 
     def status(self) -> Dict[str, Any]:
         return {
@@ -854,6 +927,10 @@ class FacilitationOrchestrator:
             "budget_remaining": (self.budget_remaining() if self._budget > 0 else 0),
             "display_personas": [p.key for p in self.active_personas()
                                  if self.persona_level(p.key) >= DISPLAY_LEVEL],
+            # 중간 요약(주기 페르소나) — 프런트의 [지금 정리] 버튼 표시 조건이다.
+            "brief_on": self.brief_enabled(),
+            "brief_count": self._brief_count,
+            "brief_period_sec": self._brief_period,
         }
 
     # ── 핫패스 API (RealtimeVaultSearcher 와 동일 계약) ────
@@ -872,11 +949,18 @@ class FacilitationOrchestrator:
         try:
             if self._pool is None or not text or not text.strip():
                 return
+            u = Utterance(text.strip(), t0, t1, bool(provisional))
             with self._lock:
-                self._window.append(
-                    Utterance(text.strip(), t0, t1, bool(provisional)))
+                self._window.append(u)
                 self._trim_window_locked()
+                # 중간 요약 버퍼는 트리아지 창과 **따로** 쌓는다 — 트리아지는 매 회차
+                # 창을 비우므로(WINDOW_CARRYOVER) 그것만 보면 요약이 마지막 25초만
+                # 보게 된다. 요약의 입력 단위는 '마지막 요약 이후'다.
+                self._brief_buf.append(u)
+                self._brief_chars += len(u.text)
+                self._trim_brief_locked()
             now = float(self._clock())
+            self._maybe_brief(now)
             if (self._last_triage is not None
                     and now - self._last_triage < self._period):
                 return
@@ -902,6 +986,185 @@ class FacilitationOrchestrator:
             pass
 
     # ── 내부 (트리아지 풀 스레드에서만 실행) ──────────────
+
+    # ── 중간 요약 (주기 페르소나 summarizer, 음성브리핑 PRD 트랙 A) ──────────
+
+    def _trim_brief_locked(self) -> None:
+        """요약 입력 버퍼를 BRIEF_WINDOW_CHARS 로 유지 (호출부가 락을 든다).
+
+        상한을 넘으면 **오래된 쪽을 버린다** — 이전 요약을 이어받으므로(FR-A2) 버린
+        부분이 통째로 사라지지는 않는다."""
+        while self._brief_chars > BRIEF_WINDOW_CHARS and len(self._brief_buf) > 1:
+            self._brief_chars -= len(self._brief_buf.pop(0).text)
+
+    def _maybe_brief(self, now: float) -> None:
+        """주기 게이트 — 시간과 내용 **둘 다** 맞을 때만 요약 1회를 제출한다."""
+        if not self.brief_enabled() or self._pool is None:
+            return
+        with self._lock:
+            if self._last_brief is None:
+                # 첫 요약은 '녹음 시작 + 1주기' 뒤다 — 시작 직후 요약할 내용이 없다.
+                self._last_brief = now
+                return
+            if now - self._last_brief < self._brief_period:
+                return
+            if self._brief_chars < self._brief_min_chars:
+                return                            # 침묵·짧은 발화 구간은 건너뛴다
+            buf, self._last_brief = self._take_brief_buf_locked(), now
+        self._pool.submit(self._brief_task, buf, TRIGGER_BRIEF_PERIODIC)
+
+    def _take_brief_buf_locked(self) -> List[Utterance]:
+        buf, self._brief_buf, self._brief_chars = self._brief_buf, [], 0
+        return buf
+
+    def brief_now(self) -> str:
+        """[지금 정리] — 주기를 기다리지 않고 요약 1회. 반환: '' 또는 건너뜀 사유.
+
+        [지금 점검](대기분 방출)과 달리 **이 버튼은 새 과금을 만든다** — 그래서
+        (a) 최소 간격(BRIEF_MIN_GAP_SEC)으로 연타를 막고 (b) 새로 쌓인 발화가 없으면
+        돌지 않으며 (c) 사유를 항상 화면에 돌려준다(조용히 실패 금지)."""
+        if self._pool is None:
+            return "회의 진행 페르소나가 꺼져 있습니다"
+        if self.brief_level() < COLLECT_LEVEL:
+            return "중간 요약 참견도가 0·1(관찰)이라 요약을 만들지 않습니다"
+        now = float(self._clock())
+        with self._lock:
+            if (self._last_brief is not None
+                    and now - self._last_brief < BRIEF_MIN_GAP_SEC):
+                left = BRIEF_MIN_GAP_SEC - (now - self._last_brief)
+                return f"방금 정리했습니다 — {left:.0f}초 뒤에 다시 시도하세요"
+            if not self._brief_buf:
+                return "지난 정리 이후 새로 쌓인 발화가 없습니다"
+            buf, self._last_brief = self._take_brief_buf_locked(), now
+        self._pool.submit(self._brief_task, buf, TRIGGER_BRIEF_ON_DEMAND)
+        return ""
+
+    def _brief_task(self, buf: List[Utterance], trigger: str) -> None:
+        """중간 요약 1회 — 개입 생성과 **같은 3관문**을 지난다(개입보다 입력이 크다).
+
+        예산(max_interventions_per_session)은 소모하지 않는다: 요약은 후보 기반이 아니라
+        주기 기반이라 횟수가 이미 시간으로 묶여 있고(트리아지와 같은 성질), 기회주의적
+        개입 카드가 사용자가 기대하는 주기 요약을 굶기면 안 된다. 상한은 주기와 회의당
+        비용 캡이 맡는다."""
+        from meeting_minutes_app.common import pricing, spend_guard
+        window_text, t0, t1, provisional = self._window_meta(buf)
+        if not window_text.strip():
+            return
+        p = get_persona(BRIEF_PERSONA)
+        if p is None:
+            return
+        model = effective_persona_model(BRIEF_PERSONA)
+        est = pricing.facilitation_brief_cost(model)
+        reserved = False
+        try:
+            if spend_guard.automation_paused():
+                self._notify("blocked", "자동 실행 일시정지로 중간 정리를 건너뜀")
+                return
+            reason = spend_guard.blocked(est, check_per_item=False)
+            if reason:
+                self._skip_reason = reason
+                self._notify("blocked", f"지출 한도로 중간 정리를 건너뜀: {reason}")
+                return
+            with self._lock:
+                if (self._meeting_cap > 0
+                        and self._session_cost + est > self._meeting_cap):
+                    over = self._session_cost
+                else:
+                    self._session_cost += est      # 예약
+                    reserved = True
+                    over = None
+            if not reserved:
+                msg = (f"이 회의의 facilitation 비용 ${over:.4f}이 회의당 캡 "
+                       f"${self._meeting_cap:.2f}에 도달 — 중간 정리 보류")
+                self._skip_reason = msg
+                self._notify("capped", msg)
+                return
+
+            raw = _call_llm(model, p.system_prompt,
+                            self._build_brief_prompt(window_text),
+                            max_tokens=pricing.FACILITATION_BRIEF_MAX_OUTPUT_TOKENS)
+            brief = self._parse_brief(raw)
+            if brief is None:
+                raise ValueError("요약 파싱 실패")
+        except Exception:
+            if reserved:                            # 실패분 환불(캡을 헛되게 쓰지 않는다)
+                with self._lock:
+                    self._session_cost = max(0.0, self._session_cost - est)
+            return
+
+        spend_guard.record(spend_guard.KIND_FACILITATION, est, model=model,
+                           units=1, unit_kind="brief",
+                           note=spend_guard.session_note(self.session_id))
+        text = _brief_to_text(brief)
+        with self._lock:
+            self._brief_count += 1
+            self._last_brief_text = text[:1200]
+            n = self._brief_count
+        # 요약도 관찰 로그에 남긴다 — 완전 삭제(purge)가 함께 지우고, 카드의 확인/닫기
+        # 라벨로 '이 요약이 쓸모 있었나'를 실측할 수 있다. trigger_type 으로 개입
+        # 후보와 구분되며 report() 가 분모를 섞지 않는다.
+        record_observation(self.session_id, BRIEF_PERSONA, trigger_type=trigger,
+                           confidence=1.0, span=text[:500], level=self.brief_level(),
+                           t0=t0, t1=t1, provisional=provisional, note=self._note,
+                           db_path=self._db_path)
+        item = {
+            "type": "facilitation",
+            "id": f"brief_{n}_{int((self._clock() or 0) * 1000)}",
+            "persona": BRIEF_PERSONA,
+            "personaLabel": p.label,
+            "level": self.brief_level(),
+            "kind": p.kind,                          # "brief"
+            "risk": p.risk,
+            "text": text[:1200],
+            "brief": brief,                          # 카드가 절별로 렌더한다
+            "evidence": [],
+            "span": ({"t0": round(float(t0), 2), "t1": round(float(t1 or t0), 2)}
+                     if t0 is not None else {}),
+            "quote": "",
+            "confidence": 1.0,
+            "searched": False,
+            "draft": True,
+            "costUsd": round(est, 6),
+            "spanHash": span_key(BRIEF_PERSONA, text[:500], trigger),
+            "onDemand": trigger == TRIGGER_BRIEF_ON_DEMAND,
+        }
+        if self.brief_level() >= DISPLAY_LEVEL or trigger == TRIGGER_BRIEF_ON_DEMAND:
+            # 사용자가 직접 누른 [지금 정리]는 참견도 2 여도 바로 보여준다 —
+            # 눌렀는데 대기열로 들어가면 버튼이 고장난 것처럼 보인다.
+            self._emit(item)
+        else:
+            with self._lock:
+                self._pending.append(item)
+            self._notify("pending", "정리한 내용이 있습니다",
+                         pending=self.pending_count())
+
+    def _build_brief_prompt(self, window_text: str) -> str:
+        parts = []
+        if self.topic:
+            parts.append(f"## 회의 주제\n{self.topic}")
+        if self._last_brief_text:
+            # 이전 요약을 이어받는다 — 전체 전사를 매번 넣지 않는 이유(FR-A2).
+            parts.append(f"## 이전 요약(이어받아 갱신하세요)\n{self._last_brief_text}")
+        parts.append(f"## 지난 정리 이후 발화\n{window_text}")
+        parts.append("위 내용을 지정된 JSON 형식으로만 정리하세요.")
+        return "\n\n".join(parts)
+
+    @staticmethod
+    def _parse_brief(raw: str) -> Optional[Dict[str, List[str]]]:
+        """요약 JSON 파싱 — 4개 키만 남기고 항목 수·길이를 자른다. 전부 비면 None
+        (빈 카드를 화면에 내지 않는다)."""
+        from meeting_minutes_app.meeting_pipeline.json_utils import parse_json_loose
+        obj = parse_json_loose(raw, expect="dict", default=None)
+        if not isinstance(obj, dict):
+            return None
+        out: Dict[str, List[str]] = {}
+        for key in ("points", "decisions", "actions", "open_questions"):
+            vals = obj.get(key)
+            items = [str(v).strip()[:300] for v in vals
+                     if isinstance(vals, list) and str(v).strip()][:4] \
+                if isinstance(vals, list) else []
+            out[key] = items
+        return out if any(out.values()) else None
 
     def _trim_window_locked(self) -> None:
         """최근 발화 창을 TRIAGE_WINDOW_CHARS 로 유지 (호출부가 락을 든다)."""
@@ -1371,6 +1634,10 @@ def _print_report(session_id: Optional[str], detail: bool) -> None:
                   f"중복 {d['repeats']:>3} · 조각기반 {d['provisional']:>3} · "
                   f"검색요청 {d['need_search']:>3} · "
                   f"확인 {d.get('ack', 0):>3} / 닫기 {d.get('dismiss', 0):>3}")
+    if r["briefs"]:
+        print(f"\n[중간 요약] {r['briefs']}건 "
+              f"(그중 [지금 정리] 버튼 {r['briefs_on_demand']}건) — 주기 산출물이라 "
+              f"위 후보 수에는 포함하지 않습니다")
     labeled = r["feedback_ack"] + r["feedback_dismiss"]
     if labeled:
         print(f"\n[사람 라벨] 확인 {r['feedback_ack']} · 닫기 "

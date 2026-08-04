@@ -305,9 +305,23 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
     setFacStatus(null);
   };
 
-  /** 확인(✓)·닫기(✕) — 카드를 화면에서 뺀다. 비용 합계는 줄지 않는다(이미 발생분). */
-  const facRemove = (id: string) =>
+  /**
+   * 확인(✓)·닫기(✕) — 카드를 화면에서 빼고 **그 판단을 서버 관찰 로그에 남긴다**.
+   * 회의 중 누른 이 버튼이 오탐률 실측(PRD §15)의 사람 라벨이 된다 — 종료 후 별도
+   * 라벨링을 요구하면 데이터가 모이지 않는다. 비용 합계는 줄지 않는다(이미 발생분).
+   */
+  const facFeedback = (id: string, label: "ack" | "dismiss") => {
+    const item = interventions.find(p => p.id === id);
     setInterventions(prev => prev.filter(p => p.id !== id));
+    const ws = wsRef.current;
+    if (!item?.spanHash || !ws || ws.readyState !== WebSocket.OPEN) return;
+    try {
+      ws.send(JSON.stringify({
+        type: "facilitation_feedback",
+        persona: item.persona, spanHash: item.spanHash, label,
+      }));
+    } catch (e) {}
+  };
 
   const resetFacilitation = () => {
     facMutedRef.current = false;
@@ -1485,8 +1499,8 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
           onCheckNow={facCheckNow}
           onMute={facMute}
           onJump={jumpToSpan}
-          onAck={facRemove}
-          onDismiss={facRemove}
+          onAck={(id) => facFeedback(id, "ack")}
+          onDismiss={(id) => facFeedback(id, "dismiss")}
         />
 
         <div className="flex-1 flex flex-col p-4 md:p-10">

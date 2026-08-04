@@ -125,6 +125,11 @@ export interface Facilitation {
   span?: { t0: number; t1: number };
   /** 트리아지가 근거로 든 발화 인용(짧게) */
   quote?: string;
+  /**
+   * 이 개입이 어느 관찰 로그 행인지 가리키는 키. [✓ 확인]/[✕ 닫기] 라벨을 그 행에
+   * 적는 데 쓴다(오탐률 실측의 사람 라벨 채널). 없으면 라벨을 보내지 않는다.
+   */
+  spanHash?: string;
   confidence?: number;
   /**
    * 이 개입 1건의 금액(USD, 서버가 실효 모델 단가로 계산해 실어 보낸다).

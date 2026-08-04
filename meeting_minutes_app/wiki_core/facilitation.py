@@ -176,7 +176,18 @@ _LOG_COLUMNS = {
     "t1": "REAL",
     "provisional": "INTEGER DEFAULT 0",
     "repeats": "INTEGER DEFAULT 0",
+    "feedback": "TEXT",
+    "feedback_ts": "TEXT",
 }
+
+#: 사람이 카드에 남기는 라벨(M1). 이 두 값이 §15 오탐률 실측의 **사람 라벨링 채널**이다 —
+#: 회의가 끝난 뒤 따로 라벨링 작업을 하지 않아도, 회의 중 누른 버튼이 데이터가 된다.
+#: "확인"은 도움이 됐다(참), "닫기"는 필요 없었다(오탐 후보)로 읽는다. 다만 닫기는
+#: '틀렸다'와 '맞지만 지금은 불필요하다'가 섞여 있어 그 자체로 precision 이 아니다 —
+#: report() 가 비율만 세고 판정하지 않는 이유다(실측 없는 자동 판정 금지).
+FEEDBACK_ACK = "ack"
+FEEDBACK_DISMISS = "dismiss"
+FEEDBACK_LABELS = (FEEDBACK_ACK, FEEDBACK_DISMISS)
 #: facilitation_triage 에 나중에 추가된 컬럼(리플레이 표시용).
 _TRIAGE_COLUMNS = {"note": "TEXT"}
 
@@ -270,6 +281,36 @@ def record_observation(session_id: str, persona: str, *, trigger_type: str = "",
         return "new"
     except sqlite3.Error:
         return ""
+    finally:
+        c.close()
+
+
+def record_feedback(session_id: str, persona: str, span_hash: str, label: str,
+                    db_path: Optional[Union[str, Path]] = None) -> bool:
+    """카드에 남긴 사람 라벨을 그 후보 행에 적는다(확인/닫기). 반환: 기록됐는지.
+
+    새 테이블을 만들지 않고 후보 행을 갱신하는 이유: 라벨은 후보 1건의 속성이고,
+    별도 테이블로 두면 완전 삭제(purge)에서 빠지는 사이드카가 하나 더 생긴다
+    (이 리포에서 실제로 겪은 프라이버시 구멍이다 — CLAUDE.md 사이드카 규칙).
+
+    같은 카드를 두 번 누르면 마지막 값이 남는다. 실패해도 예외를 올리지 않는다 —
+    라벨은 부수 효과이고, 실시간 스트림이 이것 때문에 끊기면 안 된다."""
+    if label not in FEEDBACK_LABELS:
+        return False
+    c = _connect(db_path)
+    if c is None:
+        return False
+    try:
+        with c:
+            _ensure(c)
+            cur = c.execute(
+                "UPDATE facilitation_log SET feedback = ?, feedback_ts = ? "
+                "WHERE session_id = ? AND persona = ? AND span_hash = ?",
+                (label, datetime.now().isoformat(timespec="seconds"),
+                 session_id, persona, span_hash))
+            return bool(cur.rowcount)
+    except sqlite3.Error:
+        return False
     finally:
         c.close()
 
@@ -385,11 +426,17 @@ def report(session_id: Optional[str] = None,
     for o in obs:
         k = str(o.get("persona") or "")
         d = per_persona.setdefault(k, {"candidates": 0, "repeats": 0,
-                                       "provisional": 0, "need_search": 0})
+                                       "provisional": 0, "need_search": 0,
+                                       "ack": 0, "dismiss": 0})
         d["candidates"] += 1
         d["repeats"] += int(o.get("repeats") or 0)
         d["provisional"] += 1 if o.get("provisional") else 0
         d["need_search"] += 1 if o.get("need_search") else 0
+        fb = str(o.get("feedback") or "")
+        if fb == FEEDBACK_ACK:
+            d["ack"] = d.get("ack", 0) + 1
+        elif fb == FEEDBACK_DISMISS:
+            d["dismiss"] = d.get("dismiss", 0) + 1
     skip_counts: Dict[str, int] = {}
     for t in skipped:
         r = str(t.get("skip_reason") or "")
@@ -415,6 +462,13 @@ def report(session_id: Optional[str] = None,
         "candidates": len(obs),
         "candidate_repeats": sum(int(o.get("repeats") or 0) for o in obs),
         "provisional_candidates": sum(1 for o in obs if o.get("provisional")),
+        # 회의 중 카드에 남긴 사람 라벨(§19.4). 화면에 뜬 개입만 라벨될 수 있으므로
+        # 분모는 candidates 가 아니라 'shown' 이다 — 여기서는 세지 않고(오케스트레이터
+        # 메모리 값이라 DB 에 없다) 라벨 수만 정직하게 센다.
+        "feedback_ack": sum(1 for o in obs
+                            if (o.get("feedback") or "") == FEEDBACK_ACK),
+        "feedback_dismiss": sum(1 for o in obs
+                                if (o.get("feedback") or "") == FEEDBACK_DISMISS),
         "by_persona": per_persona,
         "skip_reasons": skip_counts,
     }
@@ -1012,6 +1066,16 @@ class FacilitationOrchestrator:
             self._emit(item)
         return out
 
+    def feedback(self, persona: str, span_hash: str, label: str) -> bool:
+        """카드의 [✓ 확인]/[✕ 닫기] 라벨을 관찰 로그에 남긴다(§19.4).
+
+        회의 중 누른 버튼이 그대로 §15 오탐률 실측의 사람 라벨이 된다 — 종료 후 별도
+        라벨링 작업을 요구하면 데이터가 모이지 않는다."""
+        if not self.session_id:
+            return False
+        return record_feedback(self.session_id, persona, span_hash, label,
+                               db_path=self._db_path)
+
     def _emit(self, item: Dict[str, Any]) -> None:
         """화면 채널로 1건 방출 — 콜백 예외가 실시간 스트림을 깨지 않게 감싼다."""
         cb = self.on_intervention
@@ -1124,6 +1188,11 @@ class FacilitationOrchestrator:
             "evidence": evidence,
             "span": span,
             "quote": str(cand.get("span") or "")[:200],
+            # 이 개입이 어느 관찰 행인지 — 카드의 [✓ 확인]/[✕ 닫기]가 이 키로 라벨을
+            # 그 행에 적는다(§19.4). 행 id 대신 dedup 키를 쓰는 이유는 record_observation
+            # 의 반환 계약("new"/"repeat")을 바꾸지 않아도 되기 때문이다.
+            "spanHash": span_key(p.key, str(cand.get("span") or ""),
+                                 str(cand.get("trigger_type") or "")),
             "confidence": float(cand.get("confidence") or 0.0),
             # 이 개입 1건의 금액(실효 모델 단가). 러닝 미터가 이 값을 합산한다 —
             # 개입은 시간에 비례하지 않아 분당 요율로는 표현할 수 없고, 추정 대신
@@ -1247,7 +1316,7 @@ def _print_report(session_id: Optional[str], detail: bool) -> None:
     from meeting_minutes_app.common import spend_guard
     r = report(session_id)
     path = _resolve_db_path()
-    print("회의 진행 페르소나 관찰 로그 (M0 관찰모드)")
+    print("회의 진행 페르소나 관찰 로그")
     print(f"  DB: {path}")
     if session_id:
         print(f"  세션: {session_id}")
@@ -1287,7 +1356,16 @@ def _print_report(session_id: Optional[str], detail: bool) -> None:
                            key=lambda kv: -kv[1]["candidates"]):
             print(f"          {k:<16} 후보 {d['candidates']:>3} · "
                   f"중복 {d['repeats']:>3} · 조각기반 {d['provisional']:>3} · "
-                  f"검색요청 {d['need_search']:>3}")
+                  f"검색요청 {d['need_search']:>3} · "
+                  f"확인 {d.get('ack', 0):>3} / 닫기 {d.get('dismiss', 0):>3}")
+    labeled = r["feedback_ack"] + r["feedback_dismiss"]
+    if labeled:
+        print(f"\n[사람 라벨] 확인 {r['feedback_ack']} · 닫기 "
+              f"{r['feedback_dismiss']} (회의 중 카드에서 누른 값, 총 {labeled}건)")
+        print("        화면에 뜬 개입만 라벨될 수 있습니다 — 참견도 1(관찰) 후보는 "
+              "라벨이 비어 있는 게 정상입니다.")
+        print("        '닫기'는 '틀렸다'와 '맞지만 지금은 불필요하다'가 섞여 있어 "
+              "그대로 오탐률이 아닙니다.")
     print("\n정밀도(precision)는 여기서 계산하지 않습니다 — 아래 후보를 종료 후 "
           "사실검증·회의록과\n사람이 대조해 참/거짓을 라벨링해야 나오는 수치입니다"
           "(PRD §15 M2 진입 게이트).")
@@ -1299,8 +1377,10 @@ def _print_report(session_id: Optional[str], detail: bool) -> None:
                 t = f" [{float(o['t0']):.0f}~{float(o.get('t1') or 0):.0f}s]"
             flag = " (조각)" if o.get("provisional") else ""
             rep = f" ×{1 + int(o.get('repeats') or 0)}" if o.get("repeats") else ""
+            fb = {FEEDBACK_ACK: " ✓확인",
+                  FEEDBACK_DISMISS: " ✕닫기"}.get(o.get("feedback") or "", "")
             print(f"  {o.get('ts','')} {o.get('persona','')}{rep}"
-                  f" conf={float(o.get('confidence') or 0):.2f}{t}{flag}")
+                  f" conf={float(o.get('confidence') or 0):.2f}{t}{flag}{fb}")
             print(f"      {o.get('trigger_type','')}: {o.get('span','')}")
     else:
         print("후보 인용문을 함께 보려면: --detail")

@@ -921,6 +921,92 @@ class TestCostIsVisibleWhereItHappens:
             config_loader._cache = None
 
 
+class TestHumanFeedbackLabels:
+    """카드의 [✓ 확인]/[✕ 닫기] 가 §15 오탐률 실측의 **사람 라벨**로 남는지 고정.
+
+    이 채널이 없으면 M2 진입 게이트(오탐률)는 회의가 끝난 뒤 사람이 따로 라벨링해야만
+    나온다 — 실무에서 그 작업은 하지 않게 되고, 게이트는 영구히 열리지 않는다."""
+
+    def _shown_item(self, cfg, monkeypatch, fac_db, session="f1"):
+        """참견도 3 으로 개입 1건을 실제로 만들어 그 이벤트를 돌려준다."""
+        values = {"facilitation.enabled": True,
+                  "facilitation.triage_period_sec": 600,
+                  "facilitation.personas.scribe.level": 3}
+        for k in personas.PERSONAS:
+            values.setdefault(f"facilitation.personas.{k}.level", 1)
+        values["facilitation.personas.scribe.level"] = 3
+        cfg(values)
+        cands = [{"persona": "scribe", "trigger_type": "missing",
+                  "confidence": 0.9, "span": "결정은 났는데 담당자가 없다"}]
+
+        def _fake(model, system, user, max_tokens=None):
+            if "트리아지" in system:
+                return json.dumps(cands, ensure_ascii=False)
+            return "담당자와 기한을 정하고 넘어가시겠어요?"
+
+        monkeypatch.setattr(facilitation, "_call_llm", _fake)
+        shown = []
+        orch = FacilitationOrchestrator(session_id=session,
+                                        on_intervention=shown.append,
+                                        db_path=fac_db)
+        _offer_and_drain(orch, ["그럼 그렇게 하시죠."])
+        assert len(shown) == 1
+        return orch, shown[0]
+
+    def test_ack_and_dismiss_land_on_the_candidate_row(
+            self, cfg, fac_db, monkeypatch):
+        orch, item = self._shown_item(cfg, monkeypatch, fac_db)
+        assert item["spanHash"]                  # 라벨을 붙일 좌표가 이벤트에 있다
+
+        assert orch.feedback("scribe", item["spanHash"], "ack") is True
+        rows = facilitation.observations(session_id="f1", db_path=fac_db)
+        assert rows[0]["feedback"] == "ack" and rows[0]["feedback_ts"]
+
+        # 같은 카드를 다시 누르면 마지막 값이 남는다(새 행을 만들지 않는다)
+        assert orch.feedback("scribe", item["spanHash"], "dismiss") is True
+        rows = facilitation.observations(session_id="f1", db_path=fac_db)
+        assert len(rows) == 1 and rows[0]["feedback"] == "dismiss"
+
+    def test_unknown_label_is_rejected(self, cfg, fac_db, monkeypatch):
+        """자유 문자열을 그대로 받으면 집계가 무의미해진다."""
+        orch, item = self._shown_item(cfg, monkeypatch, fac_db, session="f2")
+        assert orch.feedback("scribe", item["spanHash"], "좋아요") is False
+        rows = facilitation.observations(session_id="f2", db_path=fac_db)
+        assert not rows[0]["feedback"]
+
+    def test_feedback_for_missing_row_is_not_an_error(self, fac_db):
+        """이미 완전 삭제된 회의의 카드를 눌러도 조용히 무시한다(스트림 보호)."""
+        assert facilitation.record_feedback("없는세션", "scribe", "deadbeef",
+                                            "ack", db_path=fac_db) is False
+
+    def test_report_counts_labels_overall_and_per_persona(
+            self, cfg, fac_db, monkeypatch):
+        orch, item = self._shown_item(cfg, monkeypatch, fac_db, session="f3")
+        orch.feedback("scribe", item["spanHash"], "dismiss")
+        r = facilitation.report("f3", db_path=fac_db)
+        assert r["feedback_dismiss"] == 1 and r["feedback_ack"] == 0
+        assert r["by_persona"]["scribe"]["dismiss"] == 1
+        assert r["by_persona"]["scribe"]["ack"] == 0
+
+    def test_purge_removes_labels_with_the_candidate(self, cfg, fac_db, monkeypatch):
+        """라벨을 별도 테이블에 두지 않은 이유 — 완전 삭제에서 빠지는 사이드카가
+        하나 더 생기면 안 된다(발화 인용이 남았던 전례)."""
+        orch, item = self._shown_item(cfg, monkeypatch, fac_db, session="f4")
+        orch.feedback("scribe", item["spanHash"], "ack")
+        facilitation.delete_session_observations("f4", db_path=fac_db)
+        assert facilitation.observations(session_id="f4", db_path=fac_db) == []
+
+    def test_ws_message_routes_to_the_orchestrator(self):
+        """프런트가 보내는 메시지 타입이 두 수신 루프 모두에 배선돼 있는지 고정 —
+        한쪽만 있으면 HTTP 청크 모드에서 라벨이 조용히 사라진다(전례 있음)."""
+        from pathlib import Path
+        src = Path("web/backend/api/realtime.py").read_text(encoding="utf-8")
+        # 수신 루프가 2개다(WS 오디오 경로 / HTTP 청크 경로) — 분기도 2벌 있어야 한다
+        assert src.count('"facilitation_feedback"') == 2
+        assert src.count('"facilitation_check"') == 2
+        assert "def _facilitation_feedback" in src
+
+
 class TestPersonaMatrixApi:
     """설정 화면의 참견도 매트릭스가 읽는 API — 목록·상한·실효값의 단일 소스.
 

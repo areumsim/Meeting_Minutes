@@ -444,6 +444,8 @@ class BrowserRealtimeSession:
                                 break
                             elif msg.get("type") == "facilitation_check":
                                 self._facilitation_check()
+                            elif msg.get("type") == "facilitation_feedback":
+                                self._facilitation_feedback(msg)
                             elif msg.get("type") == "audio":
                                 # base64 인코딩된 오디오
                                 if self._diarize_pp:
@@ -792,6 +794,20 @@ class BrowserRealtimeSession:
             if not items:
                 self._emit_facilitation_status(
                     {"kind": "empty", "message": "지금은 점검할 항목이 없습니다"})
+        except Exception:
+            pass
+
+    def _facilitation_feedback(self, msg: dict) -> None:
+        """카드의 [✓ 확인]/[✕ 닫기] — 사람 라벨을 관찰 로그에 남긴다(PRD §19.4).
+
+        회의 중 누른 버튼이 그대로 오탐률 실측(§15)의 사람 라벨이 된다. LLM 호출도
+        추가 과금도 없다."""
+        if self._facilitator is None:
+            return
+        try:
+            self._facilitator.feedback(
+                str(msg.get("persona") or ""), str(msg.get("spanHash") or ""),
+                str(msg.get("label") or ""))
         except Exception:
             pass
 
@@ -1560,6 +1576,8 @@ class BrowserRealtimeSession:
                         break
                     elif msg.get("type") == "facilitation_check":
                         self._facilitation_check()
+                    elif msg.get("type") == "facilitation_feedback":
+                        self._facilitation_feedback(msg)
                     elif msg.get("type") == "audio":
                         _b = base64.b64decode(msg["data"])
 

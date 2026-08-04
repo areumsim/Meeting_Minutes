@@ -684,7 +684,8 @@ def replay_session(session_id: str, *, db_path: Optional[Union[str, Path]] = Non
 
     **왜 필요한가**: M0 라이브 수집은 새 회의를 5건 녹음할 때까지 기다려야 하는데,
     지난 회의에는 대조 정답(종료 후 finalize 사실검증·회의록)이 **이미 있다**. 오디오를
-    다시 전사하지 않으므로 STT 재과금도 없다(트리아지 LLM 비용만 든다).
+    다시 전사하지 않으므로 STT 재과금도 없다(트리아지 LLM 비용만 든다 — 화면 채널을
+    주지 않으므로 참견도가 3 이어도 Tier 1 개입 생성은 돌지 않는다, `_dispatch` 참조).
 
     **측정상 주의(중요)**: 리플레이는 보정이 끝난 확정 전사를 보므로, 조각 전사를 보는
     라이브보다 유리하다. 여기서 나온 precision 은 **상한**이고 "페르소나 판정 자체의
@@ -1227,6 +1228,11 @@ class FacilitationOrchestrator:
 
         예산이 소진되면 **생성 자체를 하지 않는다** — 화면에 못 낼 개입을 만드는 것은
         돈만 쓰는 일이다(관찰 기록은 이미 남아 있다)."""
+        if self.on_intervention is None:
+            # 화면 채널이 없는 호출자(리플레이·헤드리스 측정)는 개입을 만들지 않는다.
+            # 같은 이유의 연장이다 — 아무도 볼 수 없는 개입에 Tier 1 모델 비용을 쓰는
+            # 것은 순손실이고, 리플레이는 "트리아지 비용만 든다"가 계약이다.
+            return "no_channel"
         if level < COLLECT_LEVEL:
             return "observe"                     # 0·1 은 기록만(이미 record 됨)
         if float(cand.get("confidence") or 0.0) < self._min_conf:

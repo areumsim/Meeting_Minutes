@@ -645,6 +645,19 @@ class TestDisplayChannelM1:
         assert st["budget"] == 12 and st["budget_remaining"] == 12
         assert st["display_personas"] == ["scribe"]      # 참견도 3 이상만
 
+    def test_no_screen_channel_means_no_generation(self, cfg, fac_db, monkeypatch):
+        """화면 채널이 없는 호출자(리플레이·헤드리스)는 참견도 3 이어도 생성하지 않는다.
+
+        아무도 볼 수 없는 개입에 Tier 1 모델 비용을 쓰는 것은 순손실이다 — 리플레이의
+        계약("트리아지 비용만 든다")이 M1 으로 조용히 깨질 자리였다."""
+        cfg(self._values())
+        calls = self._llm(monkeypatch, [self._cand()])
+        orch = FacilitationOrchestrator(session_id="d18")   # on_intervention 없음
+        self._run(orch)
+        assert [c["triage"] for c in calls] == [True]
+        assert orch.status()["shown_count"] == 0
+        assert len(facilitation.observations(session_id="d18")) == 1   # 기록은 남는다
+
     def test_observe_level_never_generates_even_with_high_confidence(
             self, cfg, fac_db, monkeypatch):
         """M0 계약 유지 — 참견도 1 은 confidence 1.0 이어도 생성·표시가 없다."""
@@ -1155,6 +1168,28 @@ class TestReplayPastMeetings:
         assert FacilitationOrchestrator(session_id="x").enabled is False
         res = facilitation.replay_session("past-1", db_path=session_with_segments)
         assert res["ok"] is True and res["triages"] >= 1
+
+    def test_replay_costs_triage_only_even_with_display_levels(
+            self, cfg, session_with_segments, monkeypatch):
+        """리플레이 계약: 트리아지 비용만 든다. 참견도 3(옆 카드)로 둔 설정에서도
+        개입 생성(Tier 1, 상위 모델)이 돌면 아무도 못 보는 카드에 돈을 쓰는 것이다."""
+        cfg({"facilitation.enabled": True, "facilitation.triage_period_sec": 25,
+             "facilitation.personas.scribe.level": 3,
+             "facilitation.personas.senior.level": 3})
+        cands = [{"persona": "scribe", "trigger_type": "missing",
+                  "confidence": 0.95, "span": "결정은 났는데 담당자가 없습니다."}]
+        calls = []
+
+        def _fake(model, system, user, max_tokens=None):
+            calls.append("트리아지" in system)
+            return json.dumps(cands, ensure_ascii=False)
+
+        monkeypatch.setattr(facilitation, "_call_llm", _fake)
+        res = facilitation.replay_session("past-1", db_path=session_with_segments)
+        assert res["ok"] is True
+        assert all(calls), "리플레이가 개입 생성까지 호출했다(비용 순손실)"
+        assert facilitation.observations("past-1",
+                                         db_path=session_with_segments)   # 기록은 남는다
 
     def test_enabled_override_does_not_leak_into_live_path(self, cfg):
         """오버라이드는 리플레이 전용 — 기본 경로의 '꺼져 있으면 LLM 0회'를 깨지 않는다."""

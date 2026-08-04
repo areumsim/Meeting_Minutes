@@ -22,9 +22,9 @@ function NodeBadge({ node, onClick }: { node: GraphNode; onClick?: () => void })
       disabled={!onClick}
       className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm border border-brand-200 bg-white hover:bg-brand-50 transition-all ${onClick ? "cursor-pointer" : "cursor-default"}`}
     >
-      <span className={`text-[10px] font-bold uppercase px-1.5 py-0.5 rounded ${tone(node.type)}`}>{node.type}</span>
+      <span className={`text-[11px] font-bold uppercase px-1.5 py-0.5 rounded ${tone(node.type)}`}>{node.type}</span>
       <span className="font-medium text-brand-900 truncate max-w-[14rem]">{node.label}</span>
-      {onClick && <ChevronRight size={14} className="text-brand-400" />}
+      {onClick && <ChevronRight size={14} className="text-brand-500" />}
     </button>
   );
 }
@@ -153,7 +153,7 @@ export default function GraphExplorer({ initialQuery = "" }: { initialQuery?: st
       {/* 검색 */}
       <div className="flex gap-2 mb-4">
         <div className="relative flex-1">
-          <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-brand-400" />
+          <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-brand-500" />
           <input
             aria-label="지식그래프 노드 검색"
             value={q}
@@ -185,14 +185,14 @@ export default function GraphExplorer({ initialQuery = "" }: { initialQuery?: st
                 </button>
               )}
             </div>
-            <button onClick={closeDetail} className="text-brand-400 hover:text-brand-900"><X size={18} /></button>
+            <button onClick={closeDetail} className="text-brand-500 hover:text-brand-900"><X size={18} /></button>
           </div>
 
           <div className="flex items-center gap-2 mb-1">
             <span className={`text-[11px] font-bold uppercase px-2 py-0.5 rounded ${tone(focus.node.type)}`}>{focus.node.type}</span>
             <h3 className="text-lg font-bold text-brand-950">{focus.node.label}</h3>
           </div>
-          {loadingNode && <Loader2 size={16} className="animate-spin text-brand-400 my-2" />}
+          {loadingNode && <Loader2 size={16} className="animate-spin text-brand-500 my-2" />}
 
           {/* 속성 */}
           {focus.node.attributes && Object.keys(focus.node.attributes).length > 0 && (
@@ -221,7 +221,7 @@ export default function GraphExplorer({ initialQuery = "" }: { initialQuery?: st
             <div className="space-y-4 mt-2">
               {Object.entries(grouped).map(([rel, nodes]) => (
                 <div key={rel}>
-                  <div className="text-xs font-bold text-brand-400 uppercase tracking-widest mb-2">{rel} ({nodes.length})</div>
+                  <div className="text-xs font-bold text-brand-500 uppercase tracking-widest mb-2">{rel} ({nodes.length})</div>
                   <div className="flex flex-wrap gap-2">
                     {nodes.map((n) => <NodeBadge key={n.id} node={n} onClick={() => openNode(n)} />)}
                   </div>
@@ -229,14 +229,14 @@ export default function GraphExplorer({ initialQuery = "" }: { initialQuery?: st
               ))}
             </div>
           ) : (
-            !loadingNode && <p className="text-sm text-brand-400 mt-2">연결된 이웃이 없습니다.</p>
+            !loadingNode && <p className="text-sm text-brand-500 mt-2">연결된 이웃이 없습니다.</p>
           )}
         </section>
       ) : (
         /* 검색 결과: 개요 그래프 + 목록 */
         <section>
           {searching ? (
-            <div className="flex items-center gap-2 text-brand-400 text-sm py-8 justify-center">
+            <div className="flex items-center gap-2 text-brand-500 text-sm py-8 justify-center">
               <Loader2 size={18} className="animate-spin" /> 불러오는 중...
             </div>
           ) : results.length > 0 ? (
@@ -244,7 +244,7 @@ export default function GraphExplorer({ initialQuery = "" }: { initialQuery?: st
               {/* 검색 즉시 보이는 연결 개요 그래프 — 노드를 클릭하면 그 노드로 들어간다. */}
               {overview && overview.nodes.length > 0 && (
                 <div className="mb-4 rounded-2xl border border-brand-200 bg-white shadow-sm overflow-hidden">
-                  <div className="flex items-center gap-2 px-4 pt-3 text-xs font-bold text-brand-400 uppercase tracking-widest">
+                  <div className="flex items-center gap-2 px-4 pt-3 text-xs font-bold text-brand-500 uppercase tracking-widest">
                     <Network size={13} /> 연결 개요
                     {overviewLoading && <Loader2 size={12} className="animate-spin" />}
                   </div>
@@ -258,7 +258,7 @@ export default function GraphExplorer({ initialQuery = "" }: { initialQuery?: st
                 </div>
               )}
               {overviewLoading && !overview && (
-                <div className="mb-4 flex items-center gap-2 text-brand-400 text-xs py-6 justify-center">
+                <div className="mb-4 flex items-center gap-2 text-brand-500 text-xs py-6 justify-center">
                   <Loader2 size={14} className="animate-spin" /> 연결 관계를 그리는 중...
                 </div>
               )}
@@ -267,7 +267,7 @@ export default function GraphExplorer({ initialQuery = "" }: { initialQuery?: st
               </div>
             </>
           ) : searched && !error ? (
-            <p className="text-sm text-brand-400 py-8 text-center">검색 결과가 없습니다.</p>
+            <p className="text-sm text-brand-500 py-8 text-center">검색 결과가 없습니다.</p>
           ) : null}
         </section>
       )}

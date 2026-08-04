@@ -285,7 +285,7 @@ export default function SessionDetail({ id, onBack, onOpenGraph }: Props) {
   if (loading) {
     return (
       <div className="flex items-center justify-center py-32">
-        <Loader2 className="animate-spin text-brand-400" size={32} />
+        <Loader2 className="animate-spin text-brand-500" size={32} />
       </div>
     );
   }
@@ -295,7 +295,7 @@ export default function SessionDetail({ id, onBack, onOpenGraph }: Props) {
       <div className="text-center py-20">
         <AlertCircle size={48} className="mx-auto text-red-400 mb-4" />
         <p className="text-lg font-bold text-brand-500">세션을 찾을 수 없습니다</p>
-        <p className="text-sm text-brand-400 mt-2">서버에서 아직 동기화 중일 수 있어요. 잠시 후 다시 시도해주세요.</p>
+        <p className="text-sm text-brand-500 mt-2">서버에서 아직 동기화 중일 수 있어요. 잠시 후 다시 시도해주세요.</p>
         <div className="mt-4 flex items-center justify-center gap-4">
           <button
             onClick={() => { setLoading(true); load(); }}
@@ -394,14 +394,14 @@ export default function SessionDetail({ id, onBack, onOpenGraph }: Props) {
                 {retrying ? <Loader2 size={15} className="animate-spin" /> : <RefreshCw size={15} />}
                 {retrying ? "재시도 중..." : "다시 시도"}
               </button>
-              <p className="mt-1.5 text-xs text-brand-400">
+              <p className="mt-1.5 text-xs text-brand-500">
                 음성 인식(STT)이 끝난 뒤 실패한 경우, 재시도는 완료된 전사를 재사용해 비용을 다시 청구하지 않습니다.
               </p>
             </div>
           )}
         </div>
         <button onClick={() => load()} className="p-2 hover:bg-brand-100 rounded-xl transition-colors">
-          <RefreshCw size={16} className="text-brand-400" />
+          <RefreshCw size={16} className="text-brand-500" />
         </button>
       </div>
 
@@ -409,7 +409,7 @@ export default function SessionDetail({ id, onBack, onOpenGraph }: Props) {
         <div className="bg-white border border-brand-200 rounded-3xl p-12 md:p-16 text-center">
           {retryNote && (
             <div className="max-w-md mx-auto mb-6 px-4 py-2.5 bg-brand-50 border border-brand-200 rounded-xl text-sm text-brand-600 text-left flex items-start gap-2">
-              <RefreshCw size={15} className="mt-0.5 shrink-0 text-brand-400" />
+              <RefreshCw size={15} className="mt-0.5 shrink-0 text-brand-500" />
               <span>{retryNote}</span>
             </div>
           )}
@@ -430,7 +430,7 @@ export default function SessionDetail({ id, onBack, onOpenGraph }: Props) {
                   style={{ width: `${Math.max(3, progress.percent)}%` }}
                 />
               </div>
-              <p className="text-xs text-brand-400 mt-2">
+              <p className="text-xs text-brand-500 mt-2">
                 경과 {formatDuration(progress.elapsed)} · 오디오 길이·서버 상황에 따라 수 분 걸릴 수 있습니다.
                 {progress.stage.includes("STT") || progress.stage.includes("음성 인식")
                   ? " (음성 인식은 파일 길이에 비례해 가장 오래 걸리며, 이 구간에서는 퍼센트가 잠시 멈춘 것처럼 보일 수 있습니다.)"
@@ -466,7 +466,7 @@ export default function SessionDetail({ id, onBack, onOpenGraph }: Props) {
                 className={`flex items-center gap-2 px-4 md:px-6 py-3 md:py-4 text-xs md:text-sm font-bold transition-all border-b-2 whitespace-nowrap shrink-0 ${
                   activeTab === t.key
                     ? "border-brand-900 text-brand-900"
-                    : "border-transparent text-brand-400 hover:text-brand-700"
+                    : "border-transparent text-brand-500 hover:text-brand-700"
                 }`}
               >
                 {t.icon} {t.label}
@@ -497,7 +497,7 @@ export default function SessionDetail({ id, onBack, onOpenGraph }: Props) {
                   })()}
                   {Object.entries(graph.nodes).map(([type, nodes]) => (
                     <div key={type}>
-                      <h4 className="text-xs font-black uppercase tracking-[0.2em] text-brand-400 mb-3">
+                      <h4 className="text-xs font-black uppercase tracking-[0.2em] text-brand-500 mb-3">
                         {GRAPH_TYPE_LABELS[type] || type} ({nodes.length})
                       </h4>
                       <div className="flex flex-wrap gap-2">
@@ -516,7 +516,7 @@ export default function SessionDetail({ id, onBack, onOpenGraph }: Props) {
                             {expandedNodeId === node.id && (
                               <div className="mt-2 mb-1 px-4 py-3 bg-zinc-50 rounded-xl border border-zinc-200 text-sm max-w-sm">
                                 {neighborsLoading === node.id ? (
-                                  <div className="flex items-center gap-2 text-brand-400">
+                                  <div className="flex items-center gap-2 text-brand-500">
                                     <Loader2 size={14} className="animate-spin" /> 불러오는 중...
                                   </div>
                                 ) : neighborsError[node.id] ? (
@@ -527,12 +527,12 @@ export default function SessionDetail({ id, onBack, onOpenGraph }: Props) {
                                   <ul className="space-y-1">
                                     {neighborsCache[node.id].neighbors.map(n => (
                                       <li key={n.id} className="text-brand-700">
-                                        <span className="text-brand-400">{GRAPH_TYPE_LABELS[n.type] || n.type}:</span> {n.label}
+                                        <span className="text-brand-500">{GRAPH_TYPE_LABELS[n.type] || n.type}:</span> {n.label}
                                       </li>
                                     ))}
                                   </ul>
                                 ) : (
-                                  <span className="text-brand-400">연결된 노드가 없습니다.</span>
+                                  <span className="text-brand-500">연결된 노드가 없습니다.</span>
                                 )}
                               </div>
                             )}
@@ -543,7 +543,7 @@ export default function SessionDetail({ id, onBack, onOpenGraph }: Props) {
                   ))}
                 </div>
               ) : (
-                <div className="text-center py-16 text-brand-400">
+                <div className="text-center py-16 text-brand-500">
                   <Network size={32} className="mx-auto mb-4" />
                   <p>그래프 데이터가 없습니다.</p>
                 </div>
@@ -576,12 +576,12 @@ export default function SessionDetail({ id, onBack, onOpenGraph }: Props) {
                   <div className="space-y-4 max-h-[65vh] overflow-y-auto overscroll-contain">
                     {segments.map((seg, i) => (
                       <div key={i} className="flex gap-4 group">
-                        <span className="text-xs text-brand-400 font-mono mt-1 shrink-0 w-14">
+                        <span className="text-xs text-brand-500 font-mono mt-1 shrink-0 w-14">
                           {formatTime(seg.start_time)}
                         </span>
                         <div className="flex-1 min-w-0">
                           {seg.speaker && (
-                            <span className="text-[10px] font-black uppercase tracking-[0.2em] text-brand-400 block mb-1">
+                            <span className="text-[11px] font-black uppercase tracking-[0.2em] text-brand-500 block mb-1">
                               {seg.speaker}
                             </span>
                           )}
@@ -630,7 +630,7 @@ export default function SessionDetail({ id, onBack, onOpenGraph }: Props) {
                 )}
               </>
             ) : (
-              <div className="text-center py-16 text-brand-400">
+              <div className="text-center py-16 text-brand-500">
                 <FileText size={32} className="mx-auto mb-4" />
                 <p>해당 문서가 없습니다.</p>
               </div>
@@ -650,14 +650,14 @@ export default function SessionDetail({ id, onBack, onOpenGraph }: Props) {
           >
             <span className="flex items-center gap-2 text-sm font-bold text-brand-900">
               <BookOpen size={15} className="text-emerald-600" />
-              참조된 관련 노트 <span className="text-brand-400 font-medium">({related.length})</span>
+              참조된 관련 노트 <span className="text-brand-500 font-medium">({related.length})</span>
             </span>
-            <ChevronDown size={16} className={`text-brand-400 transition-transform ${relatedOpen ? "" : "-rotate-90"}`} />
+            <ChevronDown size={16} className={`text-brand-500 transition-transform ${relatedOpen ? "" : "-rotate-90"}`} />
           </button>
 
           {relatedOpen && (
             <div className="px-6 pb-6">
-              <p className="text-xs text-brand-400 mb-4">
+              <p className="text-xs text-brand-500 mb-4">
                 회의 중 발화와 관련해 자동으로 찾은 내부 자료입니다(원본 노트는 수정되지 않습니다).
               </p>
               <div className="space-y-3">
@@ -672,7 +672,7 @@ export default function SessionDetail({ id, onBack, onOpenGraph }: Props) {
                         {n.source_type === "paper" ? "🎓" : n.source_type === "web" ? "🌐" : "📄"}{" "}
                         {n.section_path || n.title}
                       </button>
-                      <span className="text-[10px] font-mono text-brand-400 tabular-nums">
+                      <span className="text-[11px] font-mono text-brand-500 tabular-nums">
                         관련도 {(n.score ?? 0).toFixed(2)}
                         {(n.hits ?? 1) > 1 ? ` · ${n.hits}회 참조` : ""}
                         {n.found_by === "section" ? " · 섹션 일치" : n.found_by === "web" ? " · 웹" : ""}
@@ -680,12 +680,12 @@ export default function SessionDetail({ id, onBack, onOpenGraph }: Props) {
                     </div>
                     {n.snippet && <p className="text-xs text-brand-600 mt-1.5">{n.snippet}</p>}
                     {n.segment_text && (
-                      <p className="text-[11px] text-brand-400 mt-1.5 italic">
+                      <p className="text-[11px] text-brand-500 mt-1.5 italic">
                         발화{n.elapsed_sec ? ` (${formatTime(n.elapsed_sec)})` : ""}: {n.segment_text}
                       </p>
                     )}
                     {n.note_path && (
-                      <p className="text-[10px] text-brand-300 mt-1 font-mono truncate">{n.note_path}</p>
+                      <p className="text-[11px] text-brand-500 mt-1 font-mono truncate">{n.note_path}</p>
                     )}
                   </div>
                 ))}
@@ -693,7 +693,7 @@ export default function SessionDetail({ id, onBack, onOpenGraph }: Props) {
 
               {relatedCross.length > 0 && (
                 <div className="mt-6 pt-5 border-t border-brand-100">
-                  <h5 className="text-[11px] font-black uppercase tracking-[0.2em] text-brand-400 mb-3">
+                  <h5 className="text-[11px] font-black uppercase tracking-[0.2em] text-brand-500 mb-3">
                     최근 회의에서 자주 참조된 노트
                   </h5>
                   <div className="flex flex-wrap gap-2">
@@ -704,7 +704,7 @@ export default function SessionDetail({ id, onBack, onOpenGraph }: Props) {
                         title={`${c.note_path}${c.last_date ? ` · 최근 ${c.last_date.slice(0, 10)}` : ""}`}
                         className="text-xs bg-brand-50 border border-brand-200 text-brand-700 px-2.5 py-1 rounded-full hover:bg-brand-100 transition-colors"
                       >
-                        {c.title} <span className="text-brand-400">· 회의 {c.session_count}건</span>
+                        {c.title} <span className="text-brand-500">· 회의 {c.session_count}건</span>
                       </button>
                     ))}
                   </div>

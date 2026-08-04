@@ -2,7 +2,10 @@
 <html lang="ko">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, maximum-scale=1.0, user-scalable=no" />
+    <!-- 핀치줌을 막지 않는다(WCAG 1.4.4). maximum-scale=1 + user-scalable=no 는
+         iOS Safari 는 무시하지만 Capacitor WebView·안드로이드는 그대로 따라서,
+         저시력 사용자가 10~12px 한글을 확대할 방법이 없었다. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <!-- 외부 폰트(Google Fonts) 의존 제거 — 오프라인/사내망에서도 로딩 지연·실패 없이
          시스템 폰트로 동작한다(비개발자 배포 exe 전제). -->
     <!-- CSP 는 빌드 프로파일이 주입한다(vite.config.ts 의 cspPlugin).

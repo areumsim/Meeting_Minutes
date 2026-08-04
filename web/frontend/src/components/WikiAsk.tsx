@@ -73,7 +73,7 @@ export default function WikiAsk() {
       <p className="text-brand-500 mb-6 md:mb-10 text-sm md:text-base">
         연결한 <b>노트 폴더(.md)</b>에 쌓인 회의·세미나 기록을 근거로 질문에 답합니다.
         <br className="hidden md:block" />
-        <span className="text-brand-400 text-xs md:text-sm">Obsidian 앱은 필요 없습니다 — [설정] → “노트 폴더(.md)”만 지정하면 됩니다. (지정 후 검색 인덱스는 자동 생성되며, 바로 안 되면 [설정]에서 “검색 인덱스·그래프 재빌드”를 한 번 눌러주세요.)</span>
+        <span className="text-brand-500 text-xs md:text-sm">Obsidian 앱은 필요 없습니다 — [설정] → “노트 폴더(.md)”만 지정하면 됩니다. (지정 후 검색 인덱스는 자동 생성되며, 바로 안 되면 [설정]에서 “검색 인덱스·그래프 재빌드”를 한 번 눌러주세요.)</span>
       </p>
 
       {vaultConnected === false && (
@@ -106,12 +106,12 @@ export default function WikiAsk() {
             {asking ? <Loader2 className="animate-spin" size={18} /> : <Send size={18} />}
           </button>
         </div>
-        <p className="text-[10px] md:text-xs text-zinc-400 mt-2">Enter로 질문, Shift+Enter로 줄바꿈</p>
+        <p className="text-[11px] md:text-xs text-zinc-500 mt-2">Enter로 질문, Shift+Enter로 줄바꿈</p>
       </div>
 
       <div className="mt-6 md:mt-8 space-y-5">
         {history.length === 0 && !asking && (
-          <div className="text-center py-16 text-brand-400">
+          <div className="text-center py-16 text-brand-500">
             <MessageCircleQuestion size={40} className="mx-auto mb-3 opacity-50" />
             <p className="text-sm">아직 질문이 없습니다. 노트 폴더에 쌓인 기록을 기반으로 무엇이든 물어보세요.</p>
           </div>
@@ -126,7 +126,7 @@ export default function WikiAsk() {
         {history.map((item, i) => (
           <div key={i} className="bg-white border border-brand-100 md:border-zinc-200 rounded-2xl shadow-sm p-5 md:p-6">
             <div className="flex items-start gap-2 mb-4">
-              <HelpCircle size={18} className="text-brand-400 mt-0.5 shrink-0" />
+              <HelpCircle size={18} className="text-brand-500 mt-0.5 shrink-0" />
               <p className="font-bold text-brand-900">{item.question}</p>
             </div>
 
@@ -158,7 +158,7 @@ export default function WikiAsk() {
 
                 {item.result.sources?.length > 0 && (
                   <div className="mt-5 pt-4 border-t border-brand-100">
-                    <p className="text-[10px] font-bold text-zinc-400 uppercase tracking-widest mb-2">
+                    <p className="text-[11px] font-bold text-zinc-500 uppercase tracking-widest mb-2">
                       컨텍스트 노트 {item.result.sources.length}개
                     </p>
                     <div className="space-y-1.5">
@@ -167,7 +167,7 @@ export default function WikiAsk() {
                           <FileText size={13} className="shrink-0 opacity-60" />
                           <span className="truncate">{s.title}{s.heading ? ` — ${s.heading}` : ""}</span>
                           {typeof s.score === "number" && (
-                            <span className="ml-auto shrink-0 text-zinc-400">{s.score.toFixed(3)}</span>
+                            <span className="ml-auto shrink-0 text-zinc-500">{s.score.toFixed(3)}</span>
                           )}
                         </div>
                       ))}

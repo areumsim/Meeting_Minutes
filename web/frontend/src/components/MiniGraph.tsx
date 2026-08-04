@@ -339,7 +339,7 @@ export default function MiniGraph({
           </text>
         )}
       </svg>
-      <p className="text-[11px] text-brand-400 px-3 pb-2 -mt-1">
+      <p className="text-[11px] text-brand-500 px-3 pb-2 -mt-1">
         노드를 <b>끌어서</b> 움직이거나 <b>클릭</b>해 이동 · 노드에 커서를 올리면 연결 관계가 강조됩니다.
       </p>
     </div>

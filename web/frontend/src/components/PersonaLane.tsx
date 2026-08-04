@@ -42,7 +42,7 @@ export default function PersonaLane({
   return (
     <div className="bg-slate-50 border-b border-slate-200 shrink-0">
       <div className="px-4 md:px-8 py-1.5 flex items-start gap-2 overflow-x-auto">
-        <span className="flex items-center gap-1.5 text-[10px] font-black uppercase tracking-widest text-slate-500 shrink-0 mt-1">
+        <span className="flex items-center gap-1.5 text-[11px] font-black uppercase tracking-widest text-slate-500 shrink-0 mt-1">
           <Users className="w-3.5 h-3.5" /> 페르소나
         </span>
 
@@ -108,7 +108,7 @@ export default function PersonaLane({
           <button
             type="button"
             onClick={onMute}
-            className="shrink-0 mt-1 text-[11px] text-zinc-400 hover:text-zinc-700 font-medium whitespace-nowrap"
+            className="shrink-0 mt-1 text-[11px] text-zinc-500 hover:text-zinc-700 font-medium whitespace-nowrap"
             title="이번 회의의 개입 카드·중간 요약 생성을 멈춥니다 — 추가 비용이 발생하지 않습니다(설정은 그대로, 다음 녹음에서 다시 켜짐)"
           >
             이번 회의 끔

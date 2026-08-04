@@ -62,7 +62,7 @@ function Detail({ summary, children, defaultOpen }: { summary: React.ReactNode; 
   return (
     <details open={defaultOpen} className="group border border-brand-100 rounded-xl overflow-hidden">
       <summary className="cursor-pointer list-none flex items-center gap-2 px-3 py-2.5 bg-brand-50/60 hover:bg-brand-50 text-sm font-semibold text-brand-800 select-none">
-        <ChevronDown size={15} className="transition-transform group-open:rotate-180 text-brand-400 shrink-0" />
+        <ChevronDown size={15} className="transition-transform group-open:rotate-180 text-brand-500 shrink-0" />
         {summary}
       </summary>
       <div className="px-4 py-3 text-[13px] text-brand-600 space-y-1.5 leading-relaxed">{children}</div>
@@ -97,7 +97,7 @@ export default function Help({ onNavigate }: { onNavigate?: (v: NavTarget) => vo
           <SettingsIcon size={18} /> 설정 화면 열기
         </button>
       </div>
-      <p className="text-xs text-brand-400 mb-4 text-center">설정이 헷갈리면 <b>[설정 마법사 다시 열기]</b>를 누르세요 — 필요한 것만 순서대로 물어봅니다.</p>
+      <p className="text-xs text-brand-500 mb-4 text-center">설정이 헷갈리면 <b>[설정 마법사 다시 열기]</b>를 누르세요 — 필요한 것만 순서대로 물어봅니다.</p>
 
       {/* 1. 딱 하나만: OpenAI 키 */}
       <Card icon={<Rocket size={16} />} title="가장 빠른 시작 — 딱 1가지만" badge={<Badge kind="required" />}>
@@ -108,7 +108,7 @@ export default function Help({ onNavigate }: { onNavigate?: (v: NavTarget) => vo
           <><b>저장</b> 후 <b>연결 테스트</b>를 눌러 <span className="text-emerald-600 font-semibold inline-flex items-center gap-1"><CheckCircle size={13} />성공</span> 이 뜨는지 확인합니다.</>,
           <>끝! 이제 <Tag>업로드</Tag> 에 녹음 파일을 올리면 회의록이 만들어집니다.</>,
         ]} />
-        <p className="text-xs text-brand-400 mt-2">키는 이 PC에만 저장되고 화면에서는 ●●● 로 가려집니다. 키가 아직 없다면 아래 "OpenAI 키 발급"을 펼쳐 보세요.</p>
+        <p className="text-xs text-brand-500 mt-2">키는 이 PC에만 저장되고 화면에서는 ●●● 로 가려집니다. 키가 아직 없다면 아래 "OpenAI 키 발급"을 펼쳐 보세요.</p>
       </Card>
 
       {/* 2. 키 발급 */}
@@ -130,7 +130,7 @@ export default function Help({ onNavigate }: { onNavigate?: (v: NavTarget) => vo
               <><Tag>설정</Tag> → <Tag>API 키</Tag> 의 Anthropic 키 칸에 붙여넣기.</>,
               <><Tag>설정</Tag> → <Tag>모델</Tag> → "회의록 생성 AI"를 <b>Claude</b>로 변경.</>,
             ]} />
-            <p className="text-brand-400">음성 인식(STT)은 항상 OpenAI를 쓰므로, Claude를 써도 OpenAI 키는 필요합니다.</p>
+            <p className="text-brand-500">음성 인식(STT)은 항상 OpenAI를 쓰므로, Claude를 써도 OpenAI 키는 필요합니다.</p>
           </Detail>
         </div>
       </Card>
@@ -146,7 +146,7 @@ export default function Help({ onNavigate }: { onNavigate?: (v: NavTarget) => vo
             <>제목·유형(회의/세미나/강의)을 정하고 시작하면, 음성 인식 → 회의록 → 요약 → 액션아이템이 자동 생성됩니다.</>,
             <>완료되면 <Tag>대시보드</Tag> 에서 열어 확인·복사·다운로드.</>,
           ]} />
-          <p className="text-brand-400">긴 파일은 수 분 걸릴 수 있고, 진행 화면에서 <b>처리 취소</b>도 가능합니다.</p>
+          <p className="text-brand-500">긴 파일은 수 분 걸릴 수 있고, 진행 화면에서 <b>처리 취소</b>도 가능합니다.</p>
         </Detail>
         <div className="mt-2">
           <Detail summary={<span className="flex items-center gap-1.5"><Mic size={14} /> ② 지금 회의를 실시간으로 받아쓰기 — 녹음</span>}>
@@ -155,7 +155,7 @@ export default function Help({ onNavigate }: { onNavigate?: (v: NavTarget) => vo
               <>언어·번역 여부를 고르고 <b>녹음 시작</b>. 말하는 내용이 화면에 실시간으로 뜹니다.</>,
               <><b>중지</b>하면 전체 전사를 정리해 회의록으로 만들어 줍니다.</>,
             ]} />
-            <p className="text-brand-400">브라우저가 마이크 권한을 물으면 <b>허용</b>하세요. 처음 표시까지 2~6초 걸릴 수 있습니다.</p>
+            <p className="text-brand-500">브라우저가 마이크 권한을 물으면 <b>허용</b>하세요. 처음 표시까지 2~6초 걸릴 수 있습니다.</p>
           </Detail>
         </div>
         <div className="mt-2">
@@ -180,7 +180,7 @@ export default function Help({ onNavigate }: { onNavigate?: (v: NavTarget) => vo
             <li><b>사실확인</b> — 회의 중 주장과 노트가 맞는지 검증(기능 켠 경우). <b>위키 맥락/제안/정제본</b> — 노트 폴더 연동 시 생성되는 참고 자료.</li>
             <li><b>그래프</b> — 이 회의에 등장한 인물·조직·주제·결정의 연결도(아래 지식그래프 참고).</li>
           </ul>
-          <p className="text-brand-400">문서가 없는 탭은 자동으로 숨겨집니다. 회의 준비 브리핑 세션은 <b>회의록</b> 탭에만 내용이 있습니다.</p>
+          <p className="text-brand-500">문서가 없는 탭은 자동으로 숨겨집니다. 회의 준비 브리핑 세션은 <b>회의록</b> 탭에만 내용이 있습니다.</p>
         </Detail>
 
         <div className="mt-2">
@@ -198,10 +198,10 @@ export default function Help({ onNavigate }: { onNavigate?: (v: NavTarget) => vo
             <p>결과가 아쉽거나 고치고 싶을 때, <b>지우고 다시 녹음할 필요 없이</b> 기존 전사를 그대로 재사용해 회의록을 다시 만듭니다.</p>
             <Steps items={[
               <>상세 화면에서 <b>회의록</b> 또는 <b>요약</b> 탭을 엽니다.</>,
-              <>탭 아래쪽 <b>"노트 반영해 재생성"</b> 칸에 원하는 지시를 적습니다.<br /><span className="text-brand-400">예: "액션 아이템을 표로 정리하고, Q&A 부분을 더 자세히 다뤄주세요."</span></>,
+              <>탭 아래쪽 <b>"노트 반영해 재생성"</b> 칸에 원하는 지시를 적습니다.<br /><span className="text-brand-500">예: "액션 아이템을 표로 정리하고, Q&A 부분을 더 자세히 다뤄주세요."</span></>,
               <><span className="inline-flex items-center gap-1"><RefreshCw size={13} /> <b>AI 문서 재생성</b></span> 버튼을 누르면 지시를 반영해 다시 작성됩니다(음성 인식은 다시 하지 않아 빠르고 저렴).</>,
             ]} />
-            <p className="text-brand-400">여러 번 반복해도 됩니다. 원본 전사(스크립트)는 그대로 유지됩니다.</p>
+            <p className="text-brand-500">여러 번 반복해도 됩니다. 원본 전사(스크립트)는 그대로 유지됩니다.</p>
           </Detail>
         </div>
 
@@ -224,7 +224,7 @@ export default function Help({ onNavigate }: { onNavigate?: (v: NavTarget) => vo
             <>오른쪽 위 <span className="inline-flex items-center gap-1"><Share2 size={13} /> <b>공유</b></span> 버튼을 누릅니다.</>,
             <>메일 앱이 열리면 받는 사람을 넣고 보냅니다. (본문이 길면 앞부분만 실리니, 전문은 <b>다운로드</b>해 첨부하세요.)</>,
           ]} />
-          <p className="text-brand-400">받는 주소를 미리 정해두려면 마법사/설정의 이메일 항목을 채워두면 편합니다.</p>
+          <p className="text-brand-500">받는 주소를 미리 정해두려면 마법사/설정의 이메일 항목을 채워두면 편합니다.</p>
         </Detail>
         <div className="mt-2">
           <Detail summary="방법 B — 완료되면 자동으로 메일 발송 (설정)">
@@ -234,7 +234,7 @@ export default function Help({ onNavigate }: { onNavigate?: (v: NavTarget) => vo
               <>실시간 녹음은 <Tag>설정</Tag> → 실시간 녹취 → "종료 후 이메일 자동발송"을 켜면 끝나는 즉시 메일이 옵니다.</>,
             ]} />
             <p className="text-red-500">주의: 평소 로그인 비밀번호가 아니라, 메일 서비스 보안설정에서 발급하는 <b>'앱 비밀번호'</b>입니다.</p>
-            <p className="text-brand-400">Gmail: 2단계 인증 후 앱 비밀번호 / 네이버: 메일 설정 POP3·SMTP / 아웃룩·회사메일: 계정 보안→앱 암호(막혀 있으면 IT에 SMTP 허용 요청).</p>
+            <p className="text-brand-500">Gmail: 2단계 인증 후 앱 비밀번호 / 네이버: 메일 설정 POP3·SMTP / 아웃룩·회사메일: 계정 보안→앱 암호(막혀 있으면 IT에 SMTP 허용 요청).</p>
           </Detail>
         </div>
       </Card>
@@ -263,7 +263,7 @@ export default function Help({ onNavigate }: { onNavigate?: (v: NavTarget) => vo
               <li><b>날짜 인식</b> — 각 노트의 <b>작성일</b>을 함께 읽으므로 "가장 최근 회의는?", "언제 정해졌어?" 같은 <b>시점 질문</b>에도 답합니다.</li>
               <li><b>회의 준비</b> — 제목·주제를 넣으면 관련 노트·지난 결정·미완료 액션을 <b>한 장으로 모아</b> 브리핑을 만듭니다.</li>
             </ul>
-            <p className="text-brand-400">요약: <b>회의록 생성 → 폴더에 날짜별로 쌓임 → 재빌드로 색인 → 질문하면 관련 노트를 근거로 출처와 함께 답변</b>. 표현이 달라도 뜻으로 찾는 <b>의미 검색</b>이 기본 적용되고, 노트가 많을수록 답이 정확해집니다. (Obsidian 앱 없이 <b>.md 폴더만</b>으로 동작)</p>
+            <p className="text-brand-500">요약: <b>회의록 생성 → 폴더에 날짜별로 쌓임 → 재빌드로 색인 → 질문하면 관련 노트를 근거로 출처와 함께 답변</b>. 표현이 달라도 뜻으로 찾는 <b>의미 검색</b>이 기본 적용되고, 노트가 많을수록 답이 정확해집니다. (Obsidian 앱 없이 <b>.md 폴더만</b>으로 동작)</p>
           </Detail>
 
           <Detail summary={<span className="flex items-center gap-1.5"><FolderOpen size={14} /> 먼저: 노트 폴더 연결 (Obsidian 앱 없어도 됨)</span>}>
@@ -338,7 +338,7 @@ export default function Help({ onNavigate }: { onNavigate?: (v: NavTarget) => vo
           </Detail>
           <Detail summary="위키 질문·회의 준비·그래프가 결과를 못 찾아요">
             <p><Tag>설정</Tag>에서 <b>노트 폴더</b>가 올바른지 확인한 뒤 <b>검색 인덱스·그래프 재빌드</b>를 눌러 최신화하세요. 폴더에 회의 기록(.md)이 아직 없으면 결과가 비어 있을 수 있습니다.</p>
-            <p className="text-brand-400">표현이 달라 정답을 못 찾을 때: <b>의미 검색(임베딩)</b>이 기본으로 켜져 있어, 질문과 노트의 말이 달라도 뜻으로 찾아줍니다(OpenAI 키 필요, 재빌드 시 자동 적용). 키가 없으면 글자 매칭만으로 동작하니, 핵심 <b>키워드·고유명사</b>를 넣어 물어보면 더 잘 찾습니다.</p>
+            <p className="text-brand-500">표현이 달라 정답을 못 찾을 때: <b>의미 검색(임베딩)</b>이 기본으로 켜져 있어, 질문과 노트의 말이 달라도 뜻으로 찾아줍니다(OpenAI 키 필요, 재빌드 시 자동 적용). 키가 없으면 글자 매칭만으로 동작하니, 핵심 <b>키워드·고유명사</b>를 넣어 물어보면 더 잘 찾습니다.</p>
           </Detail>
           <Detail summary="메일이 안 보내져요">
             <p>로그인 비밀번호가 아니라 <b>앱 비밀번호</b>를 넣었는지 확인하세요. <Tag>설정</Tag> → 이메일의 <b>테스트 메일 보내기</b>가 실패하면 메시지에 원인이 나옵니다(회사 메일은 SMTP가 막혀 IT 허용이 필요할 수 있음).</p>
@@ -366,7 +366,7 @@ export default function Help({ onNavigate }: { onNavigate?: (v: NavTarget) => vo
         </ul>
       </Card>
 
-      <p className="text-center text-xs text-brand-400 mt-4">
+      <p className="text-center text-xs text-brand-500 mt-4">
         헷갈리면 언제든 <button onClick={openWizard} className="text-brand-700 underline font-semibold">설정 마법사</button>를 다시 열어 순서대로 따라 하세요.
       </p>
     </div>

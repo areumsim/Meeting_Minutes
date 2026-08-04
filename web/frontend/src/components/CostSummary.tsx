@@ -45,7 +45,7 @@ export default function CostSummary() {
         <span className="text-sm font-bold text-brand-900">${mtd.toFixed(2)}</span>
         {cap > 0 && (
           <>
-            <span className="text-xs text-brand-400">/ 한도 ${cap.toFixed(2)}</span>
+            <span className="text-xs text-brand-500">/ 한도 ${cap.toFixed(2)}</span>
             <span className="flex-1 h-1.5 bg-brand-100 rounded-full overflow-hidden max-w-[160px]">
               <span
                 className={`block h-full rounded-full ${
@@ -56,7 +56,7 @@ export default function CostSummary() {
             </span>
           </>
         )}
-        <span className="ml-auto text-brand-400 shrink-0">
+        <span className="ml-auto text-brand-500 shrink-0">
           {open ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
         </span>
       </button>
@@ -149,7 +149,7 @@ export default function CostSummary() {
             방향 없이 "다를 수 있음"만 쓰면 사용자가 한도를 잘못 낮춘다.
             근거: pricing.py 주석 — 폴백(Groq/로컬) 발생 세션은 사후 재계산 경로가 없다.
           */}
-          <p className="text-[11px] leading-relaxed text-brand-400 border-t border-brand-100 pt-3">
+          <p className="text-[11px] leading-relaxed text-brand-500 border-t border-brand-100 pt-3">
             모든 금액은 <b>설정된 모델 단가 기준 추정치</b>입니다. 실제 청구액과 다를 수 있으며,
             네트워크 장애로 Groq·로컬 전사로 자동 전환된 회의는 <b>실제보다 크게</b> 표시됩니다
             (전환 이력을 세션 비용에 반영하는 경로가 아직 없습니다). 정확한 금액은 각 API

@@ -146,7 +146,7 @@ export default function Onboarding({ onClose }: { onClose: () => void }) {
                     {/* tabIndex={-1} 을 제거 — 키보드 사용자도 키를 확인하며 입력할 수 있어야 한다 */}
                     <button type="button" onClick={() => setReveal((s) => !s)}
                       aria-label={reveal ? "키 숨기기" : "키 표시"} aria-pressed={reveal}
-                      className="absolute right-2 top-1/2 -translate-y-1/2 text-brand-400 hover:text-brand-700 p-1">
+                      className="absolute right-2 top-1/2 -translate-y-1/2 text-brand-500 hover:text-brand-700 p-1">
                       {reveal ? <EyeOff size={16} /> : <Eye size={16} />}
                     </button>
                   </div>
@@ -160,7 +160,7 @@ export default function Onboarding({ onClose }: { onClose: () => void }) {
                       </span>
                     )}
                   </div>
-                  <p className="text-xs text-brand-400">
+                  <p className="text-xs text-brand-500">
                     키가 없으신가요? <a href="https://platform.openai.com/api-keys" target="_blank" rel="noreferrer" className="text-brand-700 underline underline-offset-2">platform.openai.com/api-keys</a> 에서 발급하세요.
                   </p>
                 </div>
@@ -181,7 +181,7 @@ export default function Onboarding({ onClose }: { onClose: () => void }) {
                     />
                     <button type="button" onClick={() => setRevealA((s) => !s)}
                       aria-label={revealA ? "키 숨기기" : "키 표시"} aria-pressed={revealA}
-                      className="absolute right-2 top-1/2 -translate-y-1/2 text-brand-400 hover:text-brand-700 p-1">
+                      className="absolute right-2 top-1/2 -translate-y-1/2 text-brand-500 hover:text-brand-700 p-1">
                       {revealA ? <EyeOff size={16} /> : <Eye size={16} />}
                     </button>
                   </div>
@@ -195,7 +195,7 @@ export default function Onboarding({ onClose }: { onClose: () => void }) {
                       </span>
                     )}
                   </div>
-                  <p className="text-xs text-brand-400">
+                  <p className="text-xs text-brand-500">
                     키 발급: <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noreferrer" className="text-brand-700 underline underline-offset-2">console.anthropic.com/settings/keys</a> · 사용하려면 [설정] → 모델에서 '회의록 생성 AI'를 Claude로 바꾸세요. (음성 인식은 항상 OpenAI 사용)
                   </p>
                 </div>
@@ -236,7 +236,7 @@ export default function Onboarding({ onClose }: { onClose: () => void }) {
                         </span>
                       )}
                     </div>
-                    <p className="text-xs text-brand-400">평소 로그인 비밀번호가 아니라 메일 서비스 보안설정에서 발급하는 '앱 비밀번호'입니다. 자세한 안내는 [설정] → 이메일 항목을 참고하세요.</p>
+                    <p className="text-xs text-brand-500">평소 로그인 비밀번호가 아니라 메일 서비스 보안설정에서 발급하는 '앱 비밀번호'입니다. 자세한 안내는 [설정] → 이메일 항목을 참고하세요.</p>
                   </div>
                 </div>
               )}

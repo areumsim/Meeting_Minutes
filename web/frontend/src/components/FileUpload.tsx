@@ -194,7 +194,7 @@ export default function FileUpload({ onComplete }: { onComplete: (id: string) =>
               </div>
               <h3 className="text-base font-bold text-brand-900 mb-1">클릭해서 파일 선택</h3>
               <p className="text-sm text-brand-500">또는 여기로 끌어다 놓기</p>
-              <div className="flex flex-wrap items-center justify-center gap-2 mt-3 text-xs font-semibold text-brand-400">
+              <div className="flex flex-wrap items-center justify-center gap-2 mt-3 text-xs font-semibold text-brand-500">
                 <span className="bg-white px-2.5 py-1 rounded-md border border-brand-100">MP3</span>
                 <span className="bg-white px-2.5 py-1 rounded-md border border-brand-100">WAV</span>
                 <span className="bg-white px-2.5 py-1 rounded-md border border-brand-100">M4A</span>
@@ -208,7 +208,7 @@ export default function FileUpload({ onComplete }: { onComplete: (id: string) =>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div className="space-y-3">
             <div className="space-y-1.5">
-              <label htmlFor="upload-title" className="text-xs font-bold text-zinc-400 uppercase tracking-widest">제목</label>
+              <label htmlFor="upload-title" className="text-xs font-bold text-zinc-500 uppercase tracking-widest">제목</label>
               <input
                 id="upload-title"
                 type="text"
@@ -219,7 +219,7 @@ export default function FileUpload({ onComplete }: { onComplete: (id: string) =>
               />
             </div>
             <div className="space-y-1.5">
-              <label htmlFor="upload-topic" className="text-xs font-bold text-zinc-400 uppercase tracking-widest">주제 / 맥락</label>
+              <label htmlFor="upload-topic" className="text-xs font-bold text-zinc-500 uppercase tracking-widest">주제 / 맥락</label>
               <textarea
                 id="upload-topic"
                 value={topic}
@@ -229,7 +229,7 @@ export default function FileUpload({ onComplete }: { onComplete: (id: string) =>
               />
             </div>
             <div className="space-y-1.5">
-              <label htmlFor="upload-speakers" className="text-xs font-bold text-zinc-400 uppercase tracking-widest">참석자 <span className="text-brand-400 font-normal normal-case">(선택)</span></label>
+              <label htmlFor="upload-speakers" className="text-xs font-bold text-zinc-500 uppercase tracking-widest">참석자 <span className="text-brand-500 font-normal normal-case">(선택)</span></label>
               <input
                 id="upload-speakers"
                 type="text"
@@ -245,7 +245,7 @@ export default function FileUpload({ onComplete }: { onComplete: (id: string) =>
               사용자만 이탈시킨다). 실시간 경로에만 있던 안내를 업로드 경로에도 둔 것은
               "이 도구는 몰래 녹음용이 아니다"가 진입점마다 최소 1회 보여야 하기 때문이다.
             */}
-            <p className="text-xs text-zinc-400 sm:col-span-2">
+            <p className="text-xs text-zinc-500 sm:col-span-2">
               업로드하는 녹음은 <b>참석자에게 녹음·자동 전사 사실을 알린 뒤</b> 취득한 것이어야 합니다.
             </p>
           </div>
@@ -284,7 +284,7 @@ export default function FileUpload({ onComplete }: { onComplete: (id: string) =>
                           className="w-full text-left px-4 py-2 bg-white border border-zinc-200 rounded-xl hover:bg-zinc-50 transition-all"
                         >
                           <span className="text-sm font-bold">{p.name}</span>
-                          <span className="text-xs text-zinc-400 ml-2">{p.description}</span>
+                          <span className="text-xs text-zinc-500 ml-2">{p.description}</span>
                         </button>
                       ))}
                     </motion.div>

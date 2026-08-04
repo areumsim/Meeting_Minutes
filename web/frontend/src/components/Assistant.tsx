@@ -112,7 +112,7 @@ function MergeCard() {
   return (
     <Card title="녹음↔계획 병합" icon={<GitMerge size={16} />} desc="계획과 매칭된 녹음을 확인 후 계획 노트에 병합(Obsidian REST 필요).">
       {pending.length === 0 ? (
-        <p className="text-sm text-brand-400">병합 대기 항목이 없습니다.</p>
+        <p className="text-sm text-brand-500">병합 대기 항목이 없습니다.</p>
       ) : (
         <div className="space-y-2 mb-3">
           {pending.map((p) => (
@@ -170,7 +170,7 @@ function PlanAutoCard() {
   const running = !!st?.running;
 
   return (
-    <Card title="계획 자동화" icon={running ? <CheckCircle size={16} className="text-emerald-600" /> : <XCircle size={16} className="text-zinc-400" />}
+    <Card title="계획 자동화" icon={running ? <CheckCircle size={16} className="text-emerald-600" /> : <XCircle size={16} className="text-zinc-500" />}
       desc="켜 두면 planned 회의 노트에 사전 리서치를 자동 작성하고, 새로 첨부된 녹음을 자동 처리합니다.">
       <div className="flex flex-wrap gap-2 text-xs mb-3">
         <span className={`px-2.5 py-1 rounded-lg font-bold ${running ? "bg-emerald-100 text-emerald-700" : "bg-zinc-100 text-zinc-500"}`}>

@@ -15,7 +15,7 @@ export default function ModeSelector({ modeNum, onChange, disabled, hint }: Prop
   return (
     <div className="space-y-3">
       <div className="space-y-1.5">
-        <label className="text-xs font-bold text-zinc-400 uppercase tracking-widest">처리 모드</label>
+        <label className="text-xs font-bold text-zinc-500 uppercase tracking-widest">처리 모드</label>
         <select
           value={modeNum}
           onChange={(e) => onChange(Number(e.target.value))}

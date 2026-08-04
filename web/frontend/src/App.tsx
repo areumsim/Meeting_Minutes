@@ -157,7 +157,7 @@ export default function App() {
               onClick={toggleCollapsed}
               title={collapsed ? "사이드바 펼치기" : "사이드바 접기"}
               aria-label={collapsed ? "사이드바 펼치기" : "사이드바 접기"}
-              className={`${collapsed ? "" : "ml-auto"} text-brand-400 hover:text-brand-900 p-1.5 rounded-lg hover:bg-brand-100 transition-colors`}
+              className={`${collapsed ? "" : "ml-auto"} text-brand-500 hover:text-brand-900 p-1.5 rounded-lg hover:bg-brand-100 transition-colors`}
             >
               {collapsed ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}
             </button>
@@ -266,7 +266,7 @@ export default function App() {
             transition={{ duration: 0.2 }}
             className="h-full"
           >
-            <Suspense fallback={<div className="flex items-center justify-center py-32"><Loader2 className="animate-spin text-brand-400" size={32} /></div>}>
+            <Suspense fallback={<div className="flex items-center justify-center py-32"><Loader2 className="animate-spin text-brand-500" size={32} /></div>}>
               {view === "dashboard" && <Dashboard onSelectSession={navigateToDetail} onNewUpload={() => setView("upload")} onNewRecord={() => setView("recorder")} />}
               {view === "recorder" && <Recorder onComplete={navigateToDetail} onExit={() => setView("dashboard")} />}
               {view === "upload" && <FileUpload onComplete={navigateToDetail} />}

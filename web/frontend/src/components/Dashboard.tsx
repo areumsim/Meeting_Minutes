@@ -110,7 +110,7 @@ export default function Dashboard({ onSelectSession, onNewUpload, onNewRecord }:
       case "completed": return <CheckCircle size={14} className="text-emerald-500" />;
       case "processing": return <Loader2 size={14} className="text-amber-500 animate-spin" />;
       case "error": return <AlertCircle size={14} className="text-red-500" />;
-      default: return <Clock size={14} className="text-zinc-400" />;
+      default: return <Clock size={14} className="text-zinc-500" />;
     }
   };
 
@@ -141,7 +141,7 @@ export default function Dashboard({ onSelectSession, onNewUpload, onNewRecord }:
       <div className="flex flex-col gap-2 mb-4">
         <div className="flex gap-3">
           <div className="flex-1 relative">
-            <Search size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-brand-400" />
+            <Search size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-brand-500" />
             <input
               type="text"
               aria-label="세션 검색"
@@ -199,7 +199,7 @@ export default function Dashboard({ onSelectSession, onNewUpload, onNewRecord }:
                 <Undo2 size={14} /> 되돌리기
               </button>
             )}
-            <button onClick={() => setNotice(null)} aria-label="알림 닫기" className="text-brand-400 hover:text-brand-700">
+            <button onClick={() => setNotice(null)} aria-label="알림 닫기" className="text-brand-500 hover:text-brand-700">
               <XCircle size={16} />
             </button>
           </div>
@@ -214,17 +214,17 @@ export default function Dashboard({ onSelectSession, onNewUpload, onNewRecord }:
 
       {/* Session List */}
       {loading ? (
-        <div className="flex items-center justify-center py-20 text-brand-400">
+        <div className="flex items-center justify-center py-20 text-brand-500">
           <Loader2 className="animate-spin" size={24} />
         </div>
       ) : loadError ? (
         <div className="text-center py-20">
           <AlertCircle size={48} className="mx-auto text-red-400 mb-4" />
           <p className="text-lg font-bold text-brand-900">세션 목록을 불러올 수 없습니다</p>
-          <p className="text-sm text-brand-400 mt-1">
+          <p className="text-sm text-brand-500 mt-1">
             서버가 실행 중인지 확인해 주세요. (회의가 없는 것이 아니라 조회에 실패했습니다)
           </p>
-          <p className="text-xs text-brand-300 mt-2 break-words max-w-md mx-auto">{loadError}</p>
+          <p className="text-xs text-brand-500 mt-2 break-words max-w-md mx-auto">{loadError}</p>
           <button
             onClick={() => load()}
             className="mt-4 px-4 py-2 bg-brand-900 text-white rounded-xl text-sm font-bold hover:bg-brand-800 transition-colors"
@@ -238,7 +238,7 @@ export default function Dashboard({ onSelectSession, onNewUpload, onNewRecord }:
           <p className="text-lg font-bold text-brand-500">
             {showTrash ? "휴지통이 비어 있습니다" : "아직 세션이 없습니다"}
           </p>
-          <p className="text-sm text-brand-400 mt-1">
+          <p className="text-sm text-brand-500 mt-1">
             {showTrash ? "삭제한 회의가 여기 모입니다." : "녹음을 시작하거나 파일을 업로드해 보세요."}
           </p>
         </div>
@@ -258,14 +258,14 @@ export default function Dashboard({ onSelectSession, onNewUpload, onNewRecord }:
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-3 mb-1">
                       <h3 className="font-bold text-brand-900 truncate">{s.title || "제목 없음"}</h3>
-                      <span className={`text-[10px] font-bold tracking-wider px-2 py-0.5 rounded-full ${typeColor(s.type)}`}>
+                      <span className={`text-[11px] font-bold tracking-wider px-2 py-0.5 rounded-full ${typeColor(s.type)}`}>
                         {typeLabel(s.type)}
                       </span>
                       {s.source === "cli" && (
-                        <span className="text-[10px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-zinc-100 text-zinc-500">CLI</span>
+                        <span className="text-[11px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full bg-zinc-100 text-zinc-500">CLI</span>
                       )}
                     </div>
-                    <div className="flex items-center gap-4 text-xs text-brand-400">
+                    <div className="flex items-center gap-4 text-xs text-brand-500">
                       <span className="flex items-center gap-1">
                         {statusIcon(s.status)}
                         {statusLabel(s.status)}
@@ -289,7 +289,7 @@ export default function Dashboard({ onSelectSession, onNewUpload, onNewRecord }:
                           onClick={(e) => handleRestore(s.id, e)}
                           title="되돌리기"
                           aria-label={`${s.title || "제목 없음"} 되돌리기`}
-                          className="p-3 -m-1 text-brand-400 hover:text-brand-900 transition-colors"
+                          className="p-3 -m-1 text-brand-500 hover:text-brand-900 transition-colors"
                         >
                           <Undo2 size={16} />
                         </button>
@@ -297,7 +297,7 @@ export default function Dashboard({ onSelectSession, onNewUpload, onNewRecord }:
                           onClick={(e) => handlePurge(s.id, e)}
                           title="완전 삭제 (폴더는 Windows 휴지통으로)"
                           aria-label={`${s.title || "제목 없음"} 완전 삭제`}
-                          className="p-3 -m-1 text-brand-300 hover:text-red-500 transition-colors"
+                          className="p-3 -m-1 text-brand-500 hover:text-red-500 transition-colors"
                         >
                           <XCircle size={16} />
                         </button>
@@ -307,7 +307,7 @@ export default function Dashboard({ onSelectSession, onNewUpload, onNewRecord }:
                         onClick={(e) => handleDelete(s.id, e)}
                         title="휴지통으로 보내기"
                         aria-label={`${s.title || "제목 없음"} 휴지통으로 보내기`}
-                        className="p-3 -m-1 text-brand-300 hover:text-red-500 transition-colors"
+                        className="p-3 -m-1 text-brand-500 hover:text-red-500 transition-colors"
                       >
                         <Trash2 size={16} />
                       </button>

@@ -1456,7 +1456,7 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
           || (wikiStatus && !wikiStatus.enabled)) && (
           <div className="bg-emerald-50/70 border-b border-emerald-100 shrink-0">
             <div className="px-4 md:px-8 h-9 flex items-center gap-2 overflow-x-auto overflow-y-hidden">
-              <span className="flex items-center gap-1.5 text-[10px] font-black uppercase tracking-widest text-emerald-600 shrink-0">
+              <span className="flex items-center gap-1.5 text-[11px] font-black uppercase tracking-widest text-emerald-600 shrink-0">
                 <BookOpen className="w-3.5 h-3.5" /> 관련 노트
               </span>
 
@@ -1483,12 +1483,12 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
                 </button>
               ))}
               {relatedNotes.length > 8 && (
-                <span className="shrink-0 text-[10px] text-emerald-500 font-bold">
+                <span className="shrink-0 text-[11px] text-emerald-500 font-bold">
                   +{relatedNotes.length - 8}
                 </span>
               )}
               {relatedNotes.length === 0 && (!wikiStatus || wikiStatus.enabled) && (
-                <span className="shrink-0 text-[11px] text-emerald-600/60">
+                <span className="shrink-0 text-[11px] text-emerald-700">
                   {wikiStatus?.enabled ? "발화와 관련된 내부 노트를 찾는 중…" : "대기 중…"}
                 </span>
               )}
@@ -1496,7 +1496,7 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
                 <button
                   type="button"
                   onClick={() => setWikiExpanded((v) => !v)}
-                  className="ml-auto shrink-0 flex items-center gap-1 text-[10px] font-bold text-emerald-600 hover:text-emerald-800"
+                  className="ml-auto shrink-0 flex items-center gap-1 text-[11px] font-bold text-emerald-600 hover:text-emerald-800"
                 >
                   <ChevronDown className={`w-3.5 h-3.5 transition-transform ${wikiExpanded ? "" : "-rotate-90"}`} />
                   {wikiExpanded ? "근거 접기" : "근거 보기"}
@@ -1513,23 +1513,23 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
                       <span className="text-xs font-bold text-emerald-900">
                         {SOURCE_ICON[n.sourceType || "note"] || "📄"} {n.sectionPath || n.title}
                       </span>
-                      <span className="text-[10px] font-mono text-zinc-400 tabular-nums">
+                      <span className="text-[11px] font-mono text-zinc-500 tabular-nums">
                         score {(n.score ?? 0).toFixed(2)}
                         {n.foundBy ? ` · ${n.foundBy === "section" ? "섹션 일치" : n.foundBy === "web" ? "웹" : "노트 일치"}` : ""}
                       </span>
                       {n.filename && (
-                        <span className="text-[10px] text-zinc-400 truncate max-w-[40vw]">{n.filename}</span>
+                        <span className="text-[11px] text-zinc-500 truncate max-w-[40vw]">{n.filename}</span>
                       )}
                     </div>
                     {n.snippet && (
                       <p className="text-[11px] text-zinc-600 mt-0.5 line-clamp-2">{n.snippet}</p>
                     )}
                     {n.segmentText && (
-                      <p className="text-[10px] text-zinc-400 mt-0.5 italic truncate">발화: {n.segmentText}</p>
+                      <p className="text-[11px] text-zinc-500 mt-0.5 italic truncate">발화: {n.segmentText}</p>
                     )}
                   </div>
                 ))}
-                <p className="text-[10px] text-zinc-400 pt-1.5">
+                <p className="text-[11px] text-zinc-500 pt-1.5">
                   녹음 중에는 노트로 이동하지 않습니다(녹음 보호). 종료 후 회의 상세의
                   <b> 참조된 관련 노트</b>에서 클릭해 열 수 있습니다.
                 </p>
@@ -1559,7 +1559,7 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
         <div className="flex-1 flex flex-col p-4 md:p-10">
           {/* Settings Toggle */}
           <div className="flex items-center justify-between mb-4 md:mb-6 shrink-0">
-            <h4 className="text-sm font-bold text-zinc-400 uppercase tracking-widest">세션 설정</h4>
+            <h4 className="text-sm font-bold text-zinc-500 uppercase tracking-widest">세션 설정</h4>
             <button
               onClick={() => setIsSettingsCollapsed(!isSettingsCollapsed)}
               className="flex items-center gap-2 text-xs font-bold text-zinc-500 hover:text-zinc-900 transition-colors"
@@ -1580,7 +1580,7 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-10 mb-12">
                   <div className="space-y-6">
                     <div className="space-y-2">
-                      <label className="text-xs font-bold text-zinc-400 uppercase tracking-widest flex items-center gap-2">
+                      <label className="text-xs font-bold text-zinc-500 uppercase tracking-widest flex items-center gap-2">
                         <Info className="w-3 h-3" /> 세션 제목
                       </label>
                       <input
@@ -1594,7 +1594,7 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
                     </div>
 
                     <div className="space-y-2">
-                      <label className="text-xs font-bold text-zinc-400 uppercase tracking-widest flex items-center gap-2">
+                      <label className="text-xs font-bold text-zinc-500 uppercase tracking-widest flex items-center gap-2">
                         <User className="w-3 h-3" /> 참석자
                       </label>
                       <input
@@ -1608,7 +1608,7 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
                     </div>
 
                     <div className="space-y-2">
-                      <label className="text-xs font-bold text-zinc-400 uppercase tracking-widest flex items-center gap-2">
+                      <label className="text-xs font-bold text-zinc-500 uppercase tracking-widest flex items-center gap-2">
                         <Settings2 className="w-3 h-3" /> 주제 / 맥락
                       </label>
                       <textarea
@@ -1621,7 +1621,7 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
                     </div>
 
                     <div className="space-y-2">
-                      <label className="text-xs font-bold text-zinc-400 uppercase tracking-widest flex items-center gap-2">
+                      <label className="text-xs font-bold text-zinc-500 uppercase tracking-widest flex items-center gap-2">
                         <Settings2 className="w-3 h-3" /> 음성 인식 모델 (이번 녹음만)
                       </label>
                       <select
@@ -1638,13 +1638,13 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
                           <option key={o.value} value={o.value}>{o.label}</option>
                         ))}
                       </select>
-                      <p className="text-[11px] text-zinc-400 leading-relaxed">
+                      <p className="text-[11px] text-zinc-500 leading-relaxed">
                         설정의 기본 모델이 자동 선택됩니다. 이번 녹음에만 다른 모델을 쓰려면 바꾸세요 — <b>설정 기본값은 그대로 유지</b>됩니다.
                       </p>
                     </div>
 
                     <div className="space-y-2">
-                      <label className="text-xs font-bold text-zinc-400 uppercase tracking-widest flex items-center gap-2">
+                      <label className="text-xs font-bold text-zinc-500 uppercase tracking-widest flex items-center gap-2">
                         <Mic className="w-3 h-3" /> 소리 잡는 방법
                       </label>
                       <div className="space-y-2">
@@ -1680,7 +1680,7 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
                             </label>
                           ))}
                       </div>
-                      <p className="text-[11px] text-zinc-400 leading-relaxed">
+                      <p className="text-[11px] text-zinc-500 leading-relaxed">
                         {captureMode === "mic+system"
                           ? "녹음이 시작된 직후 공유 창이 뜹니다 — [전체 화면]을 고르고 아래 [시스템 오디오도 공유]를 꼭 켜세요. 고르는 동안에도 마이크는 이미 녹음 중이고, 화면은 녹화되지 않습니다."
                           : captureMode === "room"
@@ -1725,7 +1725,7 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
                         칩과 달리 자체 배경이 없었다). 패널 좌우 패딩만큼 넓혀 덮는다. */}
                     <div className="sticky top-0 z-10 flex items-center justify-between gap-2 -mx-3 md:-mx-5 px-3 md:px-5 pb-2 bg-white/85 backdrop-blur-md">
                       {/* 전사 줄 수 — 얼마나 쌓였는지, 화면에 안 보이는 앞부분이 있는지 알려준다 */}
-                      <span className="text-[10px] font-bold text-brand-300 tabular-nums pl-1">
+                      <span className="text-[11px] font-bold text-brand-500 tabular-nums pl-1">
                         {liveTranscript.length > 0 && `전사 ${liveTranscript.length}줄`}
                         {hiddenLineCount > 0 && ` (앞 ${hiddenLineCount}줄은 종료 후 전사 문서에서)`}
                       </span>
@@ -1737,8 +1737,8 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
                             <div className={`w-2 h-2 rounded-full ${
                               isPaused ? "bg-amber-500" : soundDetected ? "bg-emerald-500 animate-pulse" : "bg-zinc-300"
                             }`} />
-                            <span className={`text-[10px] font-bold uppercase tracking-widest ${
-                              isPaused ? "text-amber-500" : soundDetected ? "text-emerald-600" : "text-zinc-400"
+                            <span className={`text-[11px] font-bold uppercase tracking-widest ${
+                              isPaused ? "text-amber-500" : soundDetected ? "text-emerald-600" : "text-zinc-500"
                             }`}>
                               {isPaused ? "일시정지" : soundDetected ? "🎤 소리 감지 중" : "무음 — 소리 없음"}
                             </span>
@@ -1748,13 +1748,13 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
                                 아니라 성사된 상태(systemAudioOn)를 표시한다. */}
                             {systemAudioOn && (
                               <span title="이 PC에서 나는 소리(온라인 회의 상대방 목소리)가 함께 녹음되고 있습니다."
-                                className="text-[10px] font-bold text-sky-600 border-l border-zinc-200 pl-2">
+                                className="text-[11px] font-bold text-sky-600 border-l border-zinc-200 pl-2">
                                 🖥 PC 소리 포함
                               </span>
                             )}
                             {captureMode === "room" && (
                               <span title="에코 취소를 끄고 마이크 감도를 올린 상태입니다(멀리서 나는 소리용)."
-                                className="text-[10px] font-bold text-sky-600 border-l border-zinc-200 pl-2">
+                                className="text-[11px] font-bold text-sky-600 border-l border-zinc-200 pl-2">
                                 🏢 회의실 마이크
                               </span>
                             )}
@@ -1762,7 +1762,7 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
                         ) : (
                           <>
                             <div className={`w-2 h-2 rounded-full ${status === "generating" ? "bg-amber-500 animate-pulse" : status === "completed" ? "bg-emerald-500" : "bg-red-500 animate-pulse"}`} />
-                            <span className="text-[10px] font-bold text-brand-400 uppercase tracking-widest">
+                            <span className="text-[11px] font-bold text-brand-500 uppercase tracking-widest">
                               {status === "generating" ? "처리 중" : status === "completed" ? "완료" : "실시간 스트리밍"}
                             </span>
                           </>
@@ -1771,10 +1771,12 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
                     </div>
 
                     {liveTranscript.length === 0 ? (
-                      <div className="flex flex-col items-center justify-center flex-1 text-brand-300 gap-4 min-h-[200px]">
+                      // text-brand-300(1.6:1)이 컨테이너라 안의 상태 문구까지 상속됐다 —
+                      // "문서 생성 중..."은 정보 텍스트라 -500 으로 올렸다
+                      <div className="flex flex-col items-center justify-center flex-1 text-brand-500 gap-4 min-h-[200px]">
                         <div className="relative">
                           <Loader2 className="animate-spin" size={32} />
-                          <Activity className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 text-brand-400" size={14} />
+                          <Activity className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 text-brand-500" size={14} />
                         </div>
                         <p className="text-sm font-medium tracking-wide">
                           {status === "generating"
@@ -1804,7 +1806,7 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
                           >
                             {item.speaker && (
                               <div className="flex items-center gap-2 mb-1">
-                                <span className="text-[10px] font-black uppercase tracking-[0.2em] text-brand-400">
+                                <span className="text-[11px] font-black uppercase tracking-[0.2em] text-brand-500">
                                   {item.speaker}
                                 </span>
                                 <div className="h-px flex-1 bg-brand-100" />
@@ -1819,11 +1821,11 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
                               // 못하게 해서 줄바꿈 속성만으로는 칼럼이 넓어지는 것을 못 막는다.
                               <div className={`flex flex-col md:grid md:grid-cols-2 gap-0.5 md:gap-3 w-full items-start ${item.provisional ? "opacity-60" : ""}`}>
                                 {/* Source (English) — 보조 */}
-                                <p className={`ko-text min-w-0 text-xs md:text-[13px] leading-snug ${item.start === -1 ? "text-zinc-400 italic" : "text-zinc-500"}`}>
+                                <p className={`ko-text min-w-0 text-xs md:text-[13px] leading-snug ${item.start === -1 ? "text-zinc-500 italic" : "text-zinc-500"}`}>
                                   {item.text}{item.start === -1 && " …"}
                                 </p>
                                 {/* Translated (Korean) — 주 */}
-                                <p className={`ko-text min-w-0 text-sm md:text-base leading-snug font-medium md:border-l-2 md:border-l-brand-300 md:pl-3 ${item.translatedText ? "text-brand-900" : "text-brand-300 italic"}`}>
+                                <p className={`ko-text min-w-0 text-sm md:text-base leading-snug font-medium md:border-l-2 md:border-l-brand-300 md:pl-3 ${item.translatedText ? "text-brand-900" : "text-brand-500 italic"}`}>
                                   {item.translatedText || "번역 중…"}
                                 </p>
                               </div>
@@ -1831,8 +1833,8 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
                               // 받아쓰기(비번역) 모드: 더 작게, 한 줄로 조밀하게.
                               // provisional(빠른 패스 임시 조각)은 흐리게 — 보정되면 선명해진다.
                               <p className={`ko-text text-[13px] md:text-sm leading-snug ${
-                                item.start === -1 ? "text-brand-400 italic"
-                                : item.provisional ? "text-zinc-400"
+                                item.start === -1 ? "text-brand-500 italic"
+                                : item.provisional ? "text-zinc-500"
                                 : "text-brand-900"}`}>
                                 {item.text}{item.start === -1 && " …"}
                               </p>
@@ -1844,7 +1846,7 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
                     )}
 
                     {hasSuspectMark && (
-                      <p className="text-[10px] text-brand-400 border-t border-brand-100 pt-2 mt-1">
+                      <p className="text-[11px] text-brand-500 border-t border-brand-100 pt-2 mt-1">
                         <b>[불명]</b> 표시는 음성인식이 잘못 만들어낸 구간입니다(주로 무음·잡음
                         구간). 회의록에는 반영되지 않습니다.
                       </p>
@@ -1898,7 +1900,7 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
                           } text-white hover:scale-105 active:scale-95`}
                         >
                           {isPaused ? <Play size={20} fill="currentColor" /> : <Pause size={20} fill="currentColor" />}
-                          <span className="text-[9px] font-bold tracking-tight">
+                          <span className="text-[11px] font-bold tracking-tight">
                             {isPaused ? "재시작" : "일시정지"}
                           </span>
                         </button>
@@ -1909,17 +1911,17 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
                           className="w-20 h-20 md:w-24 md:h-24 bg-brand-950 text-white rounded-[1.5rem] md:rounded-[2rem] flex flex-col items-center justify-center gap-1 hover:bg-brand-900 transition-all shadow-2xl hover:scale-105 active:scale-95 group relative overflow-hidden"
                         >
                           <Square size={24} fill="currentColor" className="group-hover:scale-90 transition-transform relative z-10" />
-                          <span className="text-[10px] font-bold tracking-tight relative z-10">정지</span>
+                          <span className="text-[11px] font-bold tracking-tight relative z-10">정지</span>
                         </button>
                       </div>
 
-                      <p className="text-[10px] md:text-xs text-brand-400 font-bold uppercase tracking-[0.3em] animate-pulse">
+                      <p className="text-[11px] md:text-xs text-brand-500 font-bold uppercase tracking-[0.3em] animate-pulse">
                         {isPaused ? "녹음 일시정지" : "세션 진행 중"}
                       </p>
 
                       <button
                         onClick={cancelRecording}
-                        className="text-xs text-brand-400 hover:text-red-500 underline underline-offset-2 transition-colors"
+                        className="text-xs text-brand-500 hover:text-red-500 underline underline-offset-2 transition-colors"
                       >
                         저장하지 않고 취소
                       </button>
@@ -1970,7 +1972,7 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
                       말하면 실시간으로 전사돼요 — 표시까지 몇 초 걸릴 수 있어요
                     </p>
                     {/* 녹음 전 화면에만 둔다 — 녹음 중 상시 배너는 곧 안 읽힌다. */}
-                    <p className="text-xs text-zinc-400 mt-3">
+                    <p className="text-xs text-zinc-500 mt-3">
                       녹음 전 참석자에게 <b>녹음·자동 전사</b> 사실을 알려 주세요.
                     </p>
                   </div>

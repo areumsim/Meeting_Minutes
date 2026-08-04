@@ -85,17 +85,17 @@ export default function PersonaCard({
           <span className="text-[11px] font-bold text-zinc-700 whitespace-nowrap">
             {item.personaLabel}
           </span>
-          <span className="text-[10px] text-zinc-400 whitespace-nowrap">
+          <span className="text-[11px] text-zinc-500 whitespace-nowrap">
             {KIND_LABEL[item.kind] || item.kind} · {style.label}
           </span>
           {/* 항상 붙는 초안 라벨 — 판정이 아니라 제안이다 */}
-          <span className="text-[10px] bg-white/70 border border-zinc-200 text-zinc-500 px-1 rounded whitespace-nowrap">
+          <span className="text-[11px] bg-white/70 border border-zinc-200 text-zinc-500 px-1 rounded whitespace-nowrap">
             초안
           </span>
           {/* 팩트체커·도메인의 신뢰 수준 구분(§6). M1 은 라이브 검색을 쓰지 않는다. */}
           {item.searched === false && (item.persona === "fact_checker" || item.persona === "domain_expert") && (
             <span
-              className="text-[10px] bg-white/70 border border-amber-200 text-amber-700 px-1 rounded whitespace-nowrap"
+              className="text-[11px] bg-white/70 border border-amber-200 text-amber-700 px-1 rounded whitespace-nowrap"
               title="라이브 웹 검증 없이 사내 노트·대화만 근거로 한 제안입니다"
             >
               ⚠ 미검증
@@ -103,7 +103,7 @@ export default function PersonaCard({
           )}
           {/* 주기 자동 요약과 사용자가 누른 요약을 구분한다(과금 계기가 다르다) */}
           {isBrief && item.onDemand && (
-            <span className="text-[10px] bg-white/70 border border-zinc-200 text-zinc-500 px-1 rounded whitespace-nowrap">
+            <span className="text-[11px] bg-white/70 border border-zinc-200 text-zinc-500 px-1 rounded whitespace-nowrap">
               지금 정리
             </span>
           )}
@@ -135,7 +135,7 @@ export default function PersonaCard({
                 <li key={`${e.title}-${i}`} className="text-[11px] text-zinc-600">
                   {e.source === "web" ? "🌐" : "📄"} <b>{e.title}</b>
                   {typeof e.score === "number" && e.score > 0 && (
-                    <span className="text-zinc-400"> · {e.score.toFixed(3)}</span>
+                    <span className="text-zinc-500"> · {e.score.toFixed(3)}</span>
                   )}
                   {e.snippet && <span className="text-zinc-500"> — {e.snippet}</span>}
                 </li>
@@ -166,7 +166,7 @@ export default function PersonaCard({
               <button
                 type="button"
                 onClick={() => onDismiss(item.id)}
-                className="text-[11px] text-zinc-400 hover:text-zinc-700 font-medium flex items-center gap-0.5"
+                className="text-[11px] text-zinc-500 hover:text-zinc-700 font-medium flex items-center gap-0.5"
                 title="필요 없습니다"
               >
                 <X className="w-3 h-3" /> 닫기

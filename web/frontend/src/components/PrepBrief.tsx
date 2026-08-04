@@ -62,7 +62,7 @@ export default function PrepBrief({ onSaved }: { onSaved?: (id: string) => void 
 
       <div className="bg-white border border-zinc-200 rounded-2xl shadow-sm p-4 md:p-5 space-y-3">
         <div className="space-y-1.5">
-          <label htmlFor="prep-title" className="text-xs font-bold text-zinc-400 uppercase tracking-widest">회의 제목</label>
+          <label htmlFor="prep-title" className="text-xs font-bold text-zinc-500 uppercase tracking-widest">회의 제목</label>
           <input
                 id="prep-title"
             type="text"
@@ -77,7 +77,7 @@ export default function PrepBrief({ onSaved }: { onSaved?: (id: string) => void 
         </div>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           <div className="space-y-1.5">
-            <label htmlFor="prep-date" className="text-xs font-bold text-zinc-400 uppercase tracking-widest">회의 날짜 (선택)</label>
+            <label htmlFor="prep-date" className="text-xs font-bold text-zinc-500 uppercase tracking-widest">회의 날짜 (선택)</label>
             <input
                 id="prep-date"
               type="date"
@@ -87,7 +87,7 @@ export default function PrepBrief({ onSaved }: { onSaved?: (id: string) => void 
             />
           </div>
           <div className="space-y-1.5">
-            <label htmlFor="prep-attendees" className="text-xs font-bold text-zinc-400 uppercase tracking-widest">참석자 (선택)</label>
+            <label htmlFor="prep-attendees" className="text-xs font-bold text-zinc-500 uppercase tracking-widest">참석자 (선택)</label>
             <input
                 id="prep-attendees"
               type="text"
@@ -99,7 +99,7 @@ export default function PrepBrief({ onSaved }: { onSaved?: (id: string) => void 
           </div>
         </div>
         <div className="space-y-1.5">
-          <label htmlFor="prep-topic" className="text-xs font-bold text-zinc-400 uppercase tracking-widest">주제 / 키워드 (선택)</label>
+          <label htmlFor="prep-topic" className="text-xs font-bold text-zinc-500 uppercase tracking-widest">주제 / 키워드 (선택)</label>
           <input
                 id="prep-topic"
             type="text"
@@ -111,7 +111,7 @@ export default function PrepBrief({ onSaved }: { onSaved?: (id: string) => void 
           />
         </div>
         <div className="space-y-1.5">
-          <label htmlFor="prep-notes" className="text-xs font-bold text-zinc-400 uppercase tracking-widest">추가 노트 / 맥락 (선택)</label>
+          <label htmlFor="prep-notes" className="text-xs font-bold text-zinc-500 uppercase tracking-widest">추가 노트 / 맥락 (선택)</label>
           <textarea
                 id="prep-notes"
             value={notes}
@@ -139,7 +139,7 @@ export default function PrepBrief({ onSaved }: { onSaved?: (id: string) => void 
           <div className="flex items-center gap-2 mb-2">
             <Link2 size={16} className="text-brand-500" />
             <span className="text-sm font-bold text-brand-900">연결된 노트</span>
-            <span className="text-xs text-brand-400">
+            <span className="text-xs text-brand-500">
               {meta.vault_connected === false ? "· 노트 폴더 미연결" : `· ${meta.related_count ?? 0}개 · 미완료 액션 ${meta.open_actions ?? 0} · 최근 결정 ${meta.recent_decisions ?? 0}`}
             </span>
           </div>
@@ -154,12 +154,12 @@ export default function PrepBrief({ onSaved }: { onSaved?: (id: string) => void 
                 <li key={i} className="flex items-center gap-2 text-xs text-brand-600 bg-zinc-50 border border-zinc-100 rounded-lg px-3 py-1.5">
                   <FileText size={13} className="shrink-0 opacity-60" />
                   <span className="truncate font-medium">{n.title || n.path}</span>
-                  {typeof n.score === "number" && <span className="ml-auto shrink-0 text-brand-400">{n.score.toFixed(3)}</span>}
+                  {typeof n.score === "number" && <span className="ml-auto shrink-0 text-brand-500">{n.score.toFixed(3)}</span>}
                 </li>
               ))}
             </ul>
           ) : (
-            <div className="text-xs text-brand-400">관련 노트를 찾지 못했습니다(볼트에 관련 기록이 없을 수 있음).</div>
+            <div className="text-xs text-brand-500">관련 노트를 찾지 못했습니다(볼트에 관련 기록이 없을 수 있음).</div>
           )}
         </div>
       )}

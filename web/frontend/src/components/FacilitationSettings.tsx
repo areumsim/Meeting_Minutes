@@ -140,11 +140,11 @@ export default function FacilitationSettings() {
               <div className="md:w-64 shrink-0">
                 <div className="flex items-center gap-1.5">
                   <span className="text-sm font-semibold text-brand-900">{p.label}</span>
-                  <span className={`text-[10px] px-1.5 py-0.5 rounded border ${risk.cls}`}>
+                  <span className={`text-[11px] px-1.5 py-0.5 rounded border ${risk.cls}`}>
                     {risk.text}
                   </span>
                 </div>
-                <p className="text-[11px] text-brand-400 line-clamp-1" title={p.role}>{p.role}</p>
+                <p className="text-[11px] text-brand-500 line-clamp-1" title={p.role}>{p.role}</p>
               </div>
 
               <div className="flex items-center gap-1 flex-wrap">
@@ -203,7 +203,7 @@ export default function FacilitationSettings() {
             : saved ? <CheckCircle size={14} /> : <Save size={14} />}
           {saved ? "저장되었습니다!" : "참견도 저장"}
         </button>
-        <p className="text-[11px] text-brand-400">
+        <p className="text-[11px] text-brand-500">
           참견도 2 이상은 개입 문장 생성에 상위 모델이 쓰여 회의당 비용 캡을 소모합니다.
           {data.personas.some((p) => (levels[p.key] ?? 0) >= data.displayLevel)
             && " 3(옆 카드)로 둔 페르소나는 녹음 중 화면에 카드가 뜹니다."}

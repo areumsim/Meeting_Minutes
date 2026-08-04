@@ -63,7 +63,7 @@ export default function TextInput({ onComplete }: { onComplete: (id: string) => 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
           <div className="lg:col-span-2 space-y-3 flex flex-col">
             <div className="space-y-1.5">
-              <label htmlFor="text-title" className="text-xs font-bold text-zinc-400 uppercase tracking-widest">제목</label>
+              <label htmlFor="text-title" className="text-xs font-bold text-zinc-500 uppercase tracking-widest">제목</label>
               <input
                 id="text-title"
                 type="text"
@@ -74,7 +74,7 @@ export default function TextInput({ onComplete }: { onComplete: (id: string) => 
               />
             </div>
             <div className="space-y-1.5">
-              <label htmlFor="text-topic" className="text-xs font-bold text-zinc-400 uppercase tracking-widest">주제 / 맥락</label>
+              <label htmlFor="text-topic" className="text-xs font-bold text-zinc-500 uppercase tracking-widest">주제 / 맥락</label>
               <input
                 id="text-topic"
                 type="text"
@@ -86,7 +86,7 @@ export default function TextInput({ onComplete }: { onComplete: (id: string) => 
             </div>
             <div className="space-y-1.5 flex-1 flex flex-col">
               <div className="flex items-center justify-between">
-                <label htmlFor="text-body" className="text-xs font-bold text-zinc-400 uppercase tracking-widest">본문</label>
+                <label htmlFor="text-body" className="text-xs font-bold text-zinc-500 uppercase tracking-widest">본문</label>
                 <button
                   onClick={handlePaste}
                   className="flex items-center gap-1.5 text-xs font-bold text-brand-600 hover:text-brand-800 bg-brand-50 hover:bg-brand-100 px-3 py-1.5 rounded-lg transition-colors border border-brand-100"
@@ -101,7 +101,7 @@ export default function TextInput({ onComplete }: { onComplete: (id: string) => 
                 placeholder="회의 메모, 전사 텍스트 등을 여기에 붙여넣으세요..."
                 className="w-full px-3 py-2.5 bg-zinc-50 border border-zinc-200 rounded-lg focus:ring-2 focus:ring-zinc-900 outline-none flex-1 min-h-[220px] resize-none font-medium text-sm mt-1"
               />
-              <p className="text-xs text-zinc-400 mt-1">{text.length.toLocaleString()}자</p>
+              <p className="text-xs text-zinc-500 mt-1">{text.length.toLocaleString()}자</p>
             </div>
           </div>
 

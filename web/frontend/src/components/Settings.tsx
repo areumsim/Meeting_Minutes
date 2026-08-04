@@ -146,7 +146,7 @@ function BackendConnectionCard({ onChanged }: { onChanged: () => void }) {
             {result.ok ? <CheckCircle size={14} /> : <XCircle size={14} />} {result.message}
           </div>
         )}
-        <p className="text-[11px] text-brand-400 mt-2">
+        <p className="text-[11px] text-brand-500 mt-2">
           PC 주소 확인: exe 실행 후 브라우저에 표시되는 주소, 또는 PC에서 <b>ipconfig</b>의 IPv4 주소 + <b>:8501</b>.
         </p>
       </div>
@@ -429,7 +429,7 @@ export default function SettingsView() {
           onClick={() => setOpen((p) => ({ ...p, [group.id]: !isOpen }))}
           className="w-full flex items-center gap-2 px-4 md:px-5 py-4 text-left hover:bg-brand-50/50 transition-colors"
         >
-          {isOpen ? <ChevronDown size={18} className="text-brand-400 shrink-0" /> : <ChevronRight size={18} className="text-brand-400 shrink-0" />}
+          {isOpen ? <ChevronDown size={18} className="text-brand-500 shrink-0" /> : <ChevronRight size={18} className="text-brand-500 shrink-0" />}
           <Settings size={16} className="text-brand-500 shrink-0" />
           <span className="text-base font-bold text-brand-900">{group.label}</span>
         </button>
@@ -459,7 +459,7 @@ export default function SettingsView() {
                   result={testMsg.localstt}
                   onClick={handlePrepareLocalStt}
                 />
-                <p className="text-xs text-brand-400 mt-1">
+                <p className="text-xs text-brand-500 mt-1">
                   {localStt && !localStt.lib_available
                     ? "이 설치본에는 로컬 전사 라이브러리(faster-whisper)가 없습니다. 포터블 배포본에서는 기본 포함됩니다."
                     : "회의 중에 내려받지 않도록 미리 준비하세요. 모델 크기에 따라 수십~수백 MB, 1~3분 걸립니다. 준비하지 않으면 위 '로컬 STT 최종 백업'을 켜도 이 백업은 폴백 순서에서 자동으로 제외됩니다(전사 자체는 계속됩니다)."}
@@ -469,21 +469,21 @@ export default function SettingsView() {
             {packaged && group.id === "email" && (
               <>
                 <TestRow label="메일 연결 테스트 (테스트 메일 발송)" busy={testing === "email"} result={testMsg.email} onClick={() => runTest("email")} />
-                <p className="text-xs text-brand-400 mt-1">받는 주소로 테스트 메일 1통을 보내 설정을 확인합니다. 받은 편지함(스팸함 포함)을 확인하세요.</p>
+                <p className="text-xs text-brand-500 mt-1">받는 주소로 테스트 메일 1통을 보내 설정을 확인합니다. 받은 편지함(스팸함 포함)을 확인하세요.</p>
               </>
             )}
             {packaged && group.id === "notify" && (
               <>
                 <TestRow label="Slack 테스트 메시지 보내기" busy={testing === "slack"} result={testMsg.slack} onClick={() => runTest("slack")} />
                 <TestRow label="Teams 테스트 메시지 보내기" busy={testing === "teams"} result={testMsg.teams} onClick={() => runTest("teams")} />
-                <p className="text-xs text-brand-400 mt-1">각 Webhook URL을 입력·저장한 뒤 눌러 채널에 메시지가 도착하는지 확인하세요.</p>
+                <p className="text-xs text-brand-500 mt-1">각 Webhook URL을 입력·저장한 뒤 눌러 채널에 메시지가 도착하는지 확인하세요.</p>
               </>
             )}
             {packaged && group.id === "obsidian" && (
               <>
                 <TestRow label="노트 폴더 경로 확인" busy={testing === "obsidian"} result={testMsg.obsidian} onClick={() => runTest("obsidian")} />
                 <TestRow label="검색 인덱스·그래프 재빌드" busy={testing === "reindex"} result={testMsg.reindex} onClick={handleReindex} />
-                <p className="text-xs text-brand-400 mt-1">노트 폴더(.md)를 바꾸거나 노트를 추가한 뒤 눌러 검색·위키·지식 그래프를 최신화하세요. (Obsidian 앱은 필요 없습니다.)</p>
+                <p className="text-xs text-brand-500 mt-1">노트 폴더(.md)를 바꾸거나 노트를 추가한 뒤 눌러 검색·위키·지식 그래프를 최신화하세요. (Obsidian 앱은 필요 없습니다.)</p>
                 <div className="mt-5">
                   <button onClick={handleDiagnose} disabled={testing === "diagnose"} className="flex items-center gap-2 px-5 py-2.5 bg-brand-50 text-brand-700 rounded-xl text-sm font-semibold hover:bg-brand-100 transition-all w-fit">
                     {testing === "diagnose" ? <Loader2 size={16} className="animate-spin" /> : <Plug size={16} />} Obsidian 전체 진단
@@ -581,7 +581,7 @@ export default function SettingsView() {
             {saving ? <Loader2 size={18} className="animate-spin" /> : saved ? <CheckCircle size={18} /> : <Save size={18} />}
             {saved ? "저장되었습니다!" : "설정 저장"}
           </button>
-          <p className="text-xs text-brand-400 md:ml-1">
+          <p className="text-xs text-brand-500 md:ml-1">
             변경 후 꼭 저장하세요. (연결 테스트·진단·재빌드는 자동으로 먼저 저장합니다.)
           </p>
         </div>
@@ -595,7 +595,7 @@ export default function SettingsView() {
           </button>
           {showRaw && (
             <div className="mt-3 space-y-2">
-              <p className="text-xs text-brand-400">위 폼에 없는 항목(도메인 매핑·카테고리·별칭 등)까지 config.json 전체를 직접 편집합니다. 키는 마스킹되어 보이며 그대로 두면 유지됩니다.</p>
+              <p className="text-xs text-brand-500">위 폼에 없는 항목(도메인 매핑·카테고리·별칭 등)까지 config.json 전체를 직접 편집합니다. 키는 마스킹되어 보이며 그대로 두면 유지됩니다.</p>
               <textarea
                 value={rawText}
                 onChange={(e) => setRawText(e.target.value)}
@@ -663,7 +663,7 @@ export default function SettingsView() {
               <div>
                 <span className="font-bold text-sm text-zinc-900">{p.name}</span>
                 <span className="text-xs text-zinc-500 ml-3">{p.description}</span>
-                <span className="text-[10px] text-brand-500 font-bold ml-2 bg-brand-50 px-2 py-0.5 rounded-md">
+                <span className="text-[11px] text-brand-500 font-bold ml-2 bg-brand-50 px-2 py-0.5 rounded-md">
                   {p.source === "builtin" ? "기본 제공" : "직접 추가"}
                 </span>
               </div>
@@ -693,7 +693,7 @@ export default function SettingsView() {
       {packaged && (
         <section className="bg-white border border-brand-200 rounded-2xl p-4 md:p-5 mb-3 shadow-sm">
           <h3 className="text-base font-bold mb-1">앱 종료</h3>
-          <p className="text-xs text-brand-400 mb-3">프로그램을 완전히 종료합니다. 종료 후 이 브라우저 탭은 닫으세요. 다시 쓰려면 MeetingMinutes.exe 를 다시 실행하세요.</p>
+          <p className="text-xs text-brand-500 mb-3">프로그램을 완전히 종료합니다. 종료 후 이 브라우저 탭은 닫으세요. 다시 쓰려면 MeetingMinutes.exe 를 다시 실행하세요.</p>
           <button
             onClick={async () => {
               if (!confirm("앱을 종료할까요? 진행 중인 처리가 있으면 중단됩니다.")) return;
@@ -800,7 +800,7 @@ function WatcherCard() {
         녹취 고지 — Recorder·FileUpload 와 같은 톤의 정적 한 줄. 자동 처리 경로라
         처리 시점에 사람이 없으므로, 폴더를 **지정하는** 이 자리가 유일한 고지 지점이다.
       */}
-      <p className="text-xs text-brand-400 mb-3">
+      <p className="text-xs text-brand-500 mb-3">
         감시 폴더에 넣는 녹음은 <b>참석자에게 녹음·자동 전사 사실을 알린 뒤</b> 취득한 것이어야 합니다.
       </p>
 
@@ -817,7 +817,7 @@ function WatcherCard() {
             {status.folders.map((f) => (
               <li key={f} className="flex items-center justify-between gap-2 bg-zinc-50 border border-zinc-100 rounded-lg px-3 py-2 text-xs">
                 <span className="font-mono text-brand-700 truncate">{f}</span>
-                <button onClick={() => onRemoveFolder(f)} disabled={busy} className="p-1 text-brand-400 hover:text-red-500 hover:bg-red-50 rounded transition-colors shrink-0">
+                <button onClick={() => onRemoveFolder(f)} disabled={busy} className="p-1 text-brand-500 hover:text-red-500 hover:bg-red-50 rounded transition-colors shrink-0">
                   <Trash2 size={14} />
                 </button>
               </li>
@@ -845,7 +845,7 @@ function WatcherCard() {
               <div key={i} className="flex items-center gap-2 text-brand-500">
                 <span className={`w-1.5 h-1.5 rounded-full ${r.status === "done" ? "bg-emerald-500" : r.status === "failed" ? "bg-red-500" : "bg-sky-500"}`} />
                 <span className="font-mono truncate max-w-[16rem]">{r.file}</span>
-                <span className="text-brand-400">{r.processed_at?.replace("T", " ")}</span>
+                <span className="text-brand-500">{r.processed_at?.replace("T", " ")}</span>
               </div>
             ))}
           </div>
@@ -917,7 +917,7 @@ function FieldRow({ field, value, onChange, packaged }: { field: Field; value: a
       <label className="flex items-start justify-between gap-4 cursor-pointer">
         <span>
           <span className="text-sm font-medium text-brand-900">{field.label}</span>
-          {field.desc && <span id={descId} className="block text-xs text-brand-400 mt-0.5">{field.desc}</span>}
+          {field.desc && <span id={descId} className="block text-xs text-brand-500 mt-0.5">{field.desc}</span>}
         </span>
         <input type="checkbox" checked={!!value} onChange={(e) => onChange(e.target.checked)}
           aria-describedby={describedBy}
@@ -945,7 +945,7 @@ function FieldRow({ field, value, onChange, packaged }: { field: Field; value: a
           aria-describedby={describedBy}
           className="w-full px-3 py-2 bg-zinc-50 border border-zinc-200 rounded-lg outline-none focus:ring-2 focus:ring-brand-500 text-sm resize-y leading-relaxed"
         />
-        {field.desc && <p id={descId} className="text-xs text-brand-400">{field.desc}</p>}
+        {field.desc && <p id={descId} className="text-xs text-brand-500">{field.desc}</p>}
       </div>
     );
   }
@@ -993,7 +993,7 @@ function FieldRow({ field, value, onChange, packaged }: { field: Field; value: a
             </button>
           )}
         </div>
-        {field.desc && <p id={descId} className="text-xs text-brand-400">{field.desc}</p>}
+        {field.desc && <p id={descId} className="text-xs text-brand-500">{field.desc}</p>}
       </div>
     );
   }
@@ -1030,7 +1030,7 @@ function FieldRow({ field, value, onChange, packaged }: { field: Field; value: a
             {field.type === "password" && (
               // tabIndex=-1 제거 — 키보드 사용자도 키를 확인하며 입력할 수 있어야 한다
               <button type="button" onClick={toggleReveal} disabled={revealBusy}
-                className="absolute right-2 top-1/2 -translate-y-1/2 text-brand-400 hover:text-brand-700 p-1 disabled:opacity-50"
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-brand-500 hover:text-brand-700 p-1 disabled:opacity-50"
                 aria-label={reveal ? "키 숨기기" : "키 표시"} aria-pressed={reveal}
                 title={reveal ? "숨기기" : "표시"}>
                 {revealBusy ? <Loader2 size={16} className="animate-spin" /> : reveal ? <EyeOff size={16} /> : <Eye size={16} />}
@@ -1048,7 +1048,7 @@ function FieldRow({ field, value, onChange, packaged }: { field: Field; value: a
         </div>
       )}
       {revealNote && <p className="text-xs text-amber-600">{revealNote}</p>}
-      {field.desc && <p id={descId} className="text-xs text-brand-400">{field.desc}</p>}
+      {field.desc && <p id={descId} className="text-xs text-brand-500">{field.desc}</p>}
     </div>
   );
 }
@@ -1058,7 +1058,7 @@ function SectionHeader({ label, hint, first }: { label: string; hint?: string; f
   return (
     <div className={`flex items-baseline gap-3 mb-3 ${first ? "mt-1" : "mt-7"}`}>
       <span className="text-xs font-bold text-brand-600 uppercase tracking-widest whitespace-nowrap">{label}</span>
-      {hint && <span className="text-[11px] text-brand-400 whitespace-nowrap hidden sm:inline">{hint}</span>}
+      {hint && <span className="text-[11px] text-brand-500 whitespace-nowrap hidden sm:inline">{hint}</span>}
       <div className="h-px flex-1 bg-brand-200 self-center" />
     </div>
   );

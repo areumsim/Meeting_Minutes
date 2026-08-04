@@ -565,6 +565,161 @@ class TestCostIsVisibleWhereItHappens:
             config_loader._cache = None
 
 
+class TestReplayPastMeetings:
+    """지난 회의 전사로 관찰 데이터를 만든다 — 새 녹음 5건을 기다리지 않아도 M2 게이트를
+    측정할 수 있다(지난 회의에는 대조 정답이 이미 있다)."""
+
+    @pytest.fixture
+    def session_with_segments(self, fac_db):
+        """같은 DB 파일에 segments 를 심는다 — 리플레이는 web.backend 를 import 하지
+        않고 이 테이블을 직접 읽는다."""
+        import sqlite3
+        c = sqlite3.connect(str(fac_db))
+        c.executescript("""
+            CREATE TABLE IF NOT EXISTS segments (
+                id TEXT PRIMARY KEY, session_id TEXT, speaker TEXT, text TEXT,
+                translated_text TEXT, start_time REAL, end_time REAL);
+        """)
+        rows = [
+            ("1", "past-1", "", "지난 회의 첫 발화입니다.", "", 0.0, 20.0),
+            ("2", "past-1", "", "결정은 났는데 담당자가 없습니다.", "", 20.0, 40.0),
+            ("3", "past-1", "", "  ", "", 40.0, 41.0),          # 빈 발화 — 무시된다
+            ("4", "past-1", "", "다음 안건으로 넘어가겠습니다.", "", 41.0, 70.0),
+        ]
+        c.executemany("INSERT INTO segments VALUES (?,?,?,?,?,?,?)", rows)
+        c.commit()
+        c.close()
+        return fac_db
+
+    def test_segments_are_read_without_web_backend(self, session_with_segments):
+        segs = facilitation.session_segments("past-1", db_path=session_with_segments)
+        assert [s.text for s in segs] == [
+            "지난 회의 첫 발화입니다.", "결정은 났는데 담당자가 없습니다.",
+            "다음 안건으로 넘어가겠습니다."]
+        # 지난 회의 전사는 보정이 끝난 확정 텍스트다
+        assert all(s.provisional is False for s in segs)
+        assert segs[0].t0 == 0.0 and segs[0].t1 == 20.0
+
+    def test_replay_uses_segment_clock_not_wall_clock(self, cfg, llm_calls,
+                                                      session_with_segments):
+        """세그먼트가 즉시 도착하므로 실제 시계로 게이트를 재면 트리아지가 1회만 돈다."""
+        cfg({"facilitation.enabled": True, "facilitation.triage_period_sec": 25})
+        res = facilitation.replay_session("past-1", db_path=session_with_segments)
+        assert res["ok"] is True and res["segments"] == 3
+        # 세그먼트 끝 시각이 시계다: 20s(첫 발화 → 즉시 1회) → 40s(20s 경과, 게이트 미달)
+        # → 70s(50s 경과 → 2회). 실제 시계로 재면 전부 즉시라 1회로 끝난다.
+        assert res["triages"] == 2
+        assert len(llm_calls) == res["triages"]
+        rows = facilitation.triages("past-1", db_path=session_with_segments)
+        assert len(rows) == res["triages"]
+        assert all(r["note"] == facilitation.NOTE_REPLAY for r in rows)
+        assert all(r["provisional"] == 0 for r in rows)
+
+    def test_replay_runs_even_when_feature_is_off(self, cfg, llm_calls,
+                                                  session_with_segments):
+        """사용자가 명시적으로 부른 측정 명령이다 — 라이브 토글과 무관하게 돌아야 한다."""
+        cfg({})                                   # facilitation.enabled 기본 false
+        assert FacilitationOrchestrator(session_id="x").enabled is False
+        res = facilitation.replay_session("past-1", db_path=session_with_segments)
+        assert res["ok"] is True and res["triages"] >= 1
+
+    def test_enabled_override_does_not_leak_into_live_path(self, cfg):
+        """오버라이드는 리플레이 전용 — 기본 경로의 '꺼져 있으면 LLM 0회'를 깨지 않는다."""
+        cfg({})
+        assert FacilitationOrchestrator(session_id="x").enabled is False
+        assert FacilitationOrchestrator(session_id="x",
+                                        enabled_override=True).enabled is True
+
+    def test_replay_rows_are_separated_in_report(self, cfg, fac_db, monkeypatch,
+                                                 session_with_segments):
+        """라이브(조각)와 리플레이(확정) 판정을 섞어 세면 실측이 무의미해진다."""
+        cfg({"facilitation.enabled": True})
+        monkeypatch.setattr(facilitation, "_call_llm", lambda *a, **k: json.dumps(
+            [{"persona": "scribe", "trigger_type": "missing", "confidence": 0.8,
+              "span": "담당자가 없다", "need_search": False}], ensure_ascii=False))
+        # 라이브 1건
+        orch = FacilitationOrchestrator(session_id="past-1")
+        orch.offer_segment("결정은 났는데 담당자가 없습니다.", t0=1.0, t1=2.0,
+                           provisional=True)
+        orch.shutdown(wait=True)
+        # 리플레이
+        facilitation.replay_session("past-1", db_path=session_with_segments)
+        r = facilitation.report("past-1", db_path=session_with_segments)
+        assert r["live"]["triage_attempts"] == 1
+        assert r["replay"]["triage_attempts"] >= 1
+        assert r["live"]["candidates"] == 1
+        assert r["replay"]["candidates"] == 0     # 같은 후보는 dedup(repeats)으로 흡수
+
+    def test_reset_removes_only_replay_rows(self, cfg, llm_calls, fac_db,
+                                            session_with_segments):
+        cfg({"facilitation.enabled": True})
+        facilitation.record_observation("past-1", "critic", span="라이브 판정",
+                                        db_path=session_with_segments)
+        facilitation.replay_session("past-1", db_path=session_with_segments)
+        assert facilitation.delete_replay_rows(
+            "past-1", db_path=session_with_segments) > 0
+        left = facilitation.observations("past-1", db_path=session_with_segments)
+        assert [o["persona"] for o in left] == ["critic"]      # 라이브는 남는다
+
+    def test_cli_realtime_transcript_file_is_read_when_db_has_no_segments(
+            self, fac_db, tmp_path):
+        """폴더 스캐너가 임포트한 세션은 DB 에 세그먼트가 없다(실측: 실볼트 5세션 전부 0건).
+        전사는 CLI 산출물 `session_*.jsonl` 에만 있으므로 그쪽도 읽어야 리플레이가 성립한다."""
+        import json as _json
+        import sqlite3
+        out = tmp_path / "realtime_20260715_092241"
+        out.mkdir()
+        (out / "session_20260715_092241.jsonl").write_text("\n".join([
+            _json.dumps({"type": "header", "translate": True}),
+            _json.dumps({"type": "segment", "start": 24.9, "end": 29.9,
+                         "text": "안녕하세요, 잘 지내시죠?",
+                         "text_original": "Hi, how are you doing?"},
+                        ensure_ascii=False),
+            "",                                            # 빈 줄 — 무시
+            "{깨진 json",                                   # 파싱 실패 — 무시
+            _json.dumps({"type": "revise", "text": "무시되는 타입"},
+                        ensure_ascii=False),
+            _json.dumps({"type": "segment", "start": 29.2, "end": 34.2,
+                         "text": "", "text_original": "we need communication"},
+                        ensure_ascii=False),
+        ]), encoding="utf-8")
+        c = sqlite3.connect(str(fac_db))
+        c.executescript("CREATE TABLE IF NOT EXISTS sessions "
+                        "(id TEXT PRIMARY KEY, output_dir TEXT);")
+        c.execute("INSERT INTO sessions VALUES (?, ?)", ("cli-1", str(out)))
+        c.commit()
+        c.close()
+
+        segs = facilitation.session_segments("cli-1", db_path=fac_db)
+        # 번역된 회의는 text(한국어)를 쓰고, 비어 있으면 원문으로 폴백한다
+        assert [s.text for s in segs] == ["안녕하세요, 잘 지내시죠?",
+                                          "we need communication"]
+        assert segs[0].t0 == 24.9 and segs[0].t1 == 29.9
+        assert all(s.provisional is False for s in segs)
+
+    def test_missing_output_dir_is_not_a_crash(self, fac_db):
+        import sqlite3
+        c = sqlite3.connect(str(fac_db))
+        c.executescript("CREATE TABLE IF NOT EXISTS sessions "
+                        "(id TEXT PRIMARY KEY, output_dir TEXT);")
+        c.execute("INSERT INTO sessions VALUES (?, ?)", ("gone", "C:/없는/폴더"))
+        c.commit()
+        c.close()
+        assert facilitation.session_segments("gone", db_path=fac_db) == []
+
+    def test_estimate_uses_the_same_pricing_function(self, cfg):
+        from meeting_minutes_app.common import pricing
+        segs = [facilitation.Utterance("a", 0.0, 100.0, False)]
+        est = facilitation.replay_estimate(segs, 25.0, "gpt-4o-mini")
+        assert est["triages"] == 5          # 1 + 100//25
+        assert est["cost_usd"] == pytest.approx(
+            5 * pricing.facilitation_triage_call_cost("gpt-4o-mini"), abs=1e-9)
+
+    def test_missing_session_is_reported_not_crashed(self, cfg, fac_db):
+        res = facilitation.replay_session("없는세션", db_path=fac_db)
+        assert res["ok"] is False and "세그먼트" in res["message"]
+
+
 class TestSettingsExposeOnlyWhatWorks:
     """켰는데 아무 일도 안 일어나는 토글을 설정 화면에 올리지 않는다(§3)."""
 

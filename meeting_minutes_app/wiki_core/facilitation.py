@@ -153,7 +153,8 @@ CREATE TABLE IF NOT EXISTS facilitation_triage (
     t1           REAL,
     provisional  INTEGER DEFAULT 0,
     ok           INTEGER DEFAULT 0,
-    skip_reason  TEXT
+    skip_reason  TEXT,
+    note         TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_facilitation_triage_session
     ON facilitation_triage(session_id);
@@ -167,6 +168,13 @@ _LOG_COLUMNS = {
     "provisional": "INTEGER DEFAULT 0",
     "repeats": "INTEGER DEFAULT 0",
 }
+#: facilitation_triage 에 나중에 추가된 컬럼(리플레이 표시용).
+_TRIAGE_COLUMNS = {"note": "TEXT"}
+
+#: 리플레이로 만들어진 행의 `note` 값. 실측에서 **라이브 판정과 섞어 세면 안 된다** —
+#: 리플레이는 보정이 끝난 확정 전사를 보므로 조각 전사를 보는 라이브보다 유리하다
+#: (그래서 리플레이 precision 은 상한이다).
+NOTE_REPLAY = "replay"
 
 
 def _resolve_db_path(db_path: Optional[Union[str, Path]] = None) -> Optional[Path]:
@@ -191,6 +199,7 @@ def _ensure(c: sqlite3.Connection) -> None:
     from meeting_minutes_app.common import sqlite_util
     c.executescript(_SCHEMA)
     sqlite_util.ensure_columns(c, "facilitation_log", _LOG_COLUMNS)
+    sqlite_util.ensure_columns(c, "facilitation_triage", _TRIAGE_COLUMNS)
 
 
 _WS_RE = re.compile(r"\s+")
@@ -260,7 +269,7 @@ def record_triage(session_id: str, *, model: str = "", cost_usd: float = 0.0,
                   candidates: int = 0, personas: int = 0,
                   window_chars: int = 0, t0: Optional[float] = None,
                   t1: Optional[float] = None, provisional: bool = False,
-                  ok: bool = False, skip_reason: str = "",
+                  ok: bool = False, skip_reason: str = "", note: str = "",
                   db_path: Optional[Union[str, Path]] = None) -> bool:
     """트리아지 **시도** 1건 기록 — 오탐률의 분모이자 건너뜀 사유의 영속 기록.
 
@@ -276,12 +285,12 @@ def record_triage(session_id: str, *, model: str = "", cost_usd: float = 0.0,
             c.execute(
                 "INSERT INTO facilitation_triage "
                 "(ts, session_id, model, cost_usd, candidates, personas, "
-                " window_chars, t0, t1, provisional, ok, skip_reason) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                " window_chars, t0, t1, provisional, ok, skip_reason, note) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (datetime.now().isoformat(timespec="seconds"), session_id, model,
                  float(cost_usd or 0.0), int(candidates), int(personas),
                  int(window_chars), t0, t1, 1 if provisional else 0,
-                 1 if ok else 0, skip_reason),
+                 1 if ok else 0, skip_reason, note),
             )
         return True
     except sqlite3.Error:
@@ -376,7 +385,15 @@ def report(session_id: Optional[str] = None,
     for t in skipped:
         r = str(t.get("skip_reason") or "")
         skip_counts[r] = skip_counts.get(r, 0) + 1
+    # 라이브(조각 전사)와 리플레이(확정 전사) 판정은 품질 조건이 달라 **섞어 세면
+    # 안 된다** — 합계와 함께 출처별 수치를 같이 돌려준다.
+    replay_obs = [o for o in obs if (o.get("note") or "") == NOTE_REPLAY]
+    replay_trg = [t for t in trg if (t.get("note") or "") == NOTE_REPLAY]
     return {
+        "replay": {"triage_attempts": len(replay_trg),
+                   "candidates": len(replay_obs)},
+        "live": {"triage_attempts": len(trg) - len(replay_trg),
+                 "candidates": len(obs) - len(replay_obs)},
         "sessions": sorted({str(t.get("session_id") or "") for t in trg}
                            | {str(o.get("session_id") or "") for o in obs}),
         "triage_attempts": len(trg),
@@ -416,6 +433,195 @@ def effective_triage_model(configured: str) -> str:
     return m
 
 
+# ── 리플레이: 지난 회의의 전사로 관찰 데이터를 만든다 ────────────────────────
+
+def session_segments(session_id: str,
+                     db_path: Optional[Union[str, Path]] = None
+                     ) -> List[Utterance]:
+    """지난 회의의 확정 전사 세그먼트. provisional=False — 보정이 끝난 텍스트다.
+
+    두 곳을 본다. **둘 다 필요하다**:
+      1. DB `segments` — 웹 녹음·업로드 세션. `web.backend.database` 를 import 하지 않고
+         같은 sqlite 파일을 직접 읽는다(usage_log·graph_db 와 같은 방식).
+      2. 없으면 `sessions.output_dir` 의 `*.jsonl` — **CLI 실시간 녹음 산출물**.
+         `session_scanner` 가 폴더에서 임포트한 세션은 DB 에 행만 만들고 세그먼트는
+         남기지 않으므로(실측: 실볼트 5세션 전부 segments 0건) 1번만 보면 "리플레이할
+         전사가 없다"가 된다. 파일에는 `{"type":"segment","start","end","text"}` 로
+         남아 있다.
+    """
+    c = _connect(db_path)
+    if c is None:
+        return []
+    rows: List[Any] = []
+    out_dir = ""
+    try:
+        try:
+            rows = c.execute(
+                "SELECT text, start_time, end_time FROM segments "
+                "WHERE session_id = ? ORDER BY start_time, rowid", (session_id,)
+            ).fetchall()
+        except sqlite3.Error:
+            rows = []
+        if not rows:
+            try:
+                r = c.execute("SELECT output_dir FROM sessions WHERE id = ?",
+                              (session_id,)).fetchone()
+                out_dir = (r[0] or "") if r else ""
+            except sqlite3.Error:
+                out_dir = ""
+    finally:
+        c.close()
+
+    out: List[Utterance] = []
+    for text, t0, t1 in rows:
+        t = (text or "").strip()
+        if t:
+            out.append(Utterance(t, float(t0 or 0.0), float(t1 or 0.0), False))
+    if out or not out_dir:
+        return out
+    return _segments_from_jsonl(out_dir)
+
+
+def _resolve_output_dir(raw: str) -> Optional[Path]:
+    """DB 의 output_dir 을 **데이터 베이스 기준**으로 해석한다.
+
+    상대 경로를 CWD 로 풀면 엔트리포인트(웹 런처는 데이터 폴더로 chdir 한다)에 따라
+    다른 곳을 가리킨다 — 실제로 갈라져서 완전 삭제가 고아 폴더를 남긴 전례가 있다
+    (CLAUDE.md, `api/batch.py`·`web/backend/trash.py` 와 같은 규칙)."""
+    if not raw:
+        return None
+    p = Path(raw)
+    if not p.is_absolute():
+        try:
+            from meeting_minutes_app.common.app_paths import get_output_dir
+            base = get_output_dir()
+            # output_dir 값이 이미 'output/...' 로 시작할 수 있어 두 후보를 본다.
+            for cand in (base / p.name, base.parent / p):
+                if cand.exists():
+                    return cand
+        except Exception:
+            return None
+    return p if p.exists() else None
+
+
+def _segments_from_jsonl(output_dir: str) -> List[Utterance]:
+    """CLI 실시간 녹음 산출물(`session_*.jsonl`)에서 세그먼트를 읽는다.
+
+    번역이 켜진 회의는 `text` 가 한국어 번역, `text_original` 이 원문이다. 페르소나
+    판정은 회의 언어(한국어 UI 기준)로 하므로 `text` 를 우선하고 없으면 원문을 쓴다."""
+    import json
+    d = _resolve_output_dir(output_dir)
+    if d is None or not d.is_dir():
+        return []
+    out: List[Utterance] = []
+    for f in sorted(d.glob("*.jsonl")):
+        try:
+            for line in f.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except ValueError:
+                    continue
+                if not isinstance(row, dict) or row.get("type") != "segment":
+                    continue
+                t = str(row.get("text") or row.get("text_original") or "").strip()
+                if not t:
+                    continue
+                out.append(Utterance(t, float(row.get("start") or 0.0),
+                                     float(row.get("end") or 0.0), False))
+        except OSError:
+            continue
+    out.sort(key=lambda u: (u.t0 or 0.0))
+    return out
+
+
+def replay_estimate(segments: List[Utterance], period_sec: float,
+                    model: str) -> Dict[str, Any]:
+    """리플레이 예상 트리아지 횟수·비용. 실행 **전에** 사용자에게 보여줄 값이다.
+
+    단가는 라이브와 같은 함수(`pricing.facilitation_triage_call_cost`)를 쓴다 —
+    리플레이용 추정을 따로 만들면 또 갈라진다."""
+    from meeting_minutes_app.common import pricing
+    if not segments:
+        return {"triages": 0, "cost_usd": 0.0, "duration_sec": 0.0}
+    span = max(0.0, float(segments[-1].t1 or 0.0) - float(segments[0].t0 or 0.0))
+    # 첫 발화에서 1회 + 이후 주기마다 1회(상한). 발화가 드문 구간은 실제로 더 적다.
+    triages = 1 + int(span // max(period_sec, 1.0))
+    per_call = pricing.facilitation_triage_call_cost(model)
+    return {"triages": triages, "cost_usd": round(triages * per_call, 6),
+            "duration_sec": round(span, 1)}
+
+
+def delete_replay_rows(session_id: str,
+                       db_path: Optional[Union[str, Path]] = None) -> int:
+    """그 세션의 **리플레이 행만** 삭제(라이브 관찰 기록은 건드리지 않는다)."""
+    c = _connect(db_path)
+    if c is None:
+        return 0
+    n = 0
+    try:
+        with c:
+            _ensure(c)
+            for table in ("facilitation_log", "facilitation_triage"):
+                try:
+                    n += c.execute(
+                        f"DELETE FROM {table} WHERE session_id = ? AND note = ?",
+                        (session_id, NOTE_REPLAY)).rowcount or 0
+                except sqlite3.Error:
+                    pass
+    except sqlite3.Error:
+        pass
+    finally:
+        c.close()
+    return n
+
+
+def replay_session(session_id: str, *, db_path: Optional[Union[str, Path]] = None,
+                   reset: bool = False,
+                   on_progress: Optional[Callable[[int, int], None]] = None
+                   ) -> Dict[str, Any]:
+    """지난 회의의 전사를 오케스트레이터에 흘려 관찰 데이터를 만든다.
+
+    **왜 필요한가**: M0 라이브 수집은 새 회의를 5건 녹음할 때까지 기다려야 하는데,
+    지난 회의에는 대조 정답(종료 후 finalize 사실검증·회의록)이 **이미 있다**. 오디오를
+    다시 전사하지 않으므로 STT 재과금도 없다(트리아지 LLM 비용만 든다).
+
+    **측정상 주의(중요)**: 리플레이는 보정이 끝난 확정 전사를 보므로, 조각 전사를 보는
+    라이브보다 유리하다. 여기서 나온 precision 은 **상한**이고 "페르소나 판정 자체의
+    품질"을 재는 값이다. 라이브 품질(= STT 노이즈 포함)과 섞어 세면 안 된다 — 그래서
+    모든 행에 `note='replay'` 를 남기고 report() 가 분리해 보여준다.
+
+    라이브 경로와 게이트·비용·기록을 **같은 코드**로 지난다. 다른 것은 시계뿐이다
+    (clock 주입 — 세그먼트가 즉시 도착하므로 실제 시계로는 트리아지가 1회만 돈다).
+    """
+    segs = session_segments(session_id, db_path)
+    if not segs:
+        return {"ok": False, "message": "이 세션에 전사 세그먼트가 없습니다",
+                "session_id": session_id, "segments": 0}
+    if reset:
+        delete_replay_rows(session_id, db_path)
+
+    now = {"t": float(segs[0].t0 or 0.0)}
+    orch = FacilitationOrchestrator(
+        session_id=session_id, clock=lambda: now["t"], note=NOTE_REPLAY,
+        enabled_override=True, db_path=db_path)
+    total = len(segs)
+    for i, u in enumerate(segs, 1):
+        now["t"] = float(u.t1 if u.t1 is not None else u.t0 or 0.0)
+        orch.offer_segment(u.text, t0=u.t0, t1=u.t1, provisional=False)
+        if on_progress and (i % 20 == 0 or i == total):
+            on_progress(i, total)
+    orch.shutdown(wait=True)
+    st = orch.status()
+    return {"ok": True, "session_id": session_id, "segments": total,
+            "triages": st["triage_count"], "candidates": st["observed_count"],
+            "repeats": st["repeat_count"],
+            "cost_usd": st["session_cost_usd"],
+            "skip_reason": st["skip_reason"]}
+
+
 def _call_llm(model: str, system: str, user: str,
               max_tokens: Optional[int] = None) -> str:
     """트리아지 LLM 1회 호출 — 반드시 common.llm_client 경유(우회 금지, PRD §7).
@@ -442,12 +648,32 @@ class FacilitationOrchestrator:
     """
 
     def __init__(self, *, session_id: str = "", topic: str = "",
-                 on_intervention: Optional[Callable[[Dict[str, Any]], None]] = None):
+                 on_intervention: Optional[Callable[[Dict[str, Any]], None]] = None,
+                 clock: Optional[Callable[[], float]] = None,
+                 note: str = "", enabled_override: Optional[bool] = None,
+                 db_path: Optional[Union[str, Path]] = None):
+        """clock/note/enabled_override 는 **리플레이 전용 주입점**이다(replay_session).
+
+        - clock: 시간 게이트가 읽는 시계. 라이브는 `time.monotonic`, 리플레이는 "지금
+          처리 중인 세그먼트의 끝 시각"을 돌려준다 — 게이트 구현을 두 벌로 만들지 않기
+          위해서다(리플레이는 세그먼트가 즉시 도착하므로 실제 시계로는 트리아지가
+          회의 전체에 1회만 돈다).
+        - note: 기록에 붙는 표시. 리플레이 행은 `NOTE_REPLAY` 로 라이브와 구분한다.
+        - enabled_override: config 게이트를 무시한다. 리플레이는 사용자가 명시적으로
+          부른 측정 명령이므로 기능이 꺼져 있어도 돌아야 한다. **라이브 경로는 절대
+          쓰지 않는다**(기본 None → config 게이트 그대로, 테스트로 고정).
+        """
         self.session_id = str(session_id or "")
         self.topic = (topic or "").strip()
         self.on_intervention = on_intervention
+        self._clock = clock or time.monotonic
+        self._note = note
+        #: 기록 대상 DB. None 이면 모듈 기본(app_paths.get_db_path()). 리플레이가
+        #: 다른 데이터 폴더를 가리킬 때만 쓴다.
+        self._db_path = Path(db_path) if db_path else None
 
-        self._gate = bool(_c("facilitation.enabled", False))
+        self._gate = (bool(_c("facilitation.enabled", False))
+                      if enabled_override is None else bool(enabled_override))
         self._period = max(float(_c("facilitation.triage_period_sec", 25) or 25), 1.0)
         # 설정값과 실제 과금 모델은 다를 수 있다 — 추정·한도·기록·로그는 전부
         # 실효 모델을 쓴다(effective_triage_model 독스트링 참조).
@@ -534,7 +760,7 @@ class FacilitationOrchestrator:
                 self._window.append(
                     Utterance(text.strip(), t0, t1, bool(provisional)))
                 self._trim_window_locked()
-            now = time.monotonic()
+            now = float(self._clock())
             if (self._last_triage is not None
                     and now - self._last_triage < self._period):
                 return
@@ -607,7 +833,8 @@ class FacilitationOrchestrator:
                 record_triage(self.session_id, model=self._triage_model,
                               personas=len(active),
                               window_chars=len(window_text), t0=t0, t1=t1,
-                              provisional=provisional, skip_reason=reason)
+                              provisional=provisional, skip_reason=reason,
+                              note=self._note, db_path=self._db_path)
 
             if spend_guard.automation_paused():
                 _skip("자동 실행 일시정지로 트리아지 보류")
@@ -654,7 +881,8 @@ class FacilitationOrchestrator:
                     span=cand.get("span", ""),
                     need_search=bool(cand.get("need_search")),
                     level=self.persona_level(cand["persona"]),
-                    t0=t0, t1=t1, provisional=provisional)
+                    t0=t0, t1=t1, provisional=provisional, note=self._note,
+                    db_path=self._db_path)
                 with self._lock:
                     if r == "new":
                         self._observed_count += 1
@@ -663,7 +891,8 @@ class FacilitationOrchestrator:
             record_triage(self.session_id, model=self._triage_model, cost_usd=est,
                           candidates=len(cands), personas=len(active),
                           window_chars=len(window_text), t0=t0, t1=t1,
-                          provisional=provisional, ok=True)
+                          provisional=provisional, ok=True, note=self._note,
+                          db_path=self._db_path)
         except Exception as e:
             # LLM 실패(양 벤더 모두 실패 시 llm_client 가 raise)·파싱 예외 —
             # 시도 자체는 분모에 남긴다. ok=0 이 "호출했지만 결과 없음"을 뜻한다.
@@ -677,7 +906,8 @@ class FacilitationOrchestrator:
                               cost_usd=0.0, personas=len(active),
                               window_chars=len(window_text), t0=t0, t1=t1,
                               provisional=provisional, ok=False,
-                              skip_reason="")
+                              skip_reason="", note=self._note,
+                              db_path=self._db_path)
                 self._skip_reason = f"트리아지 실패: {type(e).__name__}"
             except Exception:
                 pass
@@ -759,6 +989,14 @@ def _print_report(session_id: Optional[str], detail: bool) -> None:
         print("  2) 그 뒤에 실시간 녹음(웹 UI)을 했는가 — CLI 녹음은 대상이 아니다")
         print("  3) 발화가 있었는가(침묵 구간에는 트리아지가 돌지 않는다)")
         return
+    if r["replay"]["triage_attempts"] and r["live"]["triage_attempts"]:
+        print(f"\n⚠ 라이브 {r['live']['triage_attempts']}회 / 리플레이 "
+              f"{r['replay']['triage_attempts']}회가 섞여 있습니다 — 리플레이는 보정된 "
+              f"확정 전사를 보므로\n  판정 조건이 유리합니다. precision 은 따로 계산하세요"
+              f"(--session 으로 분리).")
+    elif r["replay"]["triage_attempts"]:
+        print("\n출처: 리플레이(지난 회의 확정 전사). 라이브(조각 전사)보다 조건이 "
+              "유리해 precision 은 **상한**입니다.")
     print(f"\n[분모] 트리아지 시도 {r['triage_attempts']}회 "
           f"= 호출 {r['triage_called']} + 건너뜀 {r['triage_skipped']}")
     print(f"        호출 중 실패 {r['triage_failed']} · 후보 0건 {r['triage_empty']}")
@@ -812,15 +1050,92 @@ def _force_utf8_console() -> None:
                 pass
 
 
+def _run_replay(session_ids: List[str], reset: bool, assume_yes: bool) -> int:
+    """지난 회의 리플레이 — **비용이 발생하므로** 예상 금액을 먼저 보여주고 확인받는다."""
+    from meeting_minutes_app.common import pricing, spend_guard
+    period = max(float(_c("facilitation.triage_period_sec", 25) or 25), 1.0)
+    model = effective_triage_model(
+        str(_c("facilitation.triage_model", "gpt-4o-mini") or "gpt-4o-mini"))
+
+    plan = []
+    for sid in session_ids:
+        segs = session_segments(sid)
+        if not segs:
+            print(f"  건너뜀 {sid}: 전사 세그먼트가 없습니다")
+            continue
+        est = replay_estimate(segs, period, model)
+        plan.append((sid, len(segs), est))
+    if not plan:
+        print("리플레이할 세션이 없습니다.")
+        return 1
+
+    total = round(sum(p[2]["cost_usd"] for p in plan), 6)
+    print(f"리플레이 계획 (모델 {model}, 주기 {period:.0f}초)")
+    for sid, n, est in plan:
+        print(f"  {sid}  세그먼트 {n:>4} · 길이 {est['duration_sec']:>7.0f}s · "
+              f"트리아지 최대 {est['triages']:>3}회 · 예상 ${est['cost_usd']:.4f}")
+    print(f"  합계 예상 ${total:.4f}  "
+          f"(STT 재과금 없음 — 이미 있는 전사를 다시 판정만 한다)")
+    blocked = spend_guard.blocked(total, check_per_item=False)
+    if blocked:
+        print(f"\n지출 한도에 걸립니다: {blocked}")
+        return 2
+    if spend_guard.automation_paused():
+        print("\n자동 실행이 일시정지 상태입니다(automation.paused) — 해제 후 다시 실행하세요.")
+        return 2
+    if not assume_yes:
+        try:
+            if input("\n진행할까요? [y/N] ").strip().lower() not in ("y", "yes"):
+                print("취소했습니다.")
+                return 1
+        except (EOFError, KeyboardInterrupt):
+            print("\n취소했습니다.")
+            return 1
+
+    for sid, n, _est in plan:
+        print(f"\n▶ {sid} 리플레이 …")
+        res = replay_session(
+            sid, reset=reset,
+            on_progress=lambda i, t: print(f"    세그먼트 {i}/{t}", end="\r"))
+        print(" " * 40, end="\r")
+        if not res.get("ok"):
+            print(f"  실패: {res.get('message')}")
+            continue
+        print(f"  트리아지 {res['triages']}회 · 후보 {res['candidates']}건"
+              f"(중복 {res['repeats']}) · 비용 ${res['cost_usd']:.4f}")
+        if res.get("skip_reason"):
+            print(f"  마지막 건너뜀 사유: {res['skip_reason']}")
+    print(f"\n집계: meeting-minutes facilitation-report --detail"
+          f"{' --session ' + plan[0][0] if len(plan) == 1 else ''}")
+    return 0
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     import argparse
     _force_utf8_console()
     ap = argparse.ArgumentParser(
         prog="meeting-minutes facilitation-report",
-        description="회의 진행 페르소나(M0 관찰모드) 관찰 로그 집계 — 오탐률 실측용")
+        description=("회의 진행 페르소나(관찰모드) 관찰 로그 집계 — 오탐률 실측용. "
+                     "--replay 를 주면 지난 회의의 전사로 관찰 데이터를 만든다."))
     ap.add_argument("--session", default=None, help="세션 ID 로 한정")
     ap.add_argument("--detail", action="store_true", help="후보 인용문까지 출력")
+    ap.add_argument("--replay", nargs="*", metavar="SESSION_ID",
+                    help=("지난 회의 전사를 리플레이해 관찰 데이터를 만든다. "
+                          "ID 를 안 주면 --session 값을 쓴다. 트리아지 LLM 비용이 "
+                          "발생하며(STT 재과금은 없다) 실행 전 예상 금액을 확인한다."))
+    ap.add_argument("--reset", action="store_true",
+                    help="리플레이 전에 그 세션의 기존 **리플레이** 행을 지운다(라이브 기록은 유지)")
+    ap.add_argument("--yes", action="store_true", help="확인 없이 진행")
     args = ap.parse_args(argv)
+
+    if args.replay is not None:
+        ids = list(args.replay) or ([args.session] if args.session else [])
+        if not ids:
+            print("리플레이할 세션 ID 가 필요합니다: --replay <SESSION_ID> "
+                  "(목록은 웹 [회의 목록] 또는 sessions 테이블)")
+            return 1
+        return _run_replay(ids, args.reset, args.yes)
+
     _print_report(args.session, args.detail)
     return 0
 

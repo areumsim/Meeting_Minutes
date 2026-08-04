@@ -26,7 +26,7 @@ pip install -e .                       # 개발 설치
 python run_meeting.py <cmd> [args]     # CLI (run_meeting.bat 도 동일)
 webUI_실행.bat                          # 웹 UI 로컬 실행 (데이터 = 리포 루트)
 python -m pytest                       # 테스트 (2026-08-04: 1050 passed, 1 skipped) ← 수치 정본
-cd web/frontend && npm test            # 프런트 테스트 (2026-08-04: 82 passed)
+cd web/frontend && npm test            # 프런트 테스트 (2026-08-04: 93 passed)
 python run_meeting.py reindex          # 위키/그래프 인덱스 재빌드
 ```
 

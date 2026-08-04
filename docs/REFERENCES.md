@@ -293,7 +293,7 @@ CLAUDE.md가 경고하던 중복은 실측상 대부분 단일 소스로 수렴�
   (근거 없는 상수 = 이 리포가 금지한 휴리스틱). 재교정 경로: `llm_client` 가 응답의
   `usage` 를 누적하게 바꿔 실사용 토큰을 모은 뒤 단계별 상수를 정한다.
   영향: 월 한도가 실제보다 늦게 걸린다(회의록 모델이 비쌀수록 오차가 크다).
-- 2026-08-04 재실측: 테스트 `1050 passed, 1 skipped`(pytest) · `82 passed`(npm test) ·
+- 2026-08-04 재실측: 테스트 `1050 passed, 1 skipped`(pytest) · `93 passed`(npm test) ·
   `constraints-web.txt` 고정 52건. 이 문서가 수치를 인용할 때는 **실행한 날**을 함께 적는다.
 - 라이선스 비상업(CC-BY-NC): Jina Reranker v2 base, Jina embeddings v3 → 사내 배포 시 확인.
 - turbovec: MIT 확인, `win_amd64` 휠·AVX2 하한 실물 확인 필요. Milvus Lite: Windows 미지원(issue #169). Zep CE deprecated → 실체는 Graphiti(기본 Neo4j).

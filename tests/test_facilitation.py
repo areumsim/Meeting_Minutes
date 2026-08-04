@@ -1697,6 +1697,39 @@ class TestReplayPastMeetings:
         assert facilitation.observations("past-1",
                                          db_path=session_with_segments)   # 기록은 남는다
 
+    def test_replay_does_not_generate_midway_briefs(
+            self, cfg, session_with_segments, monkeypatch):
+        """중간 요약도 리플레이에서는 돌지 않는다 — 계약이 '트리아지 비용만'이다.
+
+        요약은 `_dispatch` 를 지나지 않아 'no_channel' 게이트에서 빠져 있었다. 그래서
+        참견도가 3 인 기본 설정에서 리플레이가 아무도 볼 수 없는 요약을 만들고,
+        실행 전에 사용자가 승인한 replay_estimate() 금액보다 더 썼다.
+        """
+        cfg({"facilitation.enabled": True,
+             "facilitation.triage_period_sec": 25,
+             # 요약이 돌 수 있는 조건을 일부러 전부 갖춰 둔다
+             "facilitation.brief_period_sec": 25,
+             "facilitation.brief_min_new_chars": 1,
+             "facilitation.personas.summarizer.level": 3})
+        calls = []
+
+        def _fake(model, system, user, max_tokens=None):
+            calls.append("중간 요약" if "중간 요약" in system else "triage")
+            return "[]"
+
+        monkeypatch.setattr(facilitation, "_call_llm", _fake)
+        res = facilitation.replay_session("past-1", db_path=session_with_segments)
+
+        assert res["ok"] is True
+        assert "중간 요약" not in calls, "리플레이가 요약까지 생성했다(견적 밖 과금)"
+        # 실제 비용이 실행 전 견적(트리아지만)과 일치해야 한다
+        est = facilitation.replay_estimate(
+            facilitation.session_segments("past-1", db_path=session_with_segments),
+            25.0, "gpt-4o-mini")
+        assert res["cost_usd"] <= est["cost_usd"] + 1e-9
+        assert facilitation.report("past-1",
+                                   db_path=session_with_segments)["briefs"] == 0
+
     def test_enabled_override_does_not_leak_into_live_path(self, cfg):
         """오버라이드는 리플레이 전용 — 기본 경로의 '꺼져 있으면 LLM 0회'를 깨지 않는다."""
         cfg({})

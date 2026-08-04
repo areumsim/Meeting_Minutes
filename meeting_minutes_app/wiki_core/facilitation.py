@@ -683,7 +683,12 @@ def replay_estimate(segments: List[Utterance], period_sec: float,
     """리플레이 예상 트리아지 횟수·비용. 실행 **전에** 사용자에게 보여줄 값이다.
 
     단가는 라이브와 같은 함수(`pricing.facilitation_triage_call_cost`)를 쓴다 —
-    리플레이용 추정을 따로 만들면 또 갈라진다."""
+    리플레이용 추정을 따로 만들면 또 갈라진다.
+
+    트리아지만 세는 것이 맞다: 리플레이는 화면 채널을 주지 않으므로 개입 생성
+    (`_dispatch` → `no_channel`)도 중간 요약(`brief_enabled` → 채널 없음)도 돌지
+    않는다. 그 두 게이트 중 하나라도 빠지면 이 금액이 실제보다 작아진다 — 실제로
+    요약 게이트가 없던 동안 사용자가 승인한 금액보다 더 썼다."""
     from meeting_minutes_app.common import pricing
     if not segments:
         return {"triages": 0, "cost_usd": 0.0, "duration_sec": 0.0}
@@ -727,8 +732,11 @@ def replay_session(session_id: str, *, db_path: Optional[Union[str, Path]] = Non
 
     **왜 필요한가**: M0 라이브 수집은 새 회의를 5건 녹음할 때까지 기다려야 하는데,
     지난 회의에는 대조 정답(종료 후 finalize 사실검증·회의록)이 **이미 있다**. 오디오를
-    다시 전사하지 않으므로 STT 재과금도 없다(트리아지 LLM 비용만 든다 — 화면 채널을
-    주지 않으므로 참견도가 3 이어도 Tier 1 개입 생성은 돌지 않는다, `_dispatch` 참조).
+    다시 전사하지 않으므로 STT 재과금도 없다. **트리아지 LLM 비용만 든다** — 화면
+    채널을 주지 않으므로 참견도가 3 이어도 Tier 1 개입 생성(`_dispatch` → `no_channel`)
+    도 중간 요약(`brief_enabled` → 채널 없음)도 돌지 않는다. 이 계약이 곧 실행 전에
+    보여주는 `replay_estimate()` 금액의 정의다 — 새 생성 경로를 추가할 때 이 게이트를
+    빠뜨리면 사용자가 승인한 금액을 넘는다(요약 경로에서 실제로 그랬다).
 
     **측정상 주의(중요)**: 리플레이는 보정이 끝난 확정 전사를 보므로, 조각 전사를 보는
     라이브보다 유리하다. 여기서 나온 precision 은 **상한**이고 "페르소나 판정 자체의
@@ -910,7 +918,17 @@ class FacilitationOrchestrator:
         return persona_level(BRIEF_PERSONA)
 
     def brief_enabled(self) -> bool:
-        return (self.enabled and not self._muted and self._brief_period > 0
+        """중간 요약을 만들 조건 — 화면 채널이 있어야 한다는 조건이 포함된다.
+
+        `on_intervention` 이 없는 호출자(리플레이·헤드리스 측정)에서는 요약을 만들지
+        않는다. `_dispatch` 가 개입에 대해 이미 쓰는 판정과 **같은 것**인데
+        (`no_channel`), 요약은 `_dispatch` 를 지나지 않아 이 규칙에서 빠져 있었다 —
+        그 결과 리플레이가 "트리아지 비용만 든다"는 계약을 어기고, 실행 전에 보여준
+        `replay_estimate()` 금액보다 더 쓰면서 아무에게도 보이지 않는 요약을 만들었다.
+        """
+        return (self.enabled and not self._muted
+                and self.on_intervention is not None
+                and self._brief_period > 0
                 and self.brief_level() >= COLLECT_LEVEL)
 
     @property
@@ -1065,6 +1083,8 @@ class FacilitationOrchestrator:
             return "회의 진행 페르소나가 꺼져 있습니다"
         if self._muted:
             return "이번 회의는 페르소나를 껐습니다 — 새 녹음에서 다시 켜집니다"
+        if self.on_intervention is None:
+            return "표시할 화면이 없어 정리를 만들지 않습니다"
         if self.brief_level() < COLLECT_LEVEL:
             return "중간 요약 참견도가 0·1(관찰)이라 요약을 만들지 않습니다"
         now = float(self._clock())

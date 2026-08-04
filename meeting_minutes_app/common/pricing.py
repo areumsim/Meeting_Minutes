@@ -233,16 +233,60 @@ def stt_rate_per_min(stt_model: str) -> float:
     return STT_PRICE_PER_MIN.get(stt_model, DEFAULT_STT_PRICE_PER_MIN)
 
 
-#: 2단계 보정 전사(realtime.two_pass)가 적용되는 세션 출처(sessions.source).
-#: 실시간 경로만 조각 전사를 다시 전사해 문장으로 교체한다 — 배치/업로드 파이프라인에는
-#: 보정 패스가 없다. 이 판정을 호출부에 복사하면 웹과 CLI가 갈라진다(그 전례가 이 파일
-#: 맨 위 주석의 '단가 표 4곳 복사'다). 판정이 필요하면 is_two_pass_source() 를 쓴다.
+#: 실시간 녹음으로 만들어진 세션의 `sessions.mode` 접두. 2단계 보정 전사
+#: (realtime.two_pass)는 이 경로에만 있다 — 배치/업로드 파이프라인에는 보정 패스가 없다.
+#:
+#: **왜 source 가 아니라 mode 인가**: `sessions.source` 로는 판정할 수 없다.
+#: 웹 실시간(`api/realtime.py`)과 웹 업로드(`api/batch.py`)가 **둘 다 "web"** 을 쓰고,
+#: CLI 산출물을 임포트한 세션은 둘 다 "cli" 다. 구분자는 `mode` 뿐이다
+#: (웹 실시간 `realtime_{n}` · CLI 임포트 `realtime` vs 업로드 `batch`/프리셋 번호).
+#: 과거 이 판정이 `source` 만 봐서 웹 실시간 세션이 항상 False 로 떨어졌고, 그 결과
+#: 상세 화면의 STT 비용이 기본 설정 기준 실제의 1/3로 표시됐다(같은 회의를 대시보드는
+#: $0.009/분, 상세는 $0.003/분으로 보여줬다).
+REALTIME_MODE_PREFIX = "realtime"
+
+#: 2단계 보정 전사를 거치는 finalize `SessionInputs.source` 값. **DB `sessions.source`
+#: 와는 어휘가 다르다** — 이쪽은 파이프라인이 스스로를 부르는 이름이고, DB 컬럼은
+#: 엔트리포인트("web"/"cli")를 담는다. 두 어휘를 한 함수에 먹인 것이 위 결함의 원인이라
+#: 이 집합은 finalize 계열 값에만 쓴다.
 REALTIME_SOURCES = frozenset({"web_realtime", "realtime", "recover"})
 
 
-def is_two_pass_source(source: str | None) -> bool:
-    """이 세션 출처가 2단계 보정 전사를 거치는가(= STT 과금이 두 번 발생하는가)."""
+def is_realtime_session(source: str | None, mode: str | None = None) -> bool:
+    """이 세션 행이 실시간 녹음인가 — `stt_two_pass` 기록이 없는 구세션의 폴백 판정.
+
+    `mode` 를 먼저 본다(위 REALTIME_MODE_PREFIX 주석의 이유). `mode` 가 비어 있는
+    아주 오래된 행만 `source` 로 후퇴한다 — 그 경우 웹 업로드와 구분되지 않으므로
+    finalize 어휘("web_realtime" 등)로 기록된 행만 True 가 된다(보수적).
+    """
+    if str(mode or "").startswith(REALTIME_MODE_PREFIX):
+        return True
     return (source or "") in REALTIME_SOURCES
+
+
+def resolve_two_pass(recorded: object, source: str | None = None,
+                     mode: str | None = None, *,
+                     config_two_pass: bool = False) -> bool:
+    """이 세션에 2단계 보정 전사가 **실제로** 적용됐는가 — 판정의 단일 소스.
+
+    `recorded` = `sessions.stt_two_pass`. 녹음이 끝나는 시점에 오케스트레이터가 남긴
+    **런타임 진실**이며 이 값이 있으면 그것만 믿는다. 현재 config 와 AND 하지 않는
+    이유: 녹음 뒤에 사용자가 `realtime.two_pass` 를 껐다고 해서 이미 지나간 회의의
+    청구액이 줄지는 않는다(설정은 미래에만 적용된다).
+
+    런타임 진실이 필요한 이유는 config 만으로는 틀리기 때문이다 — 순수 WS 실시간
+    세션(`realtime.mode`=ws/auto 이고 WS 가 성공한 경우)은 보정 워커 자체가 뜨지
+    않는데(`_run_http_fallback` 에서만 켜진다) config 만 보면 있지도 않은 보정
+    요금을 물린다.
+
+    `recorded` 가 None 인 구세션만 (현재 config × 실시간 여부)로 추정한다.
+    """
+    if recorded is not None:
+        try:
+            return bool(int(recorded))
+        except (TypeError, ValueError):
+            pass
+    return bool(config_two_pass) and is_realtime_session(source, mode)
 
 
 def current_models(cfg) -> dict:
@@ -294,7 +338,8 @@ def estimate_session_cost(duration_sec: float, stt_model: str,
     보정 단가는 revise_model 기준이며, 기본 설정에서는 보정 모델이 표시 모델보다
     비싸다(gpt-4o-transcribe $0.006 vs gpt-4o-mini-transcribe $0.003).
     기본값을 False 로 둔 것은 의도적이다 — 배치/업로드 경로에는 보정 패스가 없으므로
-    호출부가 실시간 경로임을 명시할 때만 켜진다(is_two_pass_source 참조).
+    호출부가 실시간 경로임을 명시할 때만 켜진다. 지난 세션을 다시 계산하는 호출부는
+    이 값을 직접 짐작하지 말고 `resolve_two_pass()` 로 정한다(런타임 기록 우선).
 
     facilitation=True 면 회의 진행 페르소나 트리아지(시간 기반, 기본 25초에 1회)
     비용을 더한다. 단가는 facilitation_triage_call_cost() 한 곳에서 나온다 —

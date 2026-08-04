@@ -58,7 +58,13 @@ def get_session_cost(session_id: str):
         llm = _m["llm"]
         minutes_model = _m["minutes_model"]
         # 2단계 보정 전사는 실시간 경로에만 있다 — 업로드 세션에 적용하면 과대 표시된다.
-        _two_pass = _m["two_pass"] and pricing.is_two_pass_source(session.get("source"))
+        # 판정은 녹음 시점에 기록된 런타임 값이 우선이다. `sessions.source` 로 추정하던
+        # 과거에는 웹 실시간이 웹 업로드와 같은 "web" 이라 항상 False 로 떨어져,
+        # 같은 회의를 대시보드는 $0.009/분(cost_estimate) · 상세는 $0.003/분으로
+        # 보여줬다(기본 설정 기준 STT 를 1/3로 과소 표시).
+        _two_pass = pricing.resolve_two_pass(
+            session.get("stt_two_pass"), session.get("source"), session.get("mode"),
+            config_two_pass=_m["two_pass"])
     except Exception as e:
         return {"ok": False, "message": f"가격 정보 로드 실패: {e}"}
     cost = pricing.estimate_session_cost(

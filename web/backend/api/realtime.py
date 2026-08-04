@@ -1846,7 +1846,11 @@ class BrowserRealtimeSession:
                         if segments_snapshot else 0)
             # output_dir 미설정 — run_post_session을 건너뛰어 web_realtime_{id}/ 산출물
             # 폴더 자체를 만들지 않으므로 startup 스캐너가 오해할 대상도 없다.
-            db.update_session_status(self.session_id, "completed", duration_sec=duration)
+            # 회의록은 건너뛰어도 STT 는 이미 과금됐으므로 보정 패스 여부는 남긴다
+            # (상세 화면이 이 세션의 비용을 계산할 때 쓴다).
+            db.update_session_status(self.session_id, "completed",
+                                     duration_sec=duration,
+                                     stt_two_pass=int(bool(self._two_pass)))
             print(f"[finalize] 내용 짧음(seg={len(segments_snapshot)}, chars={_total_chars})"
                   f" → 회의록 생성 생략, 전사만 저장")
             try:
@@ -2019,7 +2023,12 @@ class BrowserRealtimeSession:
                     llm=_m["llm"], minutes_model=_m["minutes_model"],
                     # 실시간 경로는 2단계 보정 전사를 거쳐 STT 과금이 두 번 난다.
                     # 이 두 인자가 없어서 월 합계·지출 한도가 실제의 1/3로 계산됐다.
-                    two_pass=_m["two_pass"], revise_model=_m["revise_model"],
+                    #
+                    # **설정값(_m["two_pass"])이 아니라 런타임 값(self._two_pass)을
+                    # 쓴다.** 보정 워커는 HTTP 청크 경로에서만 뜬다 — 순수 WS 실시간
+                    # 세션은 보정 패스가 돌지 않는데 설정값을 믿으면 있지도 않은
+                    # 요금을 월 합계·지출 한도에 얹는다.
+                    two_pass=self._two_pass, revise_model=_m["revise_model"],
                     # facilitation= 는 여기서 절대 켜지 않는다 — 트리아지는 이미
                     # spend_guard.record() 로 usage_log 에 들어가 있고, 이 값은
                     # sessions.cost_estimate 에 저장된다. month_to_date_spend() 가
@@ -2035,6 +2044,11 @@ class BrowserRealtimeSession:
                 duration_sec=duration,
                 cost_estimate=round(_est, 4),
                 output_dir=str(session_out),
+                # 보정 패스가 실제로 돌았는지를 세션에 남긴다 — 상세 화면이 비용을
+                # 다시 계산할 때 이 값을 쓴다. 없으면 sessions.source 로 추정해야
+                # 하는데 웹 실시간과 웹 업로드가 같은 "web" 이라 판정이 불가능하다
+                # (pricing.resolve_two_pass 참조).
+                stt_two_pass=int(bool(self._two_pass)),
             )
 
             # 소켓이 이미 닫혔어도 세션은 방금 completed 로 저장 완료 — 전송 실패가

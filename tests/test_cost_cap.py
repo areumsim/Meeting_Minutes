@@ -221,12 +221,53 @@ class TestTwoPassCost:
         assert est["revise_model"] is None
         assert est["total"] == pytest.approx(est["stt"] + est["minutes"], rel=1e-6)
 
-    def test_is_two_pass_source(self):
-        """보정 패스는 실시간 경로에만 있다 — 업로드 세션에 적용하면 과대 표시된다."""
+    def test_is_realtime_session_uses_mode_not_source(self):
+        """실시간 판정은 `mode` 로 한다 — `source` 로는 구조적으로 불가능하다.
+
+        웹 실시간(api/realtime.py)과 웹 업로드(api/batch.py)가 **둘 다** source="web"
+        이라, source 만 보던 과거 판정은 웹 실시간 세션을 항상 '업로드'로 분류했다.
+        그 결과 상세 화면의 STT 비용이 실제의 1/3로 표시됐다(이 파일
+        test_two_pass_total_is_three_times_when_revise_is_pricier 가 고정한 그 배수).
+        """
+        # 웹 실시간 · CLI 임포트 실시간 — source 는 업로드와 같지만 mode 가 다르다
+        assert pricing.is_realtime_session("web", "realtime_2") is True
+        assert pricing.is_realtime_session("cli", "realtime") is True
+        # 업로드·배치·텍스트·준비 브리핑
+        for src, mode in (("web", "2"), ("web", "batch"), ("cli", "batch"),
+                          ("web", "text"), ("web", "prep_brief")):
+            assert pricing.is_realtime_session(src, mode) is False
+        # mode 가 비어 있는 아주 오래된 행만 finalize 어휘로 후퇴한다(보수적).
         for s in ("web_realtime", "realtime", "recover"):
-            assert pricing.is_two_pass_source(s) is True
+            assert pricing.is_realtime_session(s, "") is True
         for s in ("web", "batch", "ingest", "cli", "vault_audio", "", None):
-            assert pricing.is_two_pass_source(s) is False
+            assert pricing.is_realtime_session(s, None) is False
+
+    def test_resolve_two_pass_prefers_recorded_runtime_value(self):
+        """기록된 런타임 값이 있으면 현재 설정과 무관하게 그것만 믿는다.
+
+        (a) 순수 WS 실시간 세션은 보정 워커가 뜨지 않으므로 설정이 켜져 있어도 0 이
+            기록된다 — 설정을 믿으면 없는 요금을 물린다.
+        (b) 녹음이 끝난 뒤 사용자가 two_pass 를 꺼도 지나간 회의의 청구액은 안 바뀐다.
+        """
+        # (a) 설정은 켜짐이지만 기록은 0 → False
+        assert pricing.resolve_two_pass(0, "web", "realtime_2",
+                                        config_two_pass=True) is False
+        # (b) 설정은 꺼짐이지만 기록은 1 → True
+        assert pricing.resolve_two_pass(1, "web", "realtime_2",
+                                        config_two_pass=False) is True
+
+    def test_resolve_two_pass_falls_back_for_legacy_rows(self):
+        """기록이 없는 구세션만 (현재 설정 × 실시간 여부)로 추정한다."""
+        assert pricing.resolve_two_pass(None, "web", "realtime_2",
+                                        config_two_pass=True) is True
+        assert pricing.resolve_two_pass(None, "web", "realtime_2",
+                                        config_two_pass=False) is False
+        # 업로드 세션에는 기본값이 켜져 있어도 붙이지 않는다(과대 표시 방지)
+        assert pricing.resolve_two_pass(None, "web", "2",
+                                        config_two_pass=True) is False
+        # 깨진 값은 기록이 없는 것으로 취급한다(추정으로 후퇴)
+        assert pricing.resolve_two_pass("", "web", "realtime_2",
+                                        config_two_pass=True) is True
 
 
 class TestCliRunningCostEstimate:
@@ -427,3 +468,48 @@ class TestCostSummaryAggregates:
         assert body["ok"] is True
         for key in ("monthToDateUsd", "monthlyCapUsd", "months", "byType", "top"):
             assert key in body
+
+
+class TestSessionCostEndpointTwoPass:
+    """상세 화면 금액과 기록된 금액이 갈라지지 않아야 한다.
+
+    회귀: 웹 실시간 세션은 `sessions.source == "web"`(웹 업로드와 동일)이라
+    source 기반 판정이 항상 '업로드'로 떨어졌다. finalize 는 보정 패스를 포함해
+    cost_estimate 를 적는데 상세 엔드포인트는 그것을 빼고 다시 계산해서, 같은 회의를
+    대시보드는 $0.009/분 · 상세는 $0.003/분으로 보여줬다.
+    """
+
+    def _cost(self, sid):
+        from fastapi.testclient import TestClient
+        from web.backend.app import app
+        return TestClient(app).get(f"/api/sessions/{sid}/cost").json()
+
+    def test_realtime_session_includes_revise_pass(self, fresh_db, monkeypatch):
+        """녹음 시 기록된 stt_two_pass=1 이면 보정 요금이 상세에도 나온다."""
+        sid = db.create_session(title="실시간 회의", source="web", mode="realtime_2")
+        db.update_session_status(sid, "completed", duration_sec=600,
+                                 stt_two_pass=1)
+        body = self._cost(sid)
+        assert body["ok"] is True
+        assert body["two_pass"] is True
+        assert body["stt_revise"] > 0
+        # 러닝 미터·한도가 쓰는 실측 분당 단가와 같은 값이어야 한다
+        assert body["stt_effective_per_min"] == pytest.approx(
+            body["stt_rate_per_min"] + body["revise_rate_per_min"], rel=1e-6)
+
+    def test_ws_realtime_session_without_revise_is_not_charged(self, fresh_db):
+        """보정 워커가 뜨지 않은 순수 WS 세션은 0 이 기록된다 — 없는 요금을 물리지 않는다."""
+        sid = db.create_session(title="WS 회의", source="web", mode="realtime_2")
+        db.update_session_status(sid, "completed", duration_sec=600,
+                                 stt_two_pass=0)
+        body = self._cost(sid)
+        assert body["two_pass"] is False
+        assert body["stt_revise"] == 0.0
+
+    def test_upload_session_never_gets_revise_pass(self, fresh_db):
+        """업로드 경로에는 보정 패스가 없다 — 기록이 없어도 붙이면 안 된다."""
+        sid = db.create_session(title="업로드", source="web", mode="2")
+        db.update_session_status(sid, "completed", duration_sec=600)
+        body = self._cost(sid)
+        assert body["two_pass"] is False
+        assert body["stt_revise"] == 0.0

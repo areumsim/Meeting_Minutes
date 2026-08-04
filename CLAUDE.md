@@ -74,8 +74,15 @@ python run_meeting.py reindex          # 위키/그래프 인덱스 재빌드
   (단가 표 4곳, 노트 판정 2곳). 새 과금 경로를 추가할 때 이 셋을 우회하면 안 된다.
   - **추정**: `pricing.estimate_session_cost()`. 표를 직접 `.get` 하지 말고
     `stt_rate_per_min()`/`minutes_cost()`를 쓴다. 실시간은 `two_pass=`/`revise_model=`을
-    반드시 넘긴다 — 안 넘기면 STT 과금을 한 번만 계산해 **신규 설치 기준 실제의 1/3**이 된다
-    (`is_two_pass_source()`가 어느 출처에 적용되는지 판정한다).
+    반드시 넘긴다 — 안 넘기면 STT 과금을 한 번만 계산해 **신규 설치 기준 실제의 1/3**이 된다.
+  - **2단계 보정(two_pass) 여부는 설정이 아니라 기록으로 판정한다.** 녹음 종료 시
+    `sessions.stt_two_pass`에 **실제로 보정 워커가 돌았는지**를 남기고
+    (`api/realtime.py`의 `self._two_pass` — 보정은 HTTP 청크 경로에만 있어 순수 WS
+    세션은 0이다), 지난 세션을 다시 계산하는 쪽은 `pricing.resolve_two_pass()`를 쓴다.
+    **`sessions.source`로 실시간을 판정하면 안 된다** — 웹 실시간과 웹 업로드가 둘 다
+    `"web"`이라 구분이 불가능하고, 실제로 그래서 같은 회의를 대시보드는 $0.009/분,
+    상세 화면은 $0.003/분으로 보여줬다. 구분자는 `mode`(`realtime_*`)이며 그 판정도
+    `pricing.is_realtime_session()` 한 곳에만 둔다.
   - **한도**: `spend_guard.blocked()`. 업로드·재생성·폴더 감시·계획 자동화·임베딩이 모두 이
     함수를 지난다. **표시 금액과 한도 판정이 같은 함수에서 나와야 한다.**
   - **집계**: 세션이 있으면 `sessions.cost_estimate`(누적은 `db.add_session_cost()` — 

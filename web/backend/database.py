@@ -113,6 +113,13 @@ def init_db():
             # 휴지통(soft delete). NULL = 살아 있는 세션. 하드 DELETE 였을 때는 결과
             # 폴더가 남아 다음 시작에 스캐너가 되살렸고, 되돌릴 방법도 없었다.
             "ALTER TABLE sessions ADD COLUMN deleted_at TEXT",
+            # 이 세션에 2단계 보정 전사가 **실제로** 돌았는가(= STT 과금 2회).
+            # NULL = 이 컬럼이 생기기 전 세션(호출부가 추정으로 후퇴한다).
+            # 설정값이 아니라 런타임 값을 남기는 이유: 순수 WS 실시간 세션은 보정
+            # 워커가 뜨지 않는데 config 만 보면 없는 요금을 물리고, 반대로 상세
+            # 화면은 sessions.source 로 실시간을 판정하지 못해(웹 업로드와 같은
+            # "web") 보정 요금을 통째로 빠뜨렸다. 판정은 pricing.resolve_two_pass().
+            "ALTER TABLE sessions ADD COLUMN stt_two_pass INTEGER",
         ):
             try:
                 c.execute(_ddl)

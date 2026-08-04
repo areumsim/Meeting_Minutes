@@ -228,6 +228,158 @@ class TestObserveModeIsSilent:
         assert facilitation.observations(session_id="s5") == []
 
 
+class TestTimeGate:
+    """비용 상한의 핵심 메커니즘 — 시간 기반 게이트(§5). 없으면 발화량이 비용을 정한다."""
+
+    def test_one_triage_per_period_regardless_of_segment_count(
+            self, cfg, llm_calls, fac_db):
+        cfg({"facilitation.enabled": True, "facilitation.triage_period_sec": 600})
+        orch = FacilitationOrchestrator(session_id="g1")
+        _offer_and_drain(orch, [f"세그먼트 {i} 입니다. 논의를 계속합니다." for i in range(20)])
+        assert len(llm_calls) == 1          # 첫 발화 1회, 그 뒤 600초 안은 전부 억제
+        rows = facilitation.triages(session_id="g1")
+        assert len(rows) == 1               # 분모도 1회만 늘어난다
+
+    def test_window_carries_only_last_utterance(self, cfg, llm_calls, fac_db):
+        """트리아지 후 창을 비운다 — 안 비우면 같은 발화가 회차마다 다시 판정된다."""
+        cfg({"facilitation.enabled": True, "facilitation.triage_period_sec": 600})
+        orch = FacilitationOrchestrator(session_id="g2")
+        orch.offer_segment("첫 발화입니다.")           # 여기서 트리아지 1회
+        orch.offer_segment("두 번째 발화입니다.")
+        orch.shutdown(wait=True)
+        assert llm_calls[0]["user"].endswith("첫 발화입니다.")
+        # 창에는 마지막 1건(문맥 다리) + 새 발화만 남는다
+        assert [u.text for u in orch._window] == ["첫 발화입니다.", "두 번째 발화입니다."]
+
+
+class TestObservationIsMeasurable:
+    """M0 의 산출물은 '측정 가능한 데이터' 하나다 — 분모·중복·좌표가 남는지 고정."""
+
+    def _one_candidate(self, monkeypatch, span="결정은 났는데 담당자가 없다"):
+        candidate = [{"persona": "scribe", "trigger_type": "missing",
+                      "confidence": 0.8, "span": span, "need_search": False}]
+        monkeypatch.setattr(
+            facilitation, "_call_llm",
+            lambda *a, **k: json.dumps(candidate, ensure_ascii=False))
+
+    def test_triage_row_is_recorded_even_with_zero_candidates(
+            self, cfg, llm_calls, fac_db):
+        """후보 0건도 분모에 남는다 — 없으면 '안 돌았다'와 구분이 안 된다."""
+        cfg({"facilitation.enabled": True})
+        orch = FacilitationOrchestrator(session_id="m1")
+        _offer_and_drain(orch, ["평범한 잡담입니다."])
+        rows = facilitation.triages(session_id="m1")
+        assert len(rows) == 1
+        assert rows[0]["ok"] == 1 and rows[0]["candidates"] == 0
+        assert rows[0]["skip_reason"] == ""
+        assert rows[0]["cost_usd"] > 0.0
+        assert rows[0]["personas"] == 8
+        assert facilitation.observations(session_id="m1") == []
+
+    def test_skip_reason_is_persisted_not_only_in_memory(
+            self, cfg, llm_calls, fac_db, monkeypatch):
+        """한도로 건너뛴 회차도 사유가 DB 에 남는다(조용히 실패 금지)."""
+        cfg({"facilitation.enabled": True})
+        monkeypatch.setattr(spend_guard, "blocked",
+                            lambda est, **kw: "월 한도 초과(테스트)")
+        orch = FacilitationOrchestrator(session_id="m2")
+        _offer_and_drain(orch, ["판교 데이터센터 전력 계약은 2027년 만료입니다."])
+        rows = facilitation.triages(session_id="m2")
+        assert len(rows) == 1
+        assert rows[0]["skip_reason"] == "월 한도 초과(테스트)"
+        assert rows[0]["ok"] == 0 and rows[0]["cost_usd"] == 0.0
+        assert usage_log.month_to_date_spend() == 0.0
+
+    def test_llm_failure_is_recorded_as_attempt(self, cfg, fac_db, monkeypatch):
+        """양 벤더 모두 실패(llm_client 가 raise)해도 시도는 분모에 남는다."""
+        cfg({"facilitation.enabled": True})
+
+        def _boom(*a, **k):
+            raise RuntimeError("모든 LLM API 호출 실패")
+        monkeypatch.setattr(facilitation, "_call_llm", _boom)
+        orch = FacilitationOrchestrator(session_id="m3")
+        _offer_and_drain(orch, ["판교 데이터센터 전력 계약은 2027년 만료입니다."])
+        rows = facilitation.triages(session_id="m3")
+        assert len(rows) == 1 and rows[0]["ok"] == 0
+        assert rows[0]["skip_reason"] == ""      # 관문에 막힌 게 아니라 호출 실패
+        assert "실패" in orch.status()["skip_reason"]
+
+    def test_duplicate_candidate_bumps_repeats_instead_of_new_row(
+            self, cfg, fac_db, monkeypatch):
+        """겹치는 창에서 같은 후보가 다시 잡히면 행이 아니라 repeats 가 는다."""
+        cfg({"facilitation.enabled": True})
+        self._one_candidate(monkeypatch)
+        orch = FacilitationOrchestrator(session_id="m4")
+        active = orch.active_personas()
+        window = [facilitation.Utterance("그럼 그렇게 하시죠.", 10.0, 15.0, False)]
+        orch._triage_task(window, active)
+        orch._triage_task(window, active)
+        rows = facilitation.observations(session_id="m4")
+        assert len(rows) == 1
+        assert rows[0]["repeats"] == 1
+        assert len(facilitation.triages(session_id="m4")) == 2   # 분모는 2회
+        assert orch.status()["observed_count"] == 1
+        assert orch.status()["repeat_count"] == 1
+
+    def test_span_time_and_provisional_are_recorded(self, cfg, fac_db, monkeypatch):
+        """조각 전사 기반 판정과 확정 기반 판정을 섞어 세지 않도록 좌표를 남긴다."""
+        cfg({"facilitation.enabled": True})
+        self._one_candidate(monkeypatch)
+        orch = FacilitationOrchestrator(session_id="m5")
+        orch.offer_segment("결정은 났는데 담당자가 없습니다.", t0=12.5, t1=18.0,
+                           provisional=True)
+        orch.shutdown(wait=True)
+        row = facilitation.observations(session_id="m5")[0]
+        assert row["t0"] == 12.5 and row["t1"] == 18.0
+        assert row["provisional"] == 1
+        assert facilitation.triages(session_id="m5")[0]["provisional"] == 1
+
+    def test_report_aggregates_numerator_and_denominator(
+            self, cfg, fac_db, monkeypatch):
+        cfg({"facilitation.enabled": True})
+        self._one_candidate(monkeypatch)
+        orch = FacilitationOrchestrator(session_id="m6")
+        active = orch.active_personas()
+        w = [facilitation.Utterance("결정은 났는데 담당자가 없다", 1.0, 2.0, True)]
+        orch._triage_task(w, active)
+        orch._triage_task(w, active)
+        r = facilitation.report(session_id="m6")
+        assert r["triage_attempts"] == 2 and r["triage_called"] == 2
+        assert r["triage_skipped"] == 0 and r["triage_empty"] == 0
+        assert r["candidates"] == 1 and r["candidate_repeats"] == 1
+        assert r["provisional_candidates"] == 1
+        assert r["by_persona"]["scribe"]["candidates"] == 1
+        assert r["cost_usd"] > 0.0
+
+    def test_report_and_cli_survive_empty_db(self, fac_db, capsys):
+        r = facilitation.report()
+        assert r["triage_attempts"] == 0 and r["candidates"] == 0
+        assert facilitation.main([]) == 0
+        assert "기록이 없습니다" in capsys.readouterr().out
+
+    def test_delete_session_observations_clears_both_tables(
+            self, cfg, fac_db, monkeypatch):
+        """완전 삭제가 발화 인용을 남기지 않는다(related_notes 정리 규칙과 동일)."""
+        cfg({"facilitation.enabled": True})
+        self._one_candidate(monkeypatch)
+        orch = FacilitationOrchestrator(session_id="m7")
+        orch._triage_task([facilitation.Utterance("인용될 발화", 0.0, 1.0, False)],
+                          orch.active_personas())
+        assert facilitation.observations(session_id="m7")
+        assert facilitation.delete_session_observations("m7") == 2
+        assert facilitation.observations(session_id="m7") == []
+        assert facilitation.triages(session_id="m7") == []
+
+    def test_span_key_normalizes_whitespace_and_case(self):
+        a = facilitation.span_key("critic", "이 방식이  항상 더 빠릅니다")
+        b = facilitation.span_key("critic", "이 방식이 항상 더 빠릅니다 ")
+        assert a == b
+        assert a != facilitation.span_key("junior", "이 방식이 항상 더 빠릅니다")
+        # 인용이 비면 트리거 유형으로 대체 — 빈 인용끼리 같은 것으로 본다
+        assert (facilitation.span_key("critic", "", "논리 비약")
+                == facilitation.span_key("critic", "   ", "논리 비약"))
+
+
 class TestRegistryData:
     """personas.py 는 데이터 전용 — PRD §3 로스터와 어긋나지 않는지 고정."""
 

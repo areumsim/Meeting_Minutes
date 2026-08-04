@@ -604,9 +604,12 @@ class BrowserRealtimeSession:
             # vault 검색 게이트/스로틀은 RealtimeVaultSearcher 내부에서 처리
             if self._searcher is not None:
                 self._searcher.offer_segment(final_text)
-            # 회의 진행 페르소나 트리아지 — 같은 계약(논블로킹, 시간 게이트는 내부)
+            # 회의 진행 페르소나 트리아지 — 같은 계약(논블로킹, 시간 게이트는 내부).
+            # 구간 시각을 함께 넘긴다: 관찰 로그가 전사와 대조 가능한 좌표를 갖는다.
+            # 이 경로(Realtime WS 의 completed)는 확정 전사라 provisional=False.
             if self._facilitator is not None:
-                self._facilitator.offer_segment(final_text)
+                self._facilitator.offer_segment(
+                    final_text, t0=start_sec, t1=elapsed, provisional=False)
             self._segment_counter += 1
             self._maybe_web_research(final_text)
 
@@ -1183,9 +1186,14 @@ class BrowserRealtimeSession:
             #  realtime_web_search_interval 을 켜도 아무 일도 일어나지 않았다.)
             if self._searcher is not None:
                 self._searcher.offer_segment(text)
-            # 회의 진행 페르소나 트리아지 — 같은 계약(논블로킹, 시간 게이트는 내부)
+            # 회의 진행 페르소나 트리아지 — 같은 계약(논블로킹, 시간 게이트는 내부).
+            # 이 경로의 텍스트는 2단계 보정이 켜져 있으면 **보정 전 조각**이고
+            # (위 segment 이벤트의 provisional 과 같은 값), 나중 revise 교체분은
+            # 다시 offer 되지 않는다 — 관찰 로그가 그 사실을 기록해야 실측에서
+            # 조각 기반 판정과 확정 기반 판정을 섞어 세지 않는다(PRD §17).
             if self._facilitator is not None:
-                self._facilitator.offer_segment(text)
+                self._facilitator.offer_segment(
+                    text, t0=c_start, t1=c_end, provisional=bool(self._two_pass))
             self._segment_counter += 1
             self._maybe_web_research(text)
 

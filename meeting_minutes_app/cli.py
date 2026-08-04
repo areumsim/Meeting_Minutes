@@ -48,6 +48,7 @@ _MODULE_MAP = {
     "vault_indexer.py":           "meeting_minutes_app.wiki_core.vault_indexer",
     "wiki_ask.py":                "meeting_minutes_app.wiki_core.wiki_ask",
     "wiki_knowledge.py":          "meeting_minutes_app.wiki_core.wiki_knowledge",
+    "facilitation.py":            "meeting_minutes_app.wiki_core.facilitation",
     "notifier.py":                "meeting_minutes_app.common.notifier",
 }
 
@@ -86,6 +87,8 @@ Usage:
   meeting-minutes ask <question> [args]           # Vault 질의
   meeting-minutes web [args]                      # Web UI 실행 (ui|web)
   meeting-minutes prep-brief --title "제목" [--topic "주제"]  # 회의 준비 브리프 생성
+  meeting-minutes facilitation-report [--session ID] [--detail]
+      # 회의 진행 페르소나(관찰모드) 판정 기록 집계 — 오탐률 실측용. 기본 꺼진 실험 기능.
 
 Advanced:
   # 주의: 아래 'prep'은 위의 'prep-brief'와 다른 별개 기능이다 —
@@ -166,6 +169,8 @@ def dispatch(argv: list[str]) -> int:
         return _py("realtime_transcription.py", *rest)
     if cmd in ("prep-brief", "prep_brief"):
         return _py("wiki_knowledge.py", *rest)
+    if cmd in ("facilitation-report", "facilitation_report"):
+        return _py("facilitation.py", *rest)
     if cmd in ("web", "ui"):
         return _py("run_ui.py", *rest)
     if cmd == "assistant":

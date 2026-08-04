@@ -87,6 +87,20 @@ def blocked(est_cost: float, *, check_per_item: bool = True) -> str:
     return ""
 
 
+def session_note(session_id: str) -> str:
+    """세션에 딸린 과금을 usage_log 에 남길 때의 `note` 규약.
+
+    `usage_log` 에는 session_id 컬럼이 없다(그 테이블은 원래 '세션 없는 사용량'을
+    위한 것이다). 그런데 facilitation 처럼 **세션 중에 발생하지만 세션 비용
+    (sessions.cost_estimate)에는 넣지 않는** 과금이 생겼다 — 넣으면 월 합계가
+    이중 집계된다(usage_log.month_to_date_spend 가 둘을 더한다).
+
+    그래서 note 에 세션 키를 남겨 세션별 실제 금액을 되찾는다. 쓰는 쪽과 읽는 쪽이
+    포맷 문자열을 각자 갖고 있으면 한쪽만 바뀌어 조회가 조용히 0 을 돌려주므로,
+    규약을 이 함수 하나로 고정한다(`usage_log.session_spend()` 가 짝이다)."""
+    return f"session={str(session_id or '').strip()}"
+
+
 def record(kind: str, cost_usd: float, *, model: str = "", units: float = 0.0,
            unit_kind: str = "", note: str = "") -> bool:
     """세션 없는 경로의 과금 1건을 기록해 월 합계에 잡히게 한다.

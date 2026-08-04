@@ -36,13 +36,11 @@ CREATE INDEX IF NOT EXISTS idx_usage_log_ts ON usage_log(ts);
 
 
 def _resolve_db_path(db_path: Optional[Union[str, Path]] = None) -> Optional[Path]:
-    if db_path:
-        return Path(db_path)
-    try:
-        from meeting_minutes_app.common.app_paths import get_db_path
-        return get_db_path()
-    except Exception:
-        return None
+    """경로 해석은 `common.sqlite_util` 하나만 쓴다(이 함수가 두 모듈에 복제돼 있던
+    자리). 래퍼를 남기는 이유는 테스트가 이 이름을 monkeypatch 해 임시 DB 로
+    돌리기 때문이다 — 없애면 그 주입 지점이 사라진다(tests/conftest.py 격리)."""
+    from meeting_minutes_app.common import sqlite_util
+    return sqlite_util.resolve_db_path(db_path)
 
 
 def _connect(db_path: Optional[Union[str, Path]] = None) -> Optional[sqlite3.Connection]:

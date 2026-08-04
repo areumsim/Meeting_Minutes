@@ -27,6 +27,22 @@ from pathlib import Path
 from typing import Optional, Union
 
 
+def resolve_db_path(db_path: Optional[Union[str, Path]] = None) -> Optional[Path]:
+    """명시 경로 > `app_paths.get_db_path()` > None.
+
+    `usage_log` 와 `wiki_core.facilitation` 에 **문자 단위로 같은 함수**가 있던 자리다
+    (테스트가 이 이름을 monkeypatch 하므로 각 모듈은 얇은 래퍼를 유지한다 — 래퍼를
+    없애면 기존 테스트의 주입 지점이 사라진다).
+    """
+    if db_path:
+        return Path(db_path)
+    try:
+        from meeting_minutes_app.common.app_paths import get_db_path
+        return get_db_path()
+    except Exception:
+        return None
+
+
 def connect(path: Optional[Union[str, Path]]) -> Optional[sqlite3.Connection]:
     """WAL·timeout 정책을 적용해 연결. 경로가 없거나 열지 못하면 None."""
     if path is None:

@@ -21,12 +21,8 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-for _s in (sys.stdout, sys.stderr):
-    if getattr(_s, "encoding", None) and _s.encoding.lower() in ("cp949", "euc-kr", "ansi"):
-        try:
-            _s.reconfigure(encoding="utf-8", errors="replace")
-        except Exception:
-            pass
+from meeting_minutes_app.common.console import force_utf8_console
+force_utf8_console()
 
 try:
     from meeting_minutes_app.common import config_loader as _cfg

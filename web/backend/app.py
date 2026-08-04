@@ -6,6 +6,11 @@ import sys
 from pathlib import Path
 from contextlib import asynccontextmanager
 
+# 콘솔 UTF-8 전환 — **일부러 `common.console.force_utf8_console()` 을 쓰지 않는다.**
+# 이 블록은 `web.backend.paths` 가 sys.path 를 세우기 전에 실행되는 자리라
+# `meeting_minutes_app` 을 import 할 수 있다는 보장이 없다. 의존성 0 을 유지한다
+# (같은 이유로 `common/sqlite_util` 이 `wiki_core/graph_db` 를 흡수하지 않는다).
+# 로직을 바꿀 일이 있으면 `common/console.py` 와 **함께** 고친다.
 for _s in (sys.stdout, sys.stderr):
     if getattr(_s, "encoding", None) and _s.encoding.lower() in ("cp949", "euc-kr", "ansi"):
         try:

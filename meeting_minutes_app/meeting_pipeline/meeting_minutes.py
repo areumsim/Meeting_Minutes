@@ -50,17 +50,8 @@ import time
 import traceback
 from difflib import SequenceMatcher
 
-# Windows cp949 터미널에서 이모지 출력 시 UnicodeEncodeError 방지
-if sys.stdout.encoding and sys.stdout.encoding.lower() in ("cp949", "euc-kr", "ansi"):
-    try:
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    except Exception:
-        pass
-if sys.stderr.encoding and sys.stderr.encoding.lower() in ("cp949", "euc-kr", "ansi"):
-    try:
-        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
-    except Exception:
-        pass
+from meeting_minutes_app.common.console import force_utf8_console
+force_utf8_console()
 import logging
 import glob
 from pathlib import Path

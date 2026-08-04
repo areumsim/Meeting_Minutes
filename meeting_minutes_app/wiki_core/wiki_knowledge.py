@@ -35,13 +35,8 @@ HERE = Path(__file__).resolve().parent      # meeting_minutes_app/wiki_core/
 from meeting_minutes_app.common import app_paths as _paths
 BASE_DIR = _paths.get_base_dir()
 
-# UTF-8 재설정 — Windows CP949 환경 대응 (ingestion_pipeline.py 동일 패턴)
-for _stream in (sys.stdout, sys.stderr):
-    if getattr(_stream, "encoding", None) and _stream.encoding.lower() in ("cp949", "euc-kr", "ansi"):
-        try:
-            _stream.reconfigure(encoding="utf-8", errors="replace")
-        except Exception:
-            pass
+from meeting_minutes_app.common.console import force_utf8_console
+force_utf8_console()
 
 try:
     from meeting_minutes_app.common import config_loader as _cfg

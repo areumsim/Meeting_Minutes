@@ -25,12 +25,8 @@ from typing import Optional, List, Dict, Any
 HERE = Path(__file__).resolve().parent
 PROJECT_ROOT = HERE.parent.parent  # meeting_minutes_app/meeting_pipeline/ -> repo root
 
-for _stream in (sys.stdout, sys.stderr):
-    if getattr(_stream, "encoding", None) and _stream.encoding.lower() in ("cp949", "euc-kr", "ansi"):
-        try:
-            _stream.reconfigure(encoding="utf-8", errors="replace")
-        except Exception:
-            pass
+from meeting_minutes_app.common.console import force_utf8_console
+force_utf8_console()
 
 try:
     from meeting_minutes_app.common import config_loader as _cfg

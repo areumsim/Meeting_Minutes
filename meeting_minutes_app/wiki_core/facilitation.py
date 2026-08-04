@@ -241,13 +241,11 @@ NOTE_REPLAY = "replay"
 
 
 def _resolve_db_path(db_path: Optional[Union[str, Path]] = None) -> Optional[Path]:
-    if db_path:
-        return Path(db_path)
-    try:
-        from meeting_minutes_app.common.app_paths import get_db_path
-        return get_db_path()
-    except Exception:
-        return None
+    """경로 해석은 `common.sqlite_util` 하나만 쓴다(이 함수가 두 모듈에 복제돼 있던
+    자리). 래퍼를 남기는 이유는 테스트가 이 이름을 monkeypatch 해 임시 DB 로
+    돌리기 때문이다 — 없애면 그 주입 지점이 사라진다(tests/conftest.py 격리)."""
+    from meeting_minutes_app.common import sqlite_util
+    return sqlite_util.resolve_db_path(db_path)
 
 
 def _connect(db_path: Optional[Union[str, Path]] = None) -> Optional[sqlite3.Connection]:
@@ -1777,17 +1775,12 @@ def _print_report(session_id: Optional[str], detail: bool) -> None:
 def _force_utf8_console() -> None:
     """한국어 콘솔(cp949)에서 '—' 같은 문자가 UnicodeEncodeError 를 내는 것을 막는다.
 
-    이 모듈은 웹 서버에서도 import 되므로 다른 CLI 모듈들처럼 모듈 최상단에서 하지
-    않고 main() 안에서만 만진다 — 라이브러리 import 가 프로세스 전역 스트림을
-    바꾸면 안 된다(pythonw 에서는 stdout 이 없을 수도 있다)."""
-    import sys
-    for s in (sys.stdout, sys.stderr):
-        enc = getattr(s, "encoding", None)
-        if enc and enc.lower() in ("cp949", "euc-kr", "ansi"):
-            try:
-                s.reconfigure(encoding="utf-8", errors="replace")
-            except Exception:
-                pass
+    판정은 `common.console` 하나만 쓴다(같은 6줄이 8개 파일에 세 철자로 복제돼
+    있던 자리). 다만 **호출 시점**은 이 모듈만 다르다 — 웹 서버에서도 import 되므로
+    다른 CLI 모듈들처럼 최상단이 아니라 main() 안에서만 부른다. 라이브러리 import 가
+    프로세스 전역 스트림을 바꾸면 안 된다."""
+    from meeting_minutes_app.common.console import force_utf8_console
+    force_utf8_console()
 
 
 def _run_replay(session_ids: List[str], reset: bool, assume_yes: bool) -> int:

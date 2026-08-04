@@ -337,6 +337,12 @@ def purge_session(sid: str) -> Optional[str]:
 
     폴더를 지우는 것은 호출부(API)의 몫이다 — DB 계층이 파일시스템을 건드리면
     테스트와 트랜잭션 경계가 뒤섞인다.
+
+    **사이드카 테이블을 함께 지운다.** `related_notes` 는 처음부터 그랬고,
+    `facilitation_log`/`facilitation_triage`(회의 진행 페르소나 관찰 로그)는 core 가
+    같은 sqlite 파일에 만드는 테이블이라 이 정리에서 빠져 있었다 — 그런데 그 테이블의
+    `span` 에는 **발화 원문 인용(최대 500자)**이 들어간다. 회의를 완전 삭제했는데
+    회의 내용 일부가 DB 에 영구 잔존하는 셈이었다(PRD §12 프라이버시).
     """
     with _conn() as c:
         row = c.execute("SELECT output_dir FROM sessions WHERE id = ?", (sid,)).fetchone()
@@ -348,6 +354,14 @@ def purge_session(sid: str) -> Optional[str]:
         c.execute("DELETE FROM related_notes WHERE session_id = ?", (sid,))
         c.execute("DELETE FROM sessions WHERE id = ?", (sid,))
         c.commit()
+    # 트랜잭션이 **닫힌 뒤에** 부른다 — core 쪽은 같은 파일을 별도 커넥션으로 열기
+    # 때문에, 위 쓰기 트랜잭션이 열린 상태에서 부르면 SQLITE_BUSY 로 timeout(30s)
+    # 동안 매달린다. 실패해도 세션 삭제 자체는 성공으로 둔다(관찰 로그는 부가 데이터).
+    try:
+        from meeting_minutes_app.wiki_core import facilitation
+        facilitation.delete_session_observations(sid, db_path=DB_PATH)
+    except Exception:
+        pass
     return out or None
 
 

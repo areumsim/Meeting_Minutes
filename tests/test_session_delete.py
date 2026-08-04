@@ -89,6 +89,29 @@ class TestPurge:
     def test_purge_missing_returns_none(self, fresh_db):
         assert db.purge_session("nope") is None
 
+    def test_purge_removes_facilitation_observations(self, fresh_db):
+        """관찰 로그의 span 에는 발화 원문 인용이 들어간다 — 완전 삭제가 남기면
+        회의를 지웠는데 회의 내용 일부가 DB 에 영구 잔존한다(PRD §12)."""
+        from meeting_minutes_app.wiki_core import facilitation
+        sid = _make()
+        facilitation.record_observation(sid, "scribe", span="지워져야 하는 발화 인용",
+                                        db_path=db.DB_PATH)
+        facilitation.record_triage(sid, model="gpt-4o-mini", ok=True,
+                                   db_path=db.DB_PATH)
+        assert facilitation.observations(sid, db_path=db.DB_PATH)
+        db.purge_session(sid)
+        assert facilitation.observations(sid, db_path=db.DB_PATH) == []
+        assert facilitation.triages(sid, db_path=db.DB_PATH) == []
+
+    def test_soft_delete_keeps_facilitation_for_restore(self, fresh_db):
+        """휴지통은 되돌릴 수 있어야 한다 — related_notes 와 같은 규칙."""
+        from meeting_minutes_app.wiki_core import facilitation
+        sid = _make()
+        facilitation.record_observation(sid, "scribe", span="발화",
+                                        db_path=db.DB_PATH)
+        db.delete_session(sid)
+        assert facilitation.observations(sid, db_path=db.DB_PATH)
+
 
 class TestScannerDoesNotResurrect:
     def test_deleted_session_folder_is_not_reimported(self, fresh_db, tmp_path, monkeypatch):

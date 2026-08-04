@@ -281,12 +281,13 @@ SCHEMA: List[Dict[str, Any]] = [
             {"section": "facilitation", "key": "max_level", "label": "참견도 전역 상한", "type": "number", "default": 3, "desc": "개별 페르소나 참견도가 아무리 높아도 이 값을 넘지 못합니다. 4(알림음)·5(음성)는 관리자가 열어야 합니다. 사내 배포 기본 3(무음)."},
             {"section": "facilitation", "key": "triage_model", "label": "트리아지(1차 선별) 모델", "type": "select", "default": "gpt-4o-mini", "options": [{"value": "gpt-4o-mini", "label": "gpt-4o-mini — 저렴·빠름 (권장)"}, {"value": "claude-haiku-4-5", "label": "claude-haiku-4-5 — Anthropic 키 필요"}], "desc": "매 주기 후보 판정에 쓰는 경량 모델 — 이 기능의 상시 비용을 결정합니다. claude 를 고르면 현재는 Claude 모델 설정(models.claude_model)이 대신 호출되며, 예상 비용·지출 한도도 그 모델 단가로 계산됩니다(기본값 claude-opus-4-8 이면 gpt-4o-mini 의 수십 배)."},
             {"section": "facilitation", "key": "triage_period_sec", "label": "트리아지 주기(초)", "type": "number", "default": 25, "desc": "이 간격마다 최대 1회 판정합니다(발화가 없으면 0회). 시간 기반이라 1시간 회의의 호출 수 상한이 고정됩니다(기본 25초 = 최대 ~144회)."},
-            # 아래 4개는 **일부러 여기에 없다**: max_interventions_per_session ·
-            # voice_enabled · web_search_enabled · web_search_interval.
-            # 읽는 코드가 아직 0줄(M1~M3 몫)이라 설정 화면에 올리면 "켰는데 아무 일도
-            # 안 일어나는 토글"이 된다 — 이 리포가 반복해서 없애온 UX 함정이다.
-            # 기본값·의미는 config.example.json 주석에만 남기고, 해당 마일스톤에서
-            # 코드와 함께 여기로 올린다.
+            {"section": "facilitation", "key": "max_interventions_per_session", "label": "회의당 개입 표시 상한", "type": "number", "default": 12, "desc": "한 회의에서 화면에 띄울 개입 총량입니다. 넘으면 이후 판정은 화면에 뜨지 않고 기록만 남습니다(회의를 시끄럽게 만들지 않기 위한 장치). 0이면 무제한."},
+            {"section": "facilitation", "key": "min_confidence", "label": "개입 최소 신뢰도(0~1)", "type": "number", "default": 0.6, "desc": "판정 신뢰도가 이 값보다 낮은 후보는 화면에 띄우지 않습니다(기록은 남습니다). 아직 실측으로 정한 값이 아니라 조절용 기본값입니다 — 카드가 너무 자주 뜨면 올리세요."},
+            # 아래 3개는 **일부러 여기에 없다**: voice_enabled · web_search_enabled ·
+            # web_search_interval. 읽는 코드가 아직 0줄(M2~M3 몫)이라 설정 화면에
+            # 올리면 "켰는데 아무 일도 안 일어나는 토글"이 된다 — 이 리포가 반복해서
+            # 없애온 UX 함정이다. 기본값·의미는 config.example.json 주석에만 남기고,
+            # 해당 마일스톤에서 코드와 함께 여기로 올린다.
             {"section": "facilitation", "key": "max_cost_usd_per_meeting", "label": "회의당 비용 캡 ($)", "type": "number", "default": 0.5, "desc": "이 기능이 한 회의에서 쓸 수 있는 상한. 월 지출 한도(cost.monthly_cap_usd)가 0(무제한)이어도 이 캡은 동작합니다. 0이면 캡 없음."},
         ],
     },

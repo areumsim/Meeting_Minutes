@@ -442,6 +442,8 @@ class BrowserRealtimeSession:
                             if msg.get("type") == "stop":
                                 self._user_stopped = True
                                 break
+                            elif msg.get("type") == "facilitation_check":
+                                self._facilitation_check()
                             elif msg.get("type") == "audio":
                                 # base64 인코딩된 오디오
                                 if self._diarize_pp:
@@ -742,9 +744,56 @@ class BrowserRealtimeSession:
         try:
             from meeting_minutes_app.wiki_core.facilitation import FacilitationOrchestrator
             return FacilitationOrchestrator(
-                session_id=self.session_id or "", topic=topic)
+                session_id=self.session_id or "", topic=topic,
+                on_intervention=self._emit_facilitation,
+                on_status=self._emit_facilitation_status,
+                evidence_provider=self._facilitation_evidence)
         except Exception:
             return None
+
+    def _facilitation_evidence(self):
+        """페르소나가 쓸 볼트 근거 — 이미 상시 수집 중인 결과를 넘긴다(추가 검색 0회).
+
+        새 검색기를 만들지 않는 것이 규칙이다(PRD §6·§7) — 여기서 직접 검색하면
+        같은 랭킹 로직이 두 벌이 된다."""
+        if self._searcher is None:
+            return []
+        try:
+            return self._searcher.collected_evidence(limit=5)
+        except Exception:
+            return []
+
+    def _emit_facilitation(self, item: dict) -> None:
+        """페르소나 개입 1건을 브라우저로 push (트리아지 풀 스레드에서 호출).
+
+        관련 노트(`_emit_related_notes`)와 **같은 채널·같은 방식**이다 — 스레드에서
+        직접 send 하지 않고 `_send_to_browser` 큐에 넣는다(이벤트 루프 소유 규칙)."""
+        try:
+            self._send_to_browser(item)
+        except Exception:
+            pass
+
+    def _emit_facilitation_status(self, st: dict) -> None:
+        """건너뜀 사유·예산 소진 같은 상태를 화면에 알린다.
+
+        조용히 꺼지면 사용자는 '기능이 없다'고 판단한다(이 리포 반복 규칙) —
+        한도로 개입을 멈췄다는 사실은 반드시 보여야 한다(PRD §10·§19.5)."""
+        try:
+            self._send_to_browser({"type": "facilitation_status", **(st or {})})
+        except Exception:
+            pass
+
+    def _facilitation_check(self) -> None:
+        """[지금 점검] — 참견도 2(소극) 대기분을 방출한다. 새 LLM 호출은 없다."""
+        if self._facilitator is None:
+            return
+        try:
+            items = self._facilitator.check_now()
+            if not items:
+                self._emit_facilitation_status(
+                    {"kind": "empty", "message": "지금은 점검할 항목이 없습니다"})
+        except Exception:
+            pass
 
     def _emit_related_notes(self, notes: List[Dict]) -> None:
         """RealtimeVaultSearcher 검색 풀 스레드에서 호출 — 관련 노트를 브라우저로 push.
@@ -1509,6 +1558,8 @@ class BrowserRealtimeSession:
                     elif msg.get("type") == "cancel":
                         cancelled = True
                         break
+                    elif msg.get("type") == "facilitation_check":
+                        self._facilitation_check()
                     elif msg.get("type") == "audio":
                         _b = base64.b64decode(msg["data"])
 

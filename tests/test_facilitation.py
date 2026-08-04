@@ -301,6 +301,362 @@ class TestObserveModeIsSilent:
         assert facilitation.observations(session_id="s5") == []
 
 
+class TestDisplayChannelM1:
+    """M1 화면 채널 — 참견도 2·3 이 카드로 나가고, 그 경로도 비용 3관문을 지난다.
+
+    M0 는 "화면에 아무것도 내지 않는다"를 고정했다. M1 은 반대 방향을 고정한다:
+    **낼 때 무엇이 나가고, 언제 내지 않는지**. 특히 개입 생성(Tier 1)은 트리아지보다
+    비싼 모델을 쓰므로(§5) 여기서 관문이 빠지면 회의당 캡이 무의미해진다.
+    """
+
+    #: 개입 문장(생성 호출의 응답). 트리아지 응답(JSON)과 구분되게 둔다.
+    TEXT = "이 결정의 담당자와 기한이 아직 비어 있습니다. 지금 정하고 넘어가시겠어요?"
+
+    def _values(self, level=3, **overrides):
+        """전원 관찰(1) + 지정 페르소나만 level — 실제 M1 기본값 모양과 같다."""
+        values = {"facilitation.enabled": True,
+                  "facilitation.triage_period_sec": 600,
+                  "facilitation.max_cost_usd_per_meeting": 0.0,
+                  "facilitation.min_confidence": 0.6,
+                  "facilitation.max_interventions_per_session": 12}
+        for k in personas.PERSONAS:
+            values[f"facilitation.personas.{k}.level"] = 1
+        values["facilitation.personas.scribe.level"] = level
+        values.update(overrides)
+        return values
+
+    def _llm(self, monkeypatch, cands, text=None, boom=False):
+        """트리아지와 개입 생성이 **같은 `_call_llm`** 을 쓴다 — system 으로 갈라 준다."""
+        calls = []
+
+        def _fake(model, system, user, max_tokens=None):
+            triage = "트리아지" in system
+            calls.append({"model": model, "user": user, "triage": triage,
+                          "max_tokens": max_tokens})
+            if triage:
+                return json.dumps(cands, ensure_ascii=False)
+            if boom:
+                raise RuntimeError("생성 실패")
+            return self.TEXT if text is None else text
+
+        monkeypatch.setattr(facilitation, "_call_llm", _fake)
+        return calls
+
+    def _cand(self, persona="scribe", conf=0.9, span="결정은 났는데 담당자가 없다"):
+        return {"persona": persona, "trigger_type": "missing",
+                "confidence": conf, "span": span, "need_search": False}
+
+    def _run(self, orch, text="그럼 그렇게 하시죠. 다음 안건으로 넘어가겠습니다."):
+        _offer_and_drain(orch, [text])
+
+    def test_level3_emits_card_and_still_logs_the_observation(
+            self, cfg, fac_db, monkeypatch):
+        """화면에 뜬 개입도 관찰 로그에 남는다 — 분자에서 빠지면 오탐률이 왜곡된다."""
+        cfg(self._values())
+        calls = self._llm(monkeypatch, [self._cand()])
+        shown = []
+        orch = FacilitationOrchestrator(session_id="d1",
+                                        on_intervention=shown.append)
+        self._run(orch)
+
+        assert len(shown) == 1
+        item = shown[0]
+        assert item["type"] == "facilitation" and item["persona"] == "scribe"
+        assert item["personaLabel"] == personas.PERSONAS["scribe"].label
+        assert item["kind"] == "missing"          # 카드 색·문구가 이 값으로 갈린다
+        assert item["level"] == 3
+        assert item["draft"] is True              # 항상 '초안' — 판정이 아니다
+        assert item["searched"] is False          # 라이브 웹검색은 M2
+        assert item["text"] == self.TEXT
+        assert item["quote"] == "결정은 났는데 담당자가 없다"
+        assert item["id"]                          # 프런트 dedup 키
+        # 트리아지 1 + 생성 1
+        assert [c["triage"] for c in calls] == [True, False]
+        rows = facilitation.observations(session_id="d1")
+        assert len(rows) == 1 and rows[0]["level"] == 3
+
+    def test_intervention_is_metered_on_top_of_triage(
+            self, cfg, fac_db, monkeypatch):
+        """개입 과금이 집계에 남는다 — 무계량 회귀(이 리포 반복 결함) 방지."""
+        from meeting_minutes_app.common import pricing
+        cfg(self._values())
+        self._llm(monkeypatch, [self._cand()])
+        shown = []
+        orch = FacilitationOrchestrator(session_id="d2",
+                                        on_intervention=shown.append)
+        self._run(orch)
+
+        expected = (pricing.facilitation_triage_call_cost("gpt-4o-mini")
+                    + pricing.facilitation_intervention_cost("gpt-4o-mini"))
+        by_kind = usage_log.month_to_date_by_kind()
+        assert by_kind[spend_guard.KIND_FACILITATION] == pytest.approx(
+            expected, abs=1e-9)
+        # 러닝 미터가 합산할 금액이 개입 이벤트에 함께 실려 나간다(분당 요율로는
+        # 표현할 수 없는 건수 기반 비용 — pricing.estimate_session_cost 주석 참조)
+        assert shown[0]["costUsd"] == pytest.approx(
+            pricing.facilitation_intervention_cost("gpt-4o-mini"), abs=1e-9)
+        # 회의별 실측 금액도 되찾을 수 있어야 한다(세션 note 규약)
+        assert usage_log.session_spend("d2") == pytest.approx(expected, abs=1e-9)
+
+    def test_intervention_uses_effective_model_for_price_and_call(
+            self, cfg, fac_db, monkeypatch):
+        """claude 를 고르면 실제로는 models.claude_model 이 호출된다 — 추정도 그 단가."""
+        from meeting_minutes_app.common import pricing
+        cfg(self._values(**{
+            "facilitation.personas.scribe.model": "claude-sonnet-5",
+            "models.claude_model": "claude-opus-4-8"}))
+        calls = self._llm(monkeypatch, [self._cand()])
+        orch = FacilitationOrchestrator(session_id="d3",
+                                        on_intervention=lambda _i: None)
+        self._run(orch)
+
+        gen = [c for c in calls if not c["triage"]]
+        assert len(gen) == 1 and gen[0]["model"] == "claude-opus-4-8"
+        expected = (pricing.facilitation_triage_call_cost("gpt-4o-mini")
+                    + pricing.facilitation_intervention_cost("claude-opus-4-8"))
+        assert usage_log.month_to_date_by_kind()[
+            spend_guard.KIND_FACILITATION] == pytest.approx(expected, abs=1e-9)
+
+    def test_low_confidence_is_recorded_but_never_generated(
+            self, cfg, fac_db, monkeypatch):
+        """임계 미달은 **생성조차 하지 않는다** — 화면에 못 낼 개입에 돈을 쓰지 않는다."""
+        cfg(self._values(**{"facilitation.min_confidence": 0.8}))
+        calls = self._llm(monkeypatch, [self._cand(conf=0.5)])
+        shown = []
+        orch = FacilitationOrchestrator(session_id="d4",
+                                        on_intervention=shown.append)
+        self._run(orch)
+
+        assert shown == []
+        assert [c["triage"] for c in calls] == [True]        # 생성 호출 0건
+        assert len(facilitation.observations(session_id="d4")) == 1   # 기록은 남는다
+
+    def test_level2_waits_for_check_now_without_new_llm_call(
+            self, cfg, fac_db, monkeypatch):
+        """참견도 2(소극)는 모아 두고 [지금 점검]에서 방출 — 버튼이 과금을 만들지 않는다."""
+        cfg(self._values(level=2))
+        calls = self._llm(monkeypatch, [self._cand()])
+        shown, status = [], []
+        orch = FacilitationOrchestrator(session_id="d5",
+                                        on_intervention=shown.append,
+                                        on_status=status.append)
+        self._run(orch)
+
+        assert shown == []                       # 자동으로 뜨지 않는다
+        assert orch.pending_count() == 1
+        assert [s["kind"] for s in status] == ["pending"]
+        before = len(calls)
+        out = orch.check_now()
+        assert len(out) == 1 and len(shown) == 1
+        assert shown[0]["level"] == 2
+        assert len(calls) == before               # 새 LLM 호출 없음(추가 과금 0)
+        assert orch.pending_count() == 0
+        assert orch.check_now() == []             # 두 번 눌러도 빈 목록
+
+    def test_budget_exhaustion_degrades_to_record_only(
+            self, cfg, fac_db, monkeypatch):
+        """예산을 다 쓰면 생성을 멈추고 사유를 알린다(조용히 꺼지면 '기능 없음'으로 읽힌다)."""
+        cfg(self._values(**{"facilitation.max_interventions_per_session": 1,
+                            "facilitation.personas.facilitator.level": 3}))
+        calls = self._llm(monkeypatch, [self._cand(),
+                                        self._cand(persona="facilitator",
+                                                   span="주제가 샜다")])
+        shown, status = [], []
+        orch = FacilitationOrchestrator(session_id="d6",
+                                        on_intervention=shown.append,
+                                        on_status=status.append)
+        self._run(orch)
+
+        assert len(shown) == 1                   # 예산 1건
+        assert len([c for c in calls if not c["triage"]]) == 1   # 생성도 1회뿐
+        assert any(s["kind"] == "budget" for s in status)
+        assert len(facilitation.observations(session_id="d6")) == 2  # 기록은 2건
+        assert orch.budget_remaining() == 0
+        assert orch.status()["shown_count"] == 1
+
+    def test_at_most_two_cards_per_triage_round(self, cfg, fac_db, monkeypatch):
+        """한 회차에 여러 장이 쏟아지면 '흘깃 보고 넘긴다'(§19.1)가 성립하지 않는다."""
+        cands = [self._cand(span="담당자 없음"),
+                 self._cand(persona="facilitator", span="주제 이탈"),
+                 self._cand(persona="junior", span="약어 미정의")]
+        cfg(self._values(**{"facilitation.personas.facilitator.level": 3,
+                            "facilitation.personas.junior.level": 3}))
+        self._llm(monkeypatch, cands)
+        shown = []
+        orch = FacilitationOrchestrator(session_id="d7",
+                                        on_intervention=shown.append)
+        self._run(orch)
+
+        assert len(shown) == facilitation.MAX_INTERVENTIONS_PER_TRIAGE == 2
+        assert len(facilitation.observations(session_id="d7")) == 3   # 기록은 전부
+
+    def test_repeated_candidate_is_not_shown_again(self, cfg, fac_db, monkeypatch):
+        """창이 겹쳐 같은 발화가 재판정돼도 같은 카드를 다시 띄우지 않는다(dedup)."""
+        cfg(self._values())
+        self._llm(monkeypatch, [self._cand()])
+        shown = []
+        orch = FacilitationOrchestrator(session_id="d8",
+                                        on_intervention=shown.append)
+        active = orch.active_personas()
+        w = [facilitation.Utterance("결정은 났는데 담당자가 없다", 0.0, 3.0, False)]
+        orch._triage_task(w, active)
+        orch._triage_task(w, active)              # 같은 span → repeat
+        orch.shutdown(wait=True)
+
+        assert len(shown) == 1
+        rows = facilitation.observations(session_id="d8")
+        assert len(rows) == 1 and rows[0]["repeats"] == 1
+
+    def test_vault_personas_need_evidence_to_intervene(
+            self, cfg, fac_db, monkeypatch):
+        """근거 필수 페르소나(도메인·팩트체커)는 근거 없이 개입하지 않는다 — 추측 금지."""
+        cfg(self._values(**{"facilitation.personas.domain_expert.level": 3}))
+        calls = self._llm(monkeypatch, [self._cand(persona="domain_expert",
+                                                   span="TSMC 3nm 수율")])
+        shown = []
+        orch = FacilitationOrchestrator(session_id="d9",
+                                        on_intervention=shown.append)
+        self._run(orch)
+        assert shown == []
+        assert [c["triage"] for c in calls] == [True]     # 생성 호출도 없다
+        assert len(facilitation.observations(session_id="d9")) == 1
+
+    def test_evidence_provider_output_is_reused_not_researched(
+            self, cfg, fac_db, monkeypatch):
+        """근거는 이미 상시 수집 중인 결과를 가져다 쓴다(추가 검색 0회, §6·§7)."""
+        cfg(self._values(**{"facilitation.personas.domain_expert.level": 3}))
+        calls = self._llm(monkeypatch, [self._cand(persona="domain_expert",
+                                                   span="TSMC 3nm 수율")])
+        hits = [0]
+
+        def _provider():
+            hits[0] += 1
+            return [{"title": "반도체 공정 노트", "filename": "notes/fab.md",
+                     "snippet": "3nm 수율은 …", "rank_score": 0.83}]
+
+        shown = []
+        orch = FacilitationOrchestrator(session_id="d10",
+                                        on_intervention=shown.append,
+                                        evidence_provider=_provider)
+        self._run(orch)
+
+        assert len(shown) == 1
+        ev = shown[0]["evidence"]
+        assert len(ev) == 1 and ev[0]["title"] == "반도체 공정 노트"
+        assert ev[0]["source"] == "note" and ev[0]["score"] == pytest.approx(0.83)
+        assert hits[0] == 1
+        gen = [c for c in calls if not c["triage"]][0]
+        assert "반도체 공정 노트" in gen["user"]     # 근거가 프롬프트에 들어간다
+
+    def test_broken_evidence_provider_does_not_break_the_stream(
+            self, cfg, fac_db, monkeypatch):
+        """근거 공급자가 터져도 실시간 스트림은 살아 있어야 한다(대화만 보는 개입은 계속)."""
+        cfg(self._values())
+
+        def _boom():
+            raise RuntimeError("검색기 없음")
+
+        self._llm(monkeypatch, [self._cand()])
+        shown = []
+        orch = FacilitationOrchestrator(session_id="d11",
+                                        on_intervention=shown.append,
+                                        evidence_provider=_boom)
+        self._run(orch)
+        assert len(shown) == 1 and shown[0]["evidence"] == []
+
+    def test_meeting_cap_blocks_intervention_with_a_visible_reason(
+            self, cfg, fac_db, monkeypatch):
+        """트리아지는 통과하고 개입에서 캡에 걸리는 구간 — 사유가 화면으로 나가야 한다."""
+        from meeting_minutes_app.common import pricing
+        cap = (pricing.facilitation_triage_call_cost("gpt-4o-mini")
+               + pricing.facilitation_intervention_cost("gpt-4o-mini") / 2)
+        cfg(self._values(**{"facilitation.max_cost_usd_per_meeting": cap}))
+        calls = self._llm(monkeypatch, [self._cand()])
+        shown, status = [], []
+        orch = FacilitationOrchestrator(session_id="d12",
+                                        on_intervention=shown.append,
+                                        on_status=status.append)
+        self._run(orch)
+
+        assert shown == []
+        assert [c["triage"] for c in calls] == [True]     # 캡 검사가 호출 전이다
+        assert any(s["kind"] == "capped" for s in status)
+        assert "캡" in orch.status()["skip_reason"]
+
+    def test_monthly_cap_blocks_intervention(self, cfg, fac_db, monkeypatch):
+        """월 한도는 개입 경로에도 걸린다 — 새 과금 경로가 관문을 우회하면 안 된다."""
+        cfg(self._values())
+        self._llm(monkeypatch, [self._cand()])
+        seen = {"n": 0}
+
+        def _blocked(est, **kw):
+            # 1회차 = 트리아지(통과), 2회차 = 개입 생성(막는다)
+            seen["n"] += 1
+            return "" if seen["n"] == 1 else "월 한도 초과(테스트)"
+
+        monkeypatch.setattr(spend_guard, "blocked", _blocked)
+        shown, status = [], []
+        orch = FacilitationOrchestrator(session_id="d13",
+                                        on_intervention=shown.append,
+                                        on_status=status.append)
+        self._run(orch)
+        assert seen["n"] == 2                    # 개입 경로도 한도 검사를 지난다
+        assert shown == []
+        assert any(s["kind"] == "blocked" for s in status)
+
+    def test_failed_generation_refunds_the_meeting_cap(
+            self, cfg, fac_db, monkeypatch):
+        """생성 실패분이 캡을 소진하면 남은 회의의 개입이 전부 막힌다."""
+        from meeting_minutes_app.common import pricing
+        cfg(self._values(**{"facilitation.max_cost_usd_per_meeting": 1.0}))
+        self._llm(monkeypatch, [self._cand()], boom=True)
+        shown = []
+        orch = FacilitationOrchestrator(session_id="d14",
+                                        on_intervention=shown.append)
+        self._run(orch)
+
+        assert shown == []
+        triage_only = pricing.facilitation_triage_call_cost("gpt-4o-mini")
+        assert orch._session_cost == pytest.approx(triage_only, abs=1e-9)
+        # 실패한 생성은 집계에도 없다(record() 를 지나지 않았다)
+        assert usage_log.month_to_date_spend() == pytest.approx(
+            triage_only, abs=1e-9)
+
+    def test_intervention_callback_exception_does_not_kill_the_stream(
+            self, cfg, fac_db, monkeypatch):
+        """화면 콜백(WS send)이 터져도 트리아지 루프는 계속 돈다."""
+        cfg(self._values())
+        self._llm(monkeypatch, [self._cand()])
+
+        def _boom(_item):
+            raise RuntimeError("WS 끊김")
+
+        orch = FacilitationOrchestrator(session_id="d15", on_intervention=_boom)
+        self._run(orch)
+        assert orch.status()["shown_count"] == 1
+        assert facilitation.triages(session_id="d15")[0]["ok"] == 1
+
+    def test_status_exposes_display_state_for_the_screen(
+            self, cfg, fac_db, monkeypatch):
+        """프런트 배지가 읽는 값 — 없으면 예산·대기 상태를 화면에 못 쓴다."""
+        cfg(self._values())
+        st = FacilitationOrchestrator(session_id="d16").status()
+        assert st["shown_count"] == 0 and st["pending_count"] == 0
+        assert st["budget"] == 12 and st["budget_remaining"] == 12
+        assert st["display_personas"] == ["scribe"]      # 참견도 3 이상만
+
+    def test_observe_level_never_generates_even_with_high_confidence(
+            self, cfg, fac_db, monkeypatch):
+        """M0 계약 유지 — 참견도 1 은 confidence 1.0 이어도 생성·표시가 없다."""
+        cfg(self._values(level=1))
+        calls = self._llm(monkeypatch, [self._cand(conf=1.0)])
+        shown = []
+        orch = FacilitationOrchestrator(session_id="d17",
+                                        on_intervention=shown.append)
+        self._run(orch)
+        assert shown == [] and [c["triage"] for c in calls] == [True]
+
+
 class TestTimeGate:
     """비용 상한의 핵심 메커니즘 — 시간 기반 게이트(§5). 없으면 발화량이 비용을 정한다."""
 
@@ -725,8 +1081,8 @@ class TestSettingsExposeOnlyWhatWorks:
 
     #: 값을 읽는 코드가 아직 없는 키 → 구현하는 마일스톤에서 이 목록에서 빼고
     #: config_schema 에 필드를 올린다(그때 이 테스트가 그 짝을 강제한다).
-    UNIMPLEMENTED = ("max_interventions_per_session", "voice_enabled",
-                     "web_search_enabled", "web_search_interval")
+    UNIMPLEMENTED = ("voice_enabled", "web_search_enabled",
+                     "web_search_interval")
 
     def test_unimplemented_keys_are_not_in_settings_ui(self):
         from meeting_minutes_app.common import config_schema
@@ -751,7 +1107,9 @@ class TestSettingsExposeOnlyWhatWorks:
         keys = {f["key"] for f in config_schema.iter_fields()
                 if f["section"] == "facilitation"}
         assert {"enabled", "max_level", "triage_model", "triage_period_sec",
-                "max_cost_usd_per_meeting"} <= keys
+                "max_cost_usd_per_meeting",
+                # M1 에서 읽는 코드가 생긴 둘 — 짝이 맞아야 한다
+                "max_interventions_per_session", "min_confidence"} <= keys
 
 
 class TestRegistryData:

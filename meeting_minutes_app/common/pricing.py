@@ -173,6 +173,25 @@ def web_research_call_cost(model: str | None = None, *, searched: bool = True,
     return cost
 
 
+# 페르소나 개입 1건(Tier 1 생성) 토큰 — 트리아지와 같이 **상한**으로 잡는다.
+#   입력 3,000: 최근 발화 창(2,000자≈1,670) + 볼트 근거 스니펫 몇 개 + 시스템 프롬프트.
+#   출력 400: 개입 문장은 2~4문장(COMMON_RULES)이지만 호출 상한과 같은 값을 쓴다.
+# `[미검증 — 실사용 usage 로 재교정 필요]`
+FACILITATION_INTERVENTION_INPUT_TOKENS = 3_000
+FACILITATION_INTERVENTION_MAX_OUTPUT_TOKENS = 400
+FACILITATION_INTERVENTION_OUTPUT_TOKENS = FACILITATION_INTERVENTION_MAX_OUTPUT_TOKENS
+
+
+def facilitation_intervention_cost(model: str | None) -> float:
+    """개입 1건 생성 예상 비용(USD). 페르소나마다 모델이 다르다(PRD §5 티어).
+
+    `model` 은 **실제로 과금될 모델**이어야 한다 —
+    `facilitation.effective_persona_model()` 이 그 해석의 단일 소스다."""
+    price = llm_token_price(model)
+    return (FACILITATION_INTERVENTION_INPUT_TOKENS / 1_000_000) * price["in"] + \
+           (FACILITATION_INTERVENTION_OUTPUT_TOKENS / 1_000_000) * price["out"]
+
+
 def facilitation_triage_call_cost(model: str | None) -> float:
     """트리아지 1회 예상 비용(USD).
 
@@ -282,6 +301,12 @@ def estimate_session_cost(duration_sec: float, stt_model: str,
     if facilitation and facilitation_period_sec > 0:
         triage_calls = max(0.0, float(duration_sec)) / float(facilitation_period_sec)
         fac = triage_calls * facilitation_triage_call_cost(facilitation_triage_model)
+        # 화면 개입(Tier 1)은 **여기서 더하지 않는다.** 이 함수의 facilitation 항은
+        # 러닝 미터가 '분당 요율'로 쓰므로(60초를 넣고 결과를 분당으로 읽는다) 시간에
+        # 비례하지 않는 항을 넣으면 회의가 길어질수록 없는 비용이 불어난다. 개입은
+        # 건수 기반이라 실제로 발생한 1건마다 그 금액(facilitation_intervention_cost,
+        # 실효 모델 단가)을 WS 이벤트에 실어 보내고 화면이 그것을 합산한다 —
+        # 추정이 아니라 실측이며, 한도·기록이 쓰는 것과 같은 함수다.
     return {
         "duration_sec": round(float(duration_sec)),
         "stt": round(stt, 4),

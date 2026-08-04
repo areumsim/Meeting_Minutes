@@ -104,6 +104,15 @@ TRIAGE_WINDOW_CHARS = 2000
 #: 남은 중복은 span_hash dedup 이 흡수한다.
 WINDOW_CARRYOVER = 1
 
+#: 화면 개입이 시작되는 참견도. 0=금지, 1=관찰(기록만), 2=소극([지금 점검] 때 모아서),
+#: 3 이상=표준(자동 옆 카드). PRD §4 의 채널 표가 정본이고 이 상수는 그 경계다.
+DISPLAY_LEVEL = 3
+COLLECT_LEVEL = 2
+
+#: 트리아지 1회가 만들 수 있는 화면 개입 수 상한. 한 번에 여러 장이 쏟아지면
+#: '흘깃 보고 넘긴다'(§19.1)가 성립하지 않는다 — 나머지는 기록만 남는다.
+MAX_INTERVENTIONS_PER_TRIAGE = 2
+
 
 class Utterance(NamedTuple):
     """창(window)에 쌓이는 발화 1건 — 시각이 없으면 t0/t1 은 None."""
@@ -411,6 +420,18 @@ def report(session_id: Optional[str] = None,
     }
 
 
+def effective_persona_model(key: str) -> str:
+    """페르소나 Tier 1 생성 모델(실효값). config > personas.py 기본 > 실효 해석 순.
+
+    claude 계열은 `llm_client` 가 `models.claude_model` 로 호출하므로 그 대체를 여기서
+    한 번에 반영한다 — 추정·한도·기록이 실제 과금 모델을 보게 하려면 이 함수뿐이다
+    (트리아지의 `effective_triage_model` 과 같은 이유)."""
+    p = get_persona(key)
+    fallback = p.model if p else "gpt-4o-mini"
+    configured = str(_c(f"facilitation.personas.{key}.model", fallback) or fallback)
+    return effective_triage_model(configured)
+
+
 def effective_triage_model(configured: str) -> str:
     """**실제로 과금될** 트리아지 모델. 설정에서 고른 값과 다를 수 있다.
 
@@ -651,7 +672,9 @@ class FacilitationOrchestrator:
                  on_intervention: Optional[Callable[[Dict[str, Any]], None]] = None,
                  clock: Optional[Callable[[], float]] = None,
                  note: str = "", enabled_override: Optional[bool] = None,
-                 db_path: Optional[Union[str, Path]] = None):
+                 db_path: Optional[Union[str, Path]] = None,
+                 evidence_provider: Optional[Callable[[], List[Dict[str, Any]]]] = None,
+                 on_status: Optional[Callable[[Dict[str, Any]], None]] = None):
         """clock/note/enabled_override 는 **리플레이 전용 주입점**이다(replay_session).
 
         - clock: 시간 게이트가 읽는 시계. 라이브는 `time.monotonic`, 리플레이는 "지금
@@ -666,6 +689,13 @@ class FacilitationOrchestrator:
         self.session_id = str(session_id or "")
         self.topic = (topic or "").strip()
         self.on_intervention = on_intervention
+        #: 볼트 근거 공급자 — `RealtimeVaultSearcher.collected_evidence` 를 그대로
+        #: 주입받는다(새 검색기를 만들지 않는다, PRD §6·§7 "절대 새로 만들지 말 것").
+        #: wiki_core 가 realtime 세션을 모르게 하려고 호출부에서 넣는다.
+        self.evidence_provider = evidence_provider
+        #: 상태 변화(건너뜀 사유·예산 소진)를 화면에 알리는 콜백. 조용히 꺼지면
+        #: 기능이 없는 것처럼 보인다(이 리포 반복 규칙).
+        self.on_status = on_status
         self._clock = clock or time.monotonic
         self._note = note
         #: 기록 대상 DB. None 이면 모듈 기본(app_paths.get_db_path()). 리플레이가
@@ -682,6 +712,20 @@ class FacilitationOrchestrator:
         self._triage_model = effective_triage_model(self._configured_model)
         self._meeting_cap = float(_c("facilitation.max_cost_usd_per_meeting", 0.50)
                                   or 0.0)
+        #: 세션당 화면 개입 예산(PRD §4). 초과분은 관찰(기록)로 강등된다 —
+        #: 회의를 시끄럽게 만들지 않기 위한 장치.
+        try:
+            self._budget = int(_c("facilitation.max_interventions_per_session", 12))
+        except (TypeError, ValueError):
+            self._budget = 12
+        #: 후보 신뢰도 하한. **페르소나별 상수를 임의로 만들지 않는다** — 실측 전에
+        #: 8개 숫자를 지어내면 이 리포가 금지한 '근거 없는 랭킹 휴리스틱'이 된다.
+        #: 전역 1개만 두고 사용자가 조절하게 하며, 모든 후보의 confidence 는 관찰
+        #: 로그에 남으므로 나중에 분포를 보고 페르소나별로 나눌 수 있다. `[미검증]`
+        try:
+            self._min_conf = float(_c("facilitation.min_confidence", 0.6))
+        except (TypeError, ValueError):
+            self._min_conf = 0.6
 
         self._lock = threading.Lock()
         self._window: List[Utterance] = []
@@ -691,6 +735,8 @@ class FacilitationOrchestrator:
         self._observed_count = 0
         self._repeat_count = 0
         self._skip_reason = ""
+        self._shown_count = 0                    # 화면에 낸 개입 수(예산 대비)
+        self._pending: List[Dict[str, Any]] = []  # 참견도 2(소극) 대기 — [지금 점검]에서 방출
 
         # 게이트가 꺼져 있으면 풀 자체를 만들지 않는다 — LLM 호출 0회가 구조적으로
         # 보장된다(수용 기준 §14 첫 항목, 테스트 고정).
@@ -738,6 +784,13 @@ class FacilitationOrchestrator:
             "repeat_count": self._repeat_count,
             "session_cost_usd": round(self._session_cost, 6),
             "skip_reason": self._skip_reason,
+            # M1 화면 채널 상태 — 프런트 배지·안내에 그대로 쓴다.
+            "shown_count": self._shown_count,
+            "pending_count": self.pending_count(),
+            "budget": self._budget,
+            "budget_remaining": (self.budget_remaining() if self._budget > 0 else 0),
+            "display_personas": [p.key for p in self.active_personas()
+                                 if self.persona_level(p.key) >= DISPLAY_LEVEL],
         }
 
     # ── 핫패스 API (RealtimeVaultSearcher 와 동일 계약) ────
@@ -872,15 +925,18 @@ class FacilitationOrchestrator:
             self._skip_reason = ""
 
             cands = self._parse_candidates(raw, active)
+            shown_here = 0
             for cand in cands:
-                # M0 관찰모드: DB 로깅만. on_intervention(화면 채널)은 호출하지 않는다.
+                level = self.persona_level(cand["persona"])
+                # 기록은 참견도와 무관하게 **항상** 먼저 한다 — 화면에 뜬 개입도
+                # 오탐률 실측의 대상이다(분자에서 빠지면 측정이 왜곡된다).
                 r = record_observation(
                     self.session_id, cand["persona"],
                     trigger_type=cand.get("trigger_type", ""),
                     confidence=cand.get("confidence", 0.0),
                     span=cand.get("span", ""),
                     need_search=bool(cand.get("need_search")),
-                    level=self.persona_level(cand["persona"]),
+                    level=level,
                     t0=t0, t1=t1, provisional=provisional, note=self._note,
                     db_path=self._db_path)
                 with self._lock:
@@ -888,6 +944,15 @@ class FacilitationOrchestrator:
                         self._observed_count += 1
                     elif r == "repeat":
                         self._repeat_count += 1
+                # 같은 후보가 재판정된 것(repeat)은 화면에 다시 내지 않는다 —
+                # 창이 겹치는 동안 같은 카드가 반복 등장하면 그게 소음이다.
+                if r != "new":
+                    continue
+                if shown_here >= MAX_INTERVENTIONS_PER_TRIAGE:
+                    continue                     # 한 회차에 여러 장 쏟지 않는다
+                if self._dispatch(cand, level, window_text, t0, t1) in (
+                        "shown", "pending"):
+                    shown_here += 1
             record_triage(self.session_id, model=self._triage_model, cost_usd=est,
                           candidates=len(cands), personas=len(active),
                           window_chars=len(window_text), t0=t0, t1=t1,
@@ -911,6 +976,202 @@ class FacilitationOrchestrator:
                 self._skip_reason = f"트리아지 실패: {type(e).__name__}"
             except Exception:
                 pass
+
+    # ── Tier 1: 개입 생성 (M1) ────────────────────────────
+
+    def budget_remaining(self) -> int:
+        """남은 화면 개입 예산(0 이면 이후 후보는 관찰로 강등). 0 설정이면 무제한."""
+        if self._budget <= 0:
+            return 10 ** 6
+        with self._lock:
+            return max(0, self._budget - self._shown_count)
+
+    def pending_count(self) -> int:
+        """참견도 2(소극) 대기 중인 개입 수 — [지금 점검] 버튼 배지용."""
+        with self._lock:
+            return len(self._pending)
+
+    def check_now(self) -> List[Dict[str, Any]]:
+        """[지금 점검] — 참견도 2(소극) 대기분을 방출한다.
+
+        여기서 새 LLM 호출을 하지 않는 것은 의도다: 대기분은 **이미 생성된** 개입이라
+        추가 과금이 없고, 버튼 한 번이 새 과금을 일으키면 사용자가 비용을 예측할 수
+        없다. 새 판정이 필요하면 다음 트리아지 주기에 자연히 돈다."""
+        with self._lock:
+            out, self._pending = self._pending, []
+            self._shown_count += len(out)
+        for item in out:
+            self._emit(item)
+        return out
+
+    def _emit(self, item: Dict[str, Any]) -> None:
+        """화면 채널로 1건 방출 — 콜백 예외가 실시간 스트림을 깨지 않게 감싼다."""
+        cb = self.on_intervention
+        if cb is None:
+            return
+        try:
+            cb(item)
+        except Exception:
+            pass
+
+    def _notify(self, kind: str, message: str, **extra: Any) -> None:
+        if self.on_status is None:
+            return
+        try:
+            self.on_status({"kind": kind, "message": message, **extra})
+        except Exception:
+            pass
+
+    def _persona_evidence(self, p: Persona) -> List[Dict[str, Any]]:
+        """볼트 근거 — 이미 상시 수집 중인 결과를 가져다 쓴다(추가 검색 0회, PRD §6).
+
+        근거 소스에 "vault" 가 없는 페르소나(촉진자·서기·주니어·비판자)는 대화만 본다."""
+        if "vault" not in (p.evidence or ()) or self.evidence_provider is None:
+            return []
+        try:
+            ev = self.evidence_provider() or []
+        except Exception:
+            return []
+        out: List[Dict[str, Any]] = []
+        for n in ev[:3]:
+            if not isinstance(n, dict):
+                continue
+            out.append({
+                "source": "note",
+                "title": str(n.get("title") or n.get("filename") or "")[:120],
+                "url": str(n.get("filename") or ""),
+                "score": float(n.get("rank_score") or n.get("score") or 0.0),
+                "snippet": str(n.get("snippet") or "")[:300],
+            })
+        return out
+
+    def _generate(self, cand: Dict[str, Any], window_text: str,
+                  t0: Optional[float], t1: Optional[float],
+                  level: int) -> Optional[Dict[str, Any]]:
+        """후보 1건 → 개입 1건(Tier 1). 실패·근거 부족이면 None(개입을 만들지 않는다).
+
+        비용은 트리아지와 같은 3관문 + 회의당 캡 예약을 지난다 — 개입은 트리아지보다
+        비싼 모델을 쓰므로(§5 티어) 여기가 빠지면 캡이 무의미해진다."""
+        from meeting_minutes_app.common import pricing, spend_guard
+        p = get_persona(cand["persona"])
+        if p is None:
+            return None
+        evidence = self._persona_evidence(p)
+        # 근거가 필수인 페르소나(도메인·팩트체커)는 근거 없이 개입하지 않는다
+        # ("추측 금지" — system_prompt 와 PRD §6 의 게이트를 코드로도 막는다).
+        if p.key in ("domain_expert", "fact_checker") and not evidence:
+            return None
+
+        model = effective_persona_model(p.key)
+        est = pricing.facilitation_intervention_cost(model)
+        if spend_guard.automation_paused():
+            return None
+        reason = spend_guard.blocked(est, check_per_item=False)
+        if reason:
+            self._skip_reason = reason
+            self._notify("blocked", f"지출 한도로 개입 보류: {reason}")
+            return None
+        reserved = False
+        with self._lock:
+            if self._meeting_cap > 0 and self._session_cost + est > self._meeting_cap:
+                over = self._session_cost
+            else:
+                self._session_cost += est
+                reserved = True
+                over = None
+        if not reserved:
+            msg = (f"이 회의의 facilitation 비용 ${over:.4f}이 회의당 캡 "
+                   f"${self._meeting_cap:.2f}에 도달 — 개입 보류")
+            self._skip_reason = msg
+            self._notify("capped", msg)
+            return None
+
+        try:
+            user = self._build_generate_prompt(p, cand, window_text, evidence)
+            text = _call_llm(model, p.system_prompt, user,
+                             max_tokens=pricing.FACILITATION_INTERVENTION_MAX_OUTPUT_TOKENS)
+            text = (text or "").strip()
+            if not text:
+                raise ValueError("빈 응답")
+        except Exception:
+            with self._lock:                     # 실패분 환불(캡을 헛되게 소진하지 않는다)
+                self._session_cost = max(0.0, self._session_cost - est)
+            return None
+
+        spend_guard.record(spend_guard.KIND_FACILITATION, est, model=model,
+                           units=1, unit_kind="intervention",
+                           note=spend_guard.session_note(self.session_id))
+        span = {}
+        if t0 is not None:
+            span = {"t0": round(float(t0), 2), "t1": round(float(t1 or t0), 2)}
+        return {
+            "type": "facilitation",
+            "id": f"fac_{int((self._clock() or 0) * 1000)}_{p.key}",
+            "persona": p.key,
+            "personaLabel": p.label,
+            "level": level,
+            "kind": p.kind,
+            "risk": p.risk,
+            "text": text[:1200],
+            "evidence": evidence,
+            "span": span,
+            "quote": str(cand.get("span") or "")[:200],
+            "confidence": float(cand.get("confidence") or 0.0),
+            # 이 개입 1건의 금액(실효 모델 단가). 러닝 미터가 이 값을 합산한다 —
+            # 개입은 시간에 비례하지 않아 분당 요율로는 표현할 수 없고, 추정 대신
+            # **실제 발생 건수**로 보여주기 위해 여기서 함께 보낸다(pricing 주석 참조).
+            "costUsd": round(est, 6),
+            # 라이브 웹검색은 M2 몫 — M1 에서는 항상 False 로 나가고, 팩트체커는
+            # 애초에 참견도 1(관찰)에 잠겨 있어 이 값이 화면에 쓰이지 않는다(§6).
+            "searched": False,
+            "draft": True,      # 항상 true — "초안/보조" 고정 라벨(§8)
+        }
+
+    def _build_generate_prompt(self, p: Persona, cand: Dict[str, Any],
+                               window_text: str,
+                               evidence: List[Dict[str, Any]]) -> str:
+        parts = [f"## 최근 발화\n{window_text}"]
+        if self.topic:
+            parts.append(f"## 회의 주제\n{self.topic}")
+        if cand.get("span"):
+            parts.append(f"## 이 발화가 근거입니다\n{cand['span']}")
+        if cand.get("trigger_type"):
+            parts.append(f"## 감지된 트리거\n{cand['trigger_type']}")
+        if evidence:
+            lines = [f"- {e['title']}: {e.get('snippet','')}" for e in evidence]
+            parts.append("## 사내 노트 근거(이것만 사실로 인용하세요)\n"
+                         + "\n".join(lines))
+        parts.append("위 내용에 대해 당신의 역할대로 2~4문장으로 한 가지만 말하세요.")
+        return "\n\n".join(parts)
+
+    def _dispatch(self, cand: Dict[str, Any], level: int, window_text: str,
+                  t0: Optional[float], t1: Optional[float]) -> str:
+        """참견도 채널 판정 → 생성·표시·보류·강등. 반환: 처리 결과 라벨(로그용).
+
+        예산이 소진되면 **생성 자체를 하지 않는다** — 화면에 못 낼 개입을 만드는 것은
+        돈만 쓰는 일이다(관찰 기록은 이미 남아 있다)."""
+        if level < COLLECT_LEVEL:
+            return "observe"                     # 0·1 은 기록만(이미 record 됨)
+        if float(cand.get("confidence") or 0.0) < self._min_conf:
+            return "low_confidence"
+        if self.budget_remaining() <= 0:
+            self._notify("budget",
+                         f"이번 회의 개입 예산 {self._budget}건을 모두 썼습니다 — "
+                         f"이후는 기록만 남습니다")
+            return "budget_exhausted"
+        item = self._generate(cand, window_text, t0, t1, level)
+        if item is None:
+            return "not_generated"
+        if level >= DISPLAY_LEVEL:
+            with self._lock:
+                self._shown_count += 1
+            self._emit(item)
+            return "shown"
+        with self._lock:                         # level == 2(소극) → [지금 점검] 대기
+            self._pending.append(item)
+        self._notify("pending", "점검할 항목이 있습니다",
+                     pending=self.pending_count())
+        return "pending"
 
     def _build_triage_prompt(self, window_text: str,
                              active: List[Persona]) -> tuple:
@@ -939,10 +1200,13 @@ class FacilitationOrchestrator:
                           active: List[Persona]) -> List[Dict[str, Any]]:
         """트리아지 응답 파싱 — 활성 페르소나 키가 아닌 항목(환각)은 버린다.
 
-        confidence 임계 필터는 M0 에 넣지 않는다 — 관찰모드의 목적이 임계값을
-        **실측으로 정하는 것**이고, 그 전에 임의 상수로 후보를 걸러내면 정할 근거가
-        사라진다(이 리포의 '실측 없는 랭킹 휴리스틱 금지' 원칙). 임계는 M1 에서
-        분포를 보고 페르소나별로 정한다."""
+        confidence 임계 필터는 **여기에 두지 않는다** — 관찰모드의 목적이 임계값을
+        실측으로 정하는 것이고, 파싱 단계에서 걸러내면 그 후보가 로그에서도 사라져
+        분포를 볼 수 없다(이 리포의 '실측 없는 랭킹 휴리스틱 금지' 원칙).
+        M1 은 임계를 **표시 단계**(`_dispatch`)로 옮겼다: 모든 후보를 기록한 뒤
+        `facilitation.min_confidence`(전역 1개, 기본 0.6) 미달은 화면에만 내지 않는다.
+        페르소나별 8개 상수를 지어내지 않은 것도 같은 이유다 — 나눌 근거는 로그에
+        쌓이는 confidence 분포이며, 그때 `Persona` 에 필드를 추가한다."""
         from meeting_minutes_app.meeting_pipeline.json_utils import parse_json_loose
         arr = parse_json_loose(raw, expect="list", default=None)
         if not isinstance(arr, list):

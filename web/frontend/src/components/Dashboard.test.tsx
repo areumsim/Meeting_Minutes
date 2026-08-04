@@ -203,3 +203,27 @@ describe("전체 삭제", () => {
     expect(msg).not.toContain("되돌릴 수 없");
   });
 });
+
+describe("목록 점진 렌더링 — 수백 건 누적에도 첫 화면이 가볍다", () => {
+  it("50건까지만 그리고, [더 보기]가 남은 개수를 알린다(조용한 절단 금지)", async () => {
+    api.getSessions.mockResolvedValue(
+      Array.from({ length: 120 }, (_, i) => session({ id: `s${i}`, title: `회의 ${i}` })),
+    );
+    renderDash();
+    await screen.findByText("회의 0");
+    expect(screen.getAllByRole("heading", { level: 3 })).toHaveLength(50);
+    const more = screen.getByRole("button", { name: /더 보기 \(70개 남음\)/ });
+    await userEvent.click(more);
+    expect(screen.getAllByRole("heading", { level: 3 })).toHaveLength(100);
+    await userEvent.click(screen.getByRole("button", { name: /더 보기 \(20개 남음\)/ }));
+    expect(screen.getAllByRole("heading", { level: 3 })).toHaveLength(120);
+    expect(screen.queryByRole("button", { name: /더 보기/ })).toBeNull();
+  });
+
+  it("50건 이하면 [더 보기]가 아예 없다", async () => {
+    api.getSessions.mockResolvedValue([session()]);
+    renderDash();
+    await screen.findByText("주간 회의");
+    expect(screen.queryByRole("button", { name: /더 보기/ })).toBeNull();
+  });
+});

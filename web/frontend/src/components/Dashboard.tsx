@@ -25,6 +25,11 @@ export default function Dashboard({ onSelectSession, onNewUpload, onNewRecord }:
   const [loadError, setLoadError] = useState<string>("");
   // 휴지통 보기. 삭제가 soft delete 로 바뀌었으므로 되돌릴 자리가 화면에 있어야 한다.
   const [showTrash, setShowTrash] = useState(false);
+  // 목록은 처음 N건만 그린다 — 전량 .map() 은 사내 1년 누적(수백~수천 건)에서
+  // 첫 렌더가 눈에 띄게 느려진다. 가상화 라이브러리는 넣지 않는다(포터블 오프라인
+  // 번들·의존성 0 정책, MiniGraph 선례) — [더 보기] 배치로 충분하다.
+  const PAGE = 50;
+  const [visibleCount, setVisibleCount] = useState(PAGE);
   const [notice, setNotice] = useState<{ text: string; undoId?: string } | null>(null);
   // 응답이 순서 뒤바뀌어 도착해도 마지막 요청의 결과만 반영한다.
   const reqSeqRef = useRef(0);
@@ -49,6 +54,7 @@ export default function Dashboard({ onSelectSession, onNewUpload, onNewRecord }:
   // 검색어는 디바운스한다 — 한글은 자모마다 change 가 떠서 "회의록" 입력에도
   // 요청이 7회 이상 나갔다. 유형 필터는 클릭이라 즉시 반영한다.
   useEffect(() => {
+    setVisibleCount(PAGE);   // 검색·필터·휴지통 전환 시 첫 페이지부터
     const t = setTimeout(() => { load(); }, search ? 300 : 0);
     return () => clearTimeout(t);
   }, [search, typeFilter, showTrash]);
@@ -245,7 +251,7 @@ export default function Dashboard({ onSelectSession, onNewUpload, onNewRecord }:
       ) : (
         <div className="grid gap-2.5">
           <AnimatePresence>
-            {sessions.map((s) => (
+            {sessions.slice(0, visibleCount).map((s) => (
               <motion.div
                 key={s.id}
                 initial={{ opacity: 0, y: 10 }}
@@ -318,6 +324,15 @@ export default function Dashboard({ onSelectSession, onNewUpload, onNewRecord }:
               </motion.div>
             ))}
           </AnimatePresence>
+          {/* 잘라낸 만큼을 숨기지 않고 알린다 — 조용한 절단은 "다 보여줬다"로 읽힌다 */}
+          {sessions.length > visibleCount && (
+            <button
+              onClick={() => setVisibleCount((n) => n + PAGE)}
+              className="mt-1 py-3 rounded-xl border border-brand-200 bg-white text-sm font-semibold text-brand-700 hover:bg-brand-50 transition-colors"
+            >
+              더 보기 ({sessions.length - visibleCount}개 남음)
+            </button>
+          )}
         </div>
       )}
     </div>

@@ -103,7 +103,7 @@ export default function Help({ onNavigate }: { onNavigate?: (v: NavTarget) => vo
       <Card icon={<Rocket size={16} />} title="가장 빠른 시작 — 딱 1가지만" badge={<Badge kind="required" />}>
         <p>시작에 <b>꼭 필요한 건 OpenAI API 키 하나</b>뿐입니다. 이것만 넣으면 회의록·요약·액션아이템이 자동으로 만들어져요.</p>
         <Steps items={[
-          <>왼쪽(모바일은 아래) 메뉴에서 <Tag>설정</Tag> 을 엽니다. — <GoBtn onClick={() => onNavigate?.("settings")}>바로 열기</GoBtn></>,
+          <>왼쪽 메뉴(모바일은 아래 <Tag>더보기</Tag>)에서 <Tag>설정</Tag> 을 엽니다. — <GoBtn onClick={() => onNavigate?.("settings")}>바로 열기</GoBtn></>,
           <><Tag>API 키</Tag> 항목의 <b>OpenAI API 키</b> 칸에 키(<span className="font-mono">sk-proj-…</span>)를 붙여넣습니다.</>,
           <><b>저장</b> 후 <b>연결 테스트</b>를 눌러 <span className="text-emerald-600 font-semibold inline-flex items-center gap-1"><CheckCircle size={13} />성공</span> 이 뜨는지 확인합니다.</>,
           <>끝! 이제 <Tag>업로드</Tag> 에 녹음 파일을 올리면 회의록이 만들어집니다.</>,

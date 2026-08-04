@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 /**
@@ -124,6 +124,41 @@ describe("SSL 검증 꺼짐 배너", () => {
     render(<App />);
     await screen.findByText("대시보드 자리");
     expect(screen.queryByText(/SSL 인증서 검증이 꺼져 있습니다/)).not.toBeInTheDocument();
+  });
+});
+
+describe("모바일 [더보기] 시트 — 모든 화면에 도달할 수 있어야 한다", () => {
+  /**
+   * 예전 탭바(6개)에는 회의 준비·회의 비서·지식그래프·도움말이 없어서 모바일에서
+   * 진입 경로가 0이었다 — 그 화면들을 여는 허브(도움말)조차 탭에 없었다.
+   * PRD §17 확정 "v1 범위 = 10화면 전부"는 모바일도 포함한다.
+   */
+  // jsdom 은 미디어쿼리를 적용하지 않아 데스크톱 사이드바의 같은 라벨 버튼도 DOM 에
+  // 함께 있다 — 시트(dialog) 안으로 범위를 좁혀서 조회한다.
+  it("더보기를 누르면 탭에 없는 화면 6개가 전부 뜬다", async () => {
+    mockHealth({});
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByText("대시보드 자리");
+    await user.click(screen.getByRole("button", { name: /더보기/ }));
+    // 시트는 접근 가능한 대화상자다(Escape·포커스 트랩은 Modal 계약 테스트가 고정)
+    const sheet = within(screen.getByRole("dialog"));
+    for (const label of ["텍스트 분석", "회의 준비", "회의 비서", "지식그래프", "도움말", "설정"]) {
+      expect(sheet.getByRole("button", { name: label })).toBeInTheDocument();
+    }
+  });
+
+  it("항목을 고르면 시트가 닫히고 그 화면으로 이동한다", async () => {
+    mockHealth({});
+    const user = userEvent.setup();
+    render(<App />);
+    await screen.findByText("대시보드 자리");
+    await user.click(screen.getByRole("button", { name: /더보기/ }));
+    const sheet = within(screen.getByRole("dialog"));
+    await user.click(sheet.getByRole("button", { name: "도움말" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    // 도움말 화면이 실제로 로드된다(지연 로드 — 화면 고유 문구로 확인)
+    expect(await screen.findByText(/사용법|자주 묻는/)).toBeInTheDocument();
   });
 });
 

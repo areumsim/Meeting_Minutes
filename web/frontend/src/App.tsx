@@ -1,8 +1,9 @@
 import React, { useState, useEffect, lazy, Suspense } from "react";
-import { Mic, FileAudio, List, Settings, FileText, MessageCircleQuestion, ClipboardList, HelpCircle, Network, CalendarClock, Loader2, PanelLeftClose, PanelLeftOpen } from "lucide-react";
+import { Mic, FileAudio, List, Settings, FileText, MessageCircleQuestion, ClipboardList, HelpCircle, Network, CalendarClock, Loader2, PanelLeftClose, PanelLeftOpen, MoreHorizontal } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import Dashboard from "./components/Dashboard";
 import Onboarding from "./components/Onboarding";
+import Modal from "./components/ui/Modal";
 // 초기 로딩 번들을 줄이기 위해 대시보드(기본 화면)·온보딩 외 뷰는 지연 로드(code splitting).
 const Recorder = lazy(() => import("./components/Recorder"));
 const SessionDetail = lazy(() => import("./components/SessionDetail"));
@@ -18,6 +19,12 @@ import { getApiKey, getConfig, isPackagedMode } from "./lib/api";
 
 type View = "dashboard" | "recorder" | "upload" | "text" | "wiki" | "prep" | "assistant" | "graph" | "help" | "detail" | "settings";
 
+/** 모바일 하단 탭에 직접 없는 화면 — [더보기] 시트로 연다.
+ *  이 목록이 없던 동안 회의 준비·회의 비서·도움말은 모바일에서 진입 경로가 0이었다
+ *  (도움말이 나머지를 여는 허브였는데 그 도움말이 탭바에 없었다). PRD §17 확정
+ *  "v1 범위 = 10화면 전부"는 모바일도 포함한다. */
+const MORE_VIEWS: View[] = ["text", "prep", "assistant", "graph", "help", "settings"];
+
 export default function App() {
   const [viewState, setViewState] = useState<View>("dashboard");
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
@@ -30,6 +37,7 @@ export default function App() {
   // 내용이 검증 없는 TLS 로 나간다 — truststore 가 있으니 대개 되돌릴 수 있다.
   const [sslInsecure, setSslInsecure] = useState(false);
   const [showOnboarding, setShowOnboarding] = useState(false);
+  const [moreOpen, setMoreOpen] = useState(false);    // 모바일 [더보기] 시트
   const [graphQuery, setGraphQuery] = useState("");   // 위키링크로 지식그래프 진입 시 초기 검색어
   // 데스크톱 사이드바 접기/펴기 (localStorage로 상태 유지)
   const [collapsed, setCollapsed] = useState(() => localStorage.getItem("SIDEBAR_COLLAPSED") === "1");
@@ -142,7 +150,9 @@ export default function App() {
             <div className="w-10 h-10 bg-brand-950 rounded-xl flex items-center justify-center text-white shadow-lg shadow-brand-900/20 shrink-0">
               <Mic size={20} />
             </div>
-            {!collapsed && <h1 className="font-sans font-bold text-xl tracking-tight">AI Minutes</h1>}
+            {/* 시각용 타이틀 — 문서 h1 은 main 쪽 sr-only 하나만 둔다(사이드바는
+                모바일에서 display:none 이라 여기 h1 을 두면 모바일엔 h1 이 없어진다). */}
+            {!collapsed && <div aria-hidden="true" className="font-sans font-bold text-xl tracking-tight">AI Minutes</div>}
             <button
               onClick={toggleCollapsed}
               title={collapsed ? "사이드바 펼치기" : "사이드바 접기"}
@@ -171,18 +181,47 @@ export default function App() {
         </div>
       </nav>
 
-      {/* Bottom Tab Bar (iPhone / Mobile) */}
+      {/* Bottom Tab Bar (iPhone / Mobile) — 주 흐름 4개 + [더보기].
+          예전 6탭에는 회의 준비·회의 비서·지식그래프·도움말이 아예 없어서 모바일에서
+          도달 불가였다(도움말이 그 화면들을 여는 허브였는데 도움말도 탭에 없었다). */}
       <nav className="md:hidden fixed bottom-0 left-0 right-0 bg-white/90 backdrop-blur-xl border-t border-brand-200 z-50 flex items-center justify-around pb-[env(safe-area-inset-bottom,0px)] pt-1 px-1 shadow-[0_-10px_30px_rgba(0,0,0,0.05)]">
         <TabItem icon={<List size={20} />} label="홈" active={view === "dashboard"} onClick={() => setView("dashboard")} />
         <TabItem icon={<Mic size={20} />} label="녹음" active={view === "recorder"} onClick={() => setView("recorder")} />
         <TabItem icon={<FileAudio size={20} />} label="업로드" active={view === "upload"} onClick={() => setView("upload")} />
-        <TabItem icon={<FileText size={20} />} label="텍스트" active={view === "text"} onClick={() => setView("text")} />
         <TabItem icon={<MessageCircleQuestion size={20} />} label="위키" active={view === "wiki"} onClick={() => setView("wiki")} />
-        <TabItem icon={<Settings size={20} />} label="설정" active={view === "settings"} onClick={() => setView("settings")} />
+        <TabItem icon={<MoreHorizontal size={20} />} label="더보기"
+          active={MORE_VIEWS.includes(view)} expanded={moreOpen}
+          onClick={() => setMoreOpen(true)} />
       </nav>
+
+      {/* 모바일 [더보기] 시트 — 탭에 없는 화면 전부가 여기서 열린다 */}
+      {moreOpen && (
+        <Modal labelledBy="more-sheet-title" onClose={() => setMoreOpen(false)} closeOnBackdrop
+          overlayClassName="md:hidden fixed inset-0 z-[100] flex items-end justify-center bg-black/40"
+          panelClassName="w-full bg-white rounded-t-2xl shadow-2xl p-4 pb-[calc(env(safe-area-inset-bottom,0px)+1.25rem)]">
+          <h2 id="more-sheet-title" className="text-sm font-bold text-brand-500 px-1 mb-3">더보기</h2>
+          <div className="grid grid-cols-3 gap-2">
+            <SheetItem icon={<FileText size={22} />} label="텍스트 분석" active={view === "text"}
+              onClick={() => { setMoreOpen(false); setView("text"); }} />
+            <SheetItem icon={<ClipboardList size={22} />} label="회의 준비" active={view === "prep"}
+              onClick={() => { setMoreOpen(false); setView("prep"); }} />
+            <SheetItem icon={<CalendarClock size={22} />} label="회의 비서" active={view === "assistant"}
+              onClick={() => { setMoreOpen(false); setView("assistant"); }} />
+            <SheetItem icon={<Network size={22} />} label="지식그래프" active={view === "graph"}
+              onClick={() => { setMoreOpen(false); openGraphNav(); }} />
+            <SheetItem icon={<HelpCircle size={22} />} label="도움말" active={view === "help"}
+              onClick={() => { setMoreOpen(false); setView("help"); }} />
+            <SheetItem icon={<Settings size={22} />} label="설정" active={view === "settings"}
+              onClick={() => { setMoreOpen(false); setView("settings"); }} />
+          </div>
+        </Modal>
+      )}
 
       {/* Main Content */}
       <main className={`flex-1 w-full ${collapsed ? "md:ml-20" : "md:ml-64"} p-4 md:p-8 lg:p-12 pt-[calc(env(safe-area-inset-top,0px)+1rem)] relative transition-[margin] duration-200`}>
+        {/* 문서의 유일한 h1 — 모든 레이아웃(모바일 포함)에서 존재한다.
+            각 화면의 제목은 h2 부터 시작한다. */}
+        <h1 className="sr-only">AI Minutes — 회의록 자동화</h1>
         {configError && (
           <div className="mb-4 rounded-xl border border-red-300 bg-red-50 text-red-800 px-4 py-3 text-sm">
             <div>
@@ -254,6 +293,8 @@ function NavItem({ icon, label, active, onClick, collapsed }: { icon: React.Reac
     <button
       onClick={onClick}
       title={collapsed ? label : undefined}
+      aria-label={collapsed ? label : undefined}
+      aria-current={active ? "page" : undefined}
       className={`w-full flex items-center ${collapsed ? "justify-center px-2" : "gap-3 px-4"} py-3 rounded-xl transition-all duration-300 group ${
         active
           ? "bg-brand-900 text-white font-semibold shadow-lg shadow-brand-900/10"
@@ -268,18 +309,38 @@ function NavItem({ icon, label, active, onClick, collapsed }: { icon: React.Reac
   );
 }
 
-function TabItem({ icon, label, active, onClick }: { icon: React.ReactNode; label: string; active: boolean; onClick: () => void }) {
+function TabItem({ icon, label, active, onClick, expanded }: { icon: React.ReactNode; label: string; active: boolean; onClick: () => void; expanded?: boolean }) {
   return (
     <button
       onClick={onClick}
+      aria-current={active && expanded === undefined ? "page" : undefined}
+      // [더보기]만 시트를 여는 버튼이라 페이지가 아니라 팝업 시맨틱을 갖는다
+      aria-haspopup={expanded !== undefined ? "dialog" : undefined}
+      aria-expanded={expanded}
       className={`flex-1 flex flex-col items-center justify-center pt-2 pb-1 gap-1 rounded-2xl transition-all duration-300 relative ${
-        active ? "text-brand-900" : "text-brand-400 hover:text-brand-600"
+        active ? "text-brand-900" : "text-brand-500 hover:text-brand-700"
       }`}
     >
       <div className={`p-1.5 rounded-xl transition-all duration-300 ${active ? "bg-brand-100 scale-110" : ""}`}>
         {icon}
       </div>
-      <span className={`text-[10px] font-medium transition-all duration-300 ${active ? "font-bold" : ""}`}>{label}</span>
+      <span className={`text-[11px] font-medium transition-all duration-300 ${active ? "font-bold" : ""}`}>{label}</span>
+    </button>
+  );
+}
+
+/** [더보기] 시트의 항목 — 탭과 같은 시각 언어(아이콘 위, 라벨 아래). */
+function SheetItem({ icon, label, active, onClick }: { icon: React.ReactNode; label: string; active: boolean; onClick: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      aria-current={active ? "page" : undefined}
+      className={`flex flex-col items-center justify-center gap-1.5 py-3.5 rounded-xl transition-colors ${
+        active ? "bg-brand-900 text-white font-semibold" : "bg-brand-50 text-brand-700 hover:bg-brand-100"
+      }`}
+    >
+      {icon}
+      <span className="text-xs font-medium">{label}</span>
     </button>
   );
 }

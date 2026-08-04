@@ -1250,6 +1250,145 @@ class TestMidwayBrief:
         assert "def _announce_facilitation" in src
 
 
+class TestMuteStopsSpending:
+    """[이번 회의 끔] 은 **표시가 아니라 생성**을 멈춘다.
+
+    초기 M1 구현은 프런트에서만 카드를 버려서, 끈 뒤에도 서버가 회의 끝까지 Tier 1
+    개입과 중간 요약을 만들고 과금했다. 게다가 러닝 미터는 버려진 카드의 costUsd 를
+    더하지 않아 **표시 금액이 실제 과금보다 작아졌다** — CLAUDE.md 가 금지하는 갈라짐.
+
+    이 클래스가 고정하는 경계: 멈추는 것(개입 생성·요약 생성·대기분) vs 계속하는 것
+    (Tier 0 트리아지와 관찰 로그 — 사용자가 끈 것은 화면 개입이지 측정이 아니다).
+    """
+
+    TEXT = "이 결정의 담당자와 기한이 아직 비어 있습니다."
+    BRIEF = {"points": ["출시 일정"], "decisions": [], "actions": [],
+             "open_questions": []}
+
+    def _values(self, **overrides):
+        values = {"facilitation.enabled": True,
+                  "facilitation.triage_period_sec": 0.0,
+                  "facilitation.brief_period_sec": 600,
+                  "facilitation.brief_min_new_chars": 100,
+                  "facilitation.max_cost_usd_per_meeting": 0.0,
+                  "facilitation.min_confidence": 0.6,
+                  "facilitation.max_interventions_per_session": 12}
+        for k in personas.PERSONAS:
+            values[f"facilitation.personas.{k}.level"] = 1
+        values["facilitation.personas.scribe.level"] = 3
+        values["facilitation.personas.summarizer.level"] = 3
+        values.update(overrides)
+        return values
+
+    def _llm(self, monkeypatch):
+        """트리아지 / 개입 생성 / 중간 요약을 system 프롬프트로 갈라 센다."""
+        calls = []
+
+        def _fake(model, system, user, max_tokens=None):
+            if "트리아지" in system:
+                calls.append("triage")
+                return json.dumps([{"persona": "scribe", "trigger_type": "missing",
+                                    "confidence": 0.9, "span": user[-40:],
+                                    "need_search": False}], ensure_ascii=False)
+            if "중간 요약" in system:
+                calls.append("brief")
+                return json.dumps(self.BRIEF, ensure_ascii=False)
+            calls.append("generate")
+            return self.TEXT
+
+        monkeypatch.setattr(facilitation, "_call_llm", _fake)
+        return calls
+
+    def _orch(self, fac_db, session, now, shown, status=None):
+        return FacilitationOrchestrator(
+            session_id=session, clock=lambda: now["t"],
+            on_intervention=shown.append,
+            on_status=(status.append if status is not None else None),
+            db_path=fac_db)
+
+    def test_mute_stops_intervention_generation_and_its_charge(
+            self, cfg, fac_db, monkeypatch):
+        """끈 뒤에는 생성 LLM 이 돌지 않고 과금도 늘지 않는다."""
+        cfg(self._values())
+        calls = self._llm(monkeypatch)
+        now, shown = {"t": 0.0}, []
+        orch = self._orch(fac_db, "m1", now, shown)
+        # 시간 게이트를 우회해 트리아지 2회를 결정적으로 돌린다(이 파일의 기존 패턴 —
+        # TestCostMetering 참고). 검증 대상은 게이트가 아니라 mute 의 효과다.
+        active = orch.active_personas()
+
+        orch._triage_task(
+            [facilitation.Utterance("결정은 났는데 담당자가 없습니다.", 0.0, 1.0, False)],
+            active)
+        assert len(shown) == 1                       # 끄기 전에는 카드가 뜬다
+        assert calls.count("generate") == 1
+        spent_before = usage_log.month_to_date_spend()
+
+        orch.mute()
+        orch._triage_task(
+            [facilitation.Utterance("다른 결정도 담당자가 없습니다.", 2.0, 3.0, False)],
+            active)
+        orch.shutdown(wait=True)
+
+        assert len(shown) == 1                       # 새 카드 없음
+        assert calls.count("generate") == 1          # 생성 LLM 호출 없음
+        # 트리아지(관찰)는 계속된다 — 끈 것은 화면 개입이지 측정이 아니다
+        assert calls.count("triage") == 2
+        rows = facilitation.observations(session_id="m1")
+        assert len(rows) == 2                        # 판정은 그대로 기록된다
+        # 늘어난 지출은 트리아지 1회분뿐(개입 생성분이 아니다)
+        from meeting_minutes_app.common import pricing
+        delta = usage_log.month_to_date_spend() - spent_before
+        assert delta == pytest.approx(
+            pricing.facilitation_triage_call_cost("gpt-4o-mini"), abs=1e-9)
+
+    def test_mute_stops_periodic_brief(self, cfg, fac_db, monkeypatch):
+        """중간 요약도 멈춘다 — 아무도 안 보는 요약에 돈을 쓰지 않는다."""
+        cfg(self._values(**{f"facilitation.personas.{k}.level": 0
+                            for k in personas.PERSONAS}
+                         | {"facilitation.personas.summarizer.level": 3}))
+        calls = self._llm(monkeypatch)
+        now, shown = {"t": 0.0}, []
+        orch = self._orch(fac_db, "m2", now, shown)
+
+        orch.offer_segment("회의를 시작합니다.")     # 주기 시작점
+        orch.mute()
+        now["t"] += 601.0
+        orch.offer_segment("가" * 700)               # 주기·내용 게이트 모두 충족
+        orch.shutdown(wait=True)
+
+        assert calls == [] and shown == []
+        assert orch.brief_enabled() is False
+        # 버튼을 눌러도 사유를 돌려주고 과금하지 않는다(조용히 실패 금지)
+        assert "껐습니다" in orch.brief_now()
+        assert usage_log.month_to_date_spend() == 0.0
+
+    def test_mute_drops_pending_items(self, cfg, fac_db, monkeypatch):
+        """대기 중(참견도 2)이던 개입도 버린다 — 방출해도 화면에 안 보인다."""
+        cfg(self._values(**{"facilitation.personas.scribe.level": 2}))
+        self._llm(monkeypatch)
+        now, shown = {"t": 0.0}, []
+        orch = self._orch(fac_db, "m3", now, shown)
+        orch.offer_segment("결정은 났는데 담당자가 없습니다.")
+        orch.shutdown(wait=True)
+        assert orch.pending_count() == 1
+
+        orch.mute()
+        assert orch.pending_count() == 0
+        assert orch.check_now() == [] and shown == []
+        assert orch.status()["muted"] is True
+
+    def test_mute_ws_message_is_wired_in_both_loops(self):
+        """프런트가 서버에 알리지 않으면 이 모든 게 무의미하다 — 배선을 코드로 고정."""
+        from pathlib import Path
+        src = Path("web/backend/api/realtime.py").read_text(encoding="utf-8")
+        assert src.count('"facilitation_mute"') == 2   # WS 경로 + HTTP 경로
+        assert "def _facilitation_mute" in src
+        front = Path("web/frontend/src/components/Recorder.tsx").read_text(
+            encoding="utf-8")
+        assert 'type: "facilitation_mute"' in front
+
+
 class TestHumanFeedbackLabels:
     """카드의 [✓ 확인]/[✕ 닫기] 가 §15 오탐률 실측의 **사람 라벨**로 남는지 고정.
 

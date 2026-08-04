@@ -449,6 +449,8 @@ class BrowserRealtimeSession:
                                 self._facilitation_feedback(msg)
                             elif msg.get("type") == "facilitation_brief_now":
                                 self._facilitation_brief_now()
+                            elif msg.get("type") == "facilitation_mute":
+                                self._facilitation_mute()
                             elif msg.get("type") == "audio":
                                 # base64 인코딩된 오디오
                                 if self._diarize_pp:
@@ -837,6 +839,21 @@ class BrowserRealtimeSession:
             else:
                 self._emit_facilitation_status(
                     {"kind": "briefing", "message": "지금까지 내용을 정리하는 중…"})
+        except Exception:
+            pass
+
+    def _facilitation_mute(self) -> None:
+        """[이번 회의 끔] — **서버에서 생성을 멈춘다**(프런트 표시만 끄지 않는다).
+
+        프런트만 카드를 버리면 서버는 회의 끝까지 Tier 1 개입과 중간 요약을 계속
+        만들어 과금한다 — 아무도 볼 수 없는 산출물에 돈을 쓰는 것이고, 게다가 러닝
+        미터는 버려진 카드의 금액을 합산하지 않아 **표시 금액이 실제 과금보다
+        작아진다**(CLAUDE.md 가 금지하는 갈라짐). 관찰 로그(트리아지)는 계속된다 —
+        사용자가 끈 것은 화면 개입이지 측정이 아니다(facilitation.mute 독스트링)."""
+        if self._facilitator is None:
+            return
+        try:
+            self._facilitator.mute()
         except Exception:
             pass
 
@@ -1623,6 +1640,8 @@ class BrowserRealtimeSession:
                         self._facilitation_feedback(msg)
                     elif msg.get("type") == "facilitation_brief_now":
                         self._facilitation_brief_now()
+                    elif msg.get("type") == "facilitation_mute":
+                        self._facilitation_mute()
                     elif msg.get("type") == "audio":
                         _b = base64.b64decode(msg["data"])
 

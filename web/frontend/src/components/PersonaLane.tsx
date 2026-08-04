@@ -47,8 +47,14 @@ export default function PersonaLane({
         </span>
 
         {muted ? (
-          <span className="shrink-0 mt-1 text-[11px] bg-white border border-zinc-200 text-zinc-500 px-2 py-0.5 rounded-full">
-            이번 회의에는 표시하지 않습니다
+          /* 서버가 개입·중간 요약 생성을 멈춘 상태다(표시만 끄는 것이 아니다) —
+             문구도 그렇게 적는다. 다르게 적으면 껐다고 믿은 뒤에도 비용이 남는 줄
+             알거나, 반대로 판정 기록까지 멈춘 줄 안다. */
+          <span
+            className="shrink-0 mt-1 text-[11px] bg-white border border-zinc-200 text-zinc-500 px-2 py-0.5 rounded-full"
+            title="개입 카드와 중간 요약 생성을 멈춰 추가 비용이 발생하지 않습니다. 판정 기록(오탐률 실측용)은 계속됩니다. 다음 녹음에서 다시 켜집니다."
+          >
+            이번 회의 끔 — 개입 생성을 멈췄습니다
           </span>
         ) : (
           <>
@@ -103,7 +109,7 @@ export default function PersonaLane({
             type="button"
             onClick={onMute}
             className="shrink-0 mt-1 text-[11px] text-zinc-400 hover:text-zinc-700 font-medium whitespace-nowrap"
-            title="이번 회의에서는 페르소나 카드를 더 띄우지 않습니다(설정은 그대로)"
+            title="이번 회의의 개입 카드·중간 요약 생성을 멈춥니다 — 추가 비용이 발생하지 않습니다(설정은 그대로, 다음 녹음에서 다시 켜짐)"
           >
             이번 회의 끔
           </button>

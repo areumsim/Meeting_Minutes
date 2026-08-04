@@ -858,6 +858,9 @@ class FacilitationOrchestrator:
         self._skip_reason = ""
         self._shown_count = 0                    # 화면에 낸 개입 수(예산 대비)
         self._pending: List[Dict[str, Any]] = []  # 참견도 2(소극) 대기 — [지금 점검]에서 방출
+        #: 사용자가 이번 회의의 카드 표시를 껐는가(`mute()`). 표시만이 아니라
+        #: **생성을 멈춘다** — 이유는 mute() 독스트링 참조.
+        self._muted = False
 
         #: 중간 요약(summarizer) 상태. 주기·내용 게이트는 트리아지와 **같은 이유**로
         #: 둔다: 시간만 보면 침묵 구간에 빈 요약이 나가고, 내용만 보면 발화량이 비용을
@@ -907,8 +910,42 @@ class FacilitationOrchestrator:
         return persona_level(BRIEF_PERSONA)
 
     def brief_enabled(self) -> bool:
-        return (self.enabled and self._brief_period > 0
+        return (self.enabled and not self._muted and self._brief_period > 0
                 and self.brief_level() >= COLLECT_LEVEL)
+
+    @property
+    def muted(self) -> bool:
+        return self._muted
+
+    def mute(self) -> None:
+        """이번 회의의 화면 개입을 끈다 — **생성 자체를 멈춰 과금을 끊는다**.
+
+        표시만 끄면 안 되는 이유는 이 클래스가 이미 두 번 인정한 것과 같다:
+        `_dispatch` 는 화면 채널이 없을 때("no_channel")도, 예산이 소진됐을 때
+        ("budget_exhausted")도 **생성을 하지 않는다** — 아무도 볼 수 없는 개입에
+        Tier 1 모델 비용을 쓰는 것은 순손실이기 때문이다. 사용자가 끈 회의도 정확히
+        그 상태인데, 초기 M1 구현은 프런트에서만 카드를 버려서 서버가 회의 끝까지
+        계속 생성하고 과금했다(게다가 러닝 미터는 버려진 카드의 금액을 더하지 않아
+        **표시 금액이 실제 과금보다 작아졌다** — 이 리포가 금지하는 바로 그것).
+
+        멈추는 것: Tier 1 개입 생성 · 중간 요약 생성 · 대기 중인 개입.
+        계속하는 것: Tier 0 트리아지와 관찰 로그 기록. 오탐률 실측(§15)이 이 기능의
+        목적이고, 트리아지는 시간 게이트·회의당 캡으로 이미 상한이 잡혀 있으며
+        사용자가 끈 것은 '화면 개입'이지 '측정'이 아니다. 이 구분은 화면 문구에도
+        그대로 적는다 — 다르게 적으면 끈 줄 알았던 비용이 남는다.
+
+        되돌리는 함수는 두지 않는다. 껐다 켜기는 새 녹음에서 하면 되고, 세션 중
+        토글은 "껐는데 왜 또 뜨냐"를 만든다(§19.4 업계 교훈).
+        """
+        with self._lock:
+            self._muted = True
+            # 이미 생성된(=돈이 나간) 대기분도 버린다. 화면이 muted 라 방출해도
+            # 보이지 않으므로 들고 있을 이유가 없다.
+            self._pending = []
+        self._notify(
+            "muted",
+            "이번 회의에는 페르소나 카드를 띄우지 않습니다 — 개입·중간 정리 생성을 "
+            "멈췄습니다(판정 기록은 계속됩니다).")
 
     def status(self) -> Dict[str, Any]:
         return {
@@ -921,6 +958,7 @@ class FacilitationOrchestrator:
             "session_cost_usd": round(self._session_cost, 6),
             "skip_reason": self._skip_reason,
             # M1 화면 채널 상태 — 프런트 배지·안내에 그대로 쓴다.
+            "muted": self._muted,
             "shown_count": self._shown_count,
             "pending_count": self.pending_count(),
             "budget": self._budget,
@@ -1025,6 +1063,8 @@ class FacilitationOrchestrator:
         돌지 않으며 (c) 사유를 항상 화면에 돌려준다(조용히 실패 금지)."""
         if self._pool is None:
             return "회의 진행 페르소나가 꺼져 있습니다"
+        if self._muted:
+            return "이번 회의는 페르소나를 껐습니다 — 새 녹음에서 다시 켜집니다"
         if self.brief_level() < COLLECT_LEVEL:
             return "중간 요약 참견도가 0·1(관찰)이라 요약을 만들지 않습니다"
         now = float(self._clock())
@@ -1498,6 +1538,10 @@ class FacilitationOrchestrator:
             # 같은 이유의 연장이다 — 아무도 볼 수 없는 개입에 Tier 1 모델 비용을 쓰는
             # 것은 순손실이고, 리플레이는 "트리아지 비용만 든다"가 계약이다.
             return "no_channel"
+        if self._muted:
+            # 사용자가 이번 회의를 껐다 = 채널이 있어도 아무것도 표시되지 않는다.
+            # 위와 **같은 상태**이므로 같은 판정을 한다(mute() 독스트링 참조).
+            return "muted"
         if level < COLLECT_LEVEL:
             return "observe"                     # 0·1 은 기록만(이미 record 됨)
         if float(cand.get("confidence") or 0.0) < self._min_conf:

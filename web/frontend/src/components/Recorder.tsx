@@ -313,13 +313,23 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
     catch (e) { setFacBriefBusy(false); }
   };
 
-  /** 이번 회의 끔 — 설정은 그대로 두고 이 세션의 표시만 멈춘다(§19.4 업계 교훈). */
+  /**
+   * 이번 회의 끔 — 설정은 그대로 두고 이 세션의 개입을 멈춘다(§19.4 업계 교훈).
+   *
+   * **서버에도 반드시 알린다.** 프런트에서 카드만 버리면 서버는 회의 끝까지 개입·
+   * 중간 요약을 계속 생성해 과금하고, 그 금액은 아래 러닝 미터(setFacCostUsd)에
+   * 잡히지 않아 표시 금액이 실제보다 작아진다. 서버가 생성을 멈추는 것이 본체이고
+   * 이 로컬 상태는 이미 도착한 카드를 치우는 것뿐이다.
+   */
   const facMute = () => {
     facMutedRef.current = true;
     setFacMuted(true);
     setInterventions([]);
     setFacPending(0);
     setFacStatus(null);
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    try { ws.send(JSON.stringify({ type: "facilitation_mute" })); } catch (e) {}
   };
 
   /**

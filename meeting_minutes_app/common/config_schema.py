@@ -275,9 +275,9 @@ SCHEMA: List[Dict[str, Any]] = [
         "tier": "advanced",
         "advanced": True,
         "label": "회의 진행 페르소나 (실험 · 기본 꺼짐)",
-        "desc": "실시간 녹음 중 여러 관점의 페르소나(촉진자·서기·팩트체커 등)가 놓친 논점·모호한 정의·사실 오류 후보를 판정하는 보조 기능입니다. 현재는 관찰모드(M0) — 켜도 화면에는 아무것도 뜨지 않고 판정을 기록만 합니다(기록으로 오탐률을 실측한 뒤에 화면 개입을 엽니다). 기록은 `meeting-minutes facilitation-report` 로 봅니다. 트리아지 호출마다 소액의 LLM 비용이 발생하며 지출 한도를 지납니다. 페르소나별 참견도(0=금지~5)는 config.json 의 facilitation.personas 에서 조정합니다.",
+        "desc": "실시간 녹음 중 여러 관점의 페르소나(촉진자·서기·팩트체커 등)가 놓친 논점·모호한 정의·사실 오류 후보를 짚어 주는 보조 기능입니다. 표시 여부는 아래 [페르소나별 참견도]에서 페르소나마다 정합니다 — 0=금지(비용 0), 1=관찰(기록만), 2=녹음 화면의 [지금 점검]을 누를 때 모아 보기, 3=옆 카드 자동 표시(무음). 위험 페르소나(팩트체커·비판자)는 오탐률을 실측하기 전까지 관찰 이상으로 올릴 수 없습니다. 기록은 `meeting-minutes facilitation-report` 로 봅니다. 판정·개입마다 LLM 비용이 발생하며 지출 한도와 회의당 캡을 지납니다.",
         "fields": [
-            {"section": "facilitation", "key": "enabled", "label": "회의 진행 페르소나 사용", "type": "bool", "default": False, "desc": "기본 꺼짐. 켜면 녹음 중 일정 주기로 경량 LLM이 페르소나 개입 후보를 판정해 기록합니다(관찰모드 — 화면 표시 없음)."},
+            {"section": "facilitation", "key": "enabled", "label": "회의 진행 페르소나 사용", "type": "bool", "default": False, "desc": "기본 꺼짐. 켜면 녹음 중 일정 주기로 경량 LLM이 개입 후보를 판정합니다. 화면에 뜨는지는 페르소나별 참견도에 따릅니다(아래 표) — 전원 1(관찰)이면 기록만 남습니다."},
             {"section": "facilitation", "key": "max_level", "label": "참견도 전역 상한", "type": "number", "default": 3, "desc": "개별 페르소나 참견도가 아무리 높아도 이 값을 넘지 못합니다. 4(알림음)·5(음성)는 관리자가 열어야 합니다. 사내 배포 기본 3(무음)."},
             {"section": "facilitation", "key": "triage_model", "label": "트리아지(1차 선별) 모델", "type": "select", "default": "gpt-4o-mini", "options": [{"value": "gpt-4o-mini", "label": "gpt-4o-mini — 저렴·빠름 (권장)"}, {"value": "claude-haiku-4-5", "label": "claude-haiku-4-5 — Anthropic 키 필요"}], "desc": "매 주기 후보 판정에 쓰는 경량 모델 — 이 기능의 상시 비용을 결정합니다. claude 를 고르면 현재는 Claude 모델 설정(models.claude_model)이 대신 호출되며, 예상 비용·지출 한도도 그 모델 단가로 계산됩니다(기본값 claude-opus-4-8 이면 gpt-4o-mini 의 수십 배)."},
             {"section": "facilitation", "key": "triage_period_sec", "label": "트리아지 주기(초)", "type": "number", "default": 25, "desc": "이 간격마다 최대 1회 판정합니다(발화가 없으면 0회). 시간 기반이라 1시간 회의의 호출 수 상한이 고정됩니다(기본 25초 = 최대 ~144회)."},

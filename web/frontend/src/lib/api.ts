@@ -129,6 +129,44 @@ export const getConfigSchema = async (): Promise<any[] | null> => {
   return null;
 };
 
+/** 회의 진행 페르소나 1종 — 서버 레지스트리(personas.py)를 그대로 받는다. */
+export interface PersonaInfo {
+  key: string;
+  label: string;
+  role: string;
+  kind: string;
+  risk: "low" | "medium" | "high" | string;
+  evidence: string[];
+  /** 설정으로 넘을 수 없는 참견도 상한(위험 페르소나만, 없으면 null) */
+  hardCap: number | null;
+  defaultLevel: number;
+  /** config.json 에 적힌 값 */
+  configuredLevel: number;
+  /** 실제 적용되는 값(hardCap·전역 상한으로 내려간 결과) */
+  level: number;
+  model: string;
+}
+
+export interface FacilitationPersonas {
+  ok: boolean;
+  enabled: boolean;
+  maxLevel: number;
+  displayLevel: number;
+  collectLevel: number;
+  personas: PersonaInfo[];
+}
+
+// 페르소나 목록·참견도 — 프런트에 목록을 복사하지 않는다(서버 레지스트리가 정본).
+export const getFacilitationPersonas = async (): Promise<FacilitationPersonas | null> => {
+  if (!(await isPackagedMode())) return null;
+  try {
+    const res = await apiFetch("/api/facilitation/personas");
+    if (!res.ok) return null;
+    const d = await res.json();
+    return d?.ok ? d : null;
+  } catch { return null; }
+};
+
 // 연결 테스트 — 백엔드 엔드포인트 호출. { ok, message } (한국어) 반환.
 export const testOpenAIKey = async (): Promise<{ ok: boolean; message: string }> => {
   try {

@@ -921,6 +921,97 @@ class TestCostIsVisibleWhereItHappens:
             config_loader._cache = None
 
 
+class TestPersonaMatrixApi:
+    """설정 화면의 참견도 매트릭스가 읽는 API — 목록·상한·실효값의 단일 소스.
+
+    M0 부터 쓰던 config.json 은 전원 참견도 1(관찰)이라, 이 화면 없이는 기능을 켜도
+    화면에 아무것도 뜨지 않는다("켰는데 아무 일도 안 일어나는 토글" — 이 리포가 반복해서
+    없애온 함정). 그래서 목록을 프런트에 복사하지 않고 서버 레지스트리를 내려준다."""
+
+    def _client(self, tmp_path, monkeypatch, cfg_values):
+        import json as _json
+        from fastapi.testclient import TestClient
+        from meeting_minutes_app.common import config_loader
+        from web.backend.app import app
+
+        cfg_path = tmp_path / "config.json"
+        cfg_path.write_text(_json.dumps(cfg_values), encoding="utf-8")
+        monkeypatch.setattr(config_loader, "_CONFIG_PATH", cfg_path)
+        config_loader.reload()
+        return TestClient(app), cfg_path
+
+    def test_lists_every_persona_with_current_level(self, tmp_path, monkeypatch):
+        client, _ = self._client(tmp_path, monkeypatch, {
+            "facilitation": {"enabled": True, "max_level": 3,
+                             "personas": {"scribe": {"level": 3}}}})
+        try:
+            body = client.get("/api/facilitation/personas").json()
+            assert body["ok"] is True and body["enabled"] is True
+            keys = [p["key"] for p in body["personas"]]
+            assert keys == list(personas.PERSONAS)      # 8종 전부, 레지스트리 순서
+            row = {p["key"]: p for p in body["personas"]}
+            assert row["scribe"]["level"] == 3
+            assert row["facilitator"]["level"] == 1     # 미설정 = 관찰
+            # 프런트가 채널 경계를 상수로 복사하지 않게 함께 내려준다
+            assert body["displayLevel"] == facilitation.DISPLAY_LEVEL
+            assert body["collectLevel"] == facilitation.COLLECT_LEVEL
+        finally:
+            from meeting_minutes_app.common import config_loader
+            config_loader._cache = None
+
+    def test_risky_persona_reports_its_hard_cap_and_clamped_level(
+            self, tmp_path, monkeypatch):
+        """설정으로 5 를 적어도 실효값은 hard_cap 이다 — 화면이 그 차이를 보여줄 수 있어야
+        한다(적어둔 값과 적용값을 함께 준다)."""
+        client, _ = self._client(tmp_path, monkeypatch, {
+            "facilitation": {"enabled": True, "max_level": 5,
+                             "personas": {"fact_checker": {"level": 5}}}})
+        try:
+            row = {p["key"]: p for p in
+                   client.get("/api/facilitation/personas").json()["personas"]}
+            assert row["fact_checker"]["hardCap"] == 2
+            assert row["fact_checker"]["configuredLevel"] == 5
+            assert row["fact_checker"]["level"] == 2       # 코어 클램프와 같은 값
+            assert row["scribe"]["hardCap"] is None
+        finally:
+            from meeting_minutes_app.common import config_loader
+            config_loader._cache = None
+
+    def test_global_max_level_clamps_the_reported_level(self, tmp_path, monkeypatch):
+        client, _ = self._client(tmp_path, monkeypatch, {
+            "facilitation": {"enabled": True, "max_level": 1,
+                             "personas": {"scribe": {"level": 3}}}})
+        try:
+            body = client.get("/api/facilitation/personas").json()
+            row = {p["key"]: p for p in body["personas"]}
+            assert body["maxLevel"] == 1
+            assert row["scribe"]["configuredLevel"] == 3 and row["scribe"]["level"] == 1
+        finally:
+            from meeting_minutes_app.common import config_loader
+            config_loader._cache = None
+
+    def test_levels_round_trip_through_config_save(self, tmp_path, monkeypatch):
+        """화면은 점 있는 키로 저장한다 — 서버가 중첩 경로로 풀어 주는지 고정."""
+        import json as _json
+        client, cfg_path = self._client(tmp_path, monkeypatch, {
+            "facilitation": {"enabled": True, "max_level": 3}})
+        monkeypatch.setattr("web.backend.api.settings.CONFIG_PATH", cfg_path)
+        try:
+            res = client.put("/api/config", json={"facilitation": {
+                "personas.scribe.level": 3, "personas.critic.level": 0}})
+            assert res.status_code == 200, res.text
+            saved = _json.loads(cfg_path.read_text(encoding="utf-8"))
+            assert saved["facilitation"]["personas"]["scribe"]["level"] == 3
+            assert saved["facilitation"]["personas"]["critic"]["level"] == 0
+            # 저장 직후 조회가 같은 값을 보여야 한다(reload 훅)
+            row = {p["key"]: p for p in
+                   client.get("/api/facilitation/personas").json()["personas"]}
+            assert row["scribe"]["level"] == 3 and row["critic"]["level"] == 0
+        finally:
+            from meeting_minutes_app.common import config_loader
+            config_loader._cache = None
+
+
 class TestReplayPastMeetings:
     """지난 회의 전사로 관찰 데이터를 만든다 — 새 녹음 5건을 기다리지 않아도 M2 게이트를
     측정할 수 있다(지난 회의에는 대조 정답이 이미 있다)."""

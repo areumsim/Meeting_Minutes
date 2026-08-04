@@ -370,6 +370,54 @@ def cost_rates():
         raise HTTPException(status_code=500, detail=f"요율 로드 실패: {e}")
 
 
+@router.get("/facilitation/personas")
+def facilitation_personas():
+    """회의 진행 페르소나 8종 + 현재 참견도 — 설정 화면의 참견도 매트릭스용.
+
+    레지스트리(`wiki_core/personas.py`)를 그대로 내려준다 — 프런트에 페르소나 목록을
+    복사하면 페르소나를 추가할 때 두 곳이 갈라진다(이 리포에 단가 표 4곳·노트 판정
+    2곳이 갈라진 전례가 있다). 참견도의 **실효값**도 코어가 계산한 값을 쓴다
+    (hard_cap·max_level 클램프가 화면과 판정에서 갈라지면 안 된다)."""
+    try:
+        from meeting_minutes_app.common import config_loader as cfg
+        from meeting_minutes_app.wiki_core import facilitation as fac
+        from meeting_minutes_app.wiki_core import personas as pz
+
+        rows = []
+        for key, p in pz.PERSONAS.items():
+            # 설정에 적힌 값과 실제 적용값을 함께 준다 — 상한에 걸려 내려간 경우
+            # 화면이 "왜 3으로 안 올라가나"를 설명할 수 있어야 한다.
+            configured = cfg.get(f"facilitation.personas.{key}.level", p.default_level)
+            try:
+                configured = int(configured)
+            except (TypeError, ValueError):
+                configured = p.default_level
+            rows.append({
+                "key": key,
+                "label": p.label,
+                "role": p.role,
+                "kind": p.kind,
+                "risk": p.risk,
+                "evidence": list(p.evidence),
+                "hardCap": p.hard_cap,
+                "defaultLevel": p.default_level,
+                "configuredLevel": configured,
+                "level": fac.persona_level(key),
+                "model": fac.effective_persona_model(key),
+            })
+        return {
+            "ok": True,
+            "enabled": bool(cfg.get("facilitation.enabled", False)),
+            "maxLevel": int(cfg.get("facilitation.max_level", 3) or 3),
+            # 프런트가 '자동 표시'와 '모아 보기'의 경계를 상수로 복사하지 않게 한다.
+            "displayLevel": fac.DISPLAY_LEVEL,
+            "collectLevel": fac.COLLECT_LEVEL,
+            "personas": rows,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"페르소나 목록 로드 실패: {e}")
+
+
 def _note_ref(n) -> dict:
     """검색 결과 노트를 {title, path, score} 로 정규화(형태가 dict/obj 어느 쪽이든)."""
     def g(k, *alts):

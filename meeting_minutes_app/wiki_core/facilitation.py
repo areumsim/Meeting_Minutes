@@ -420,6 +420,29 @@ def report(session_id: Optional[str] = None,
     }
 
 
+def persona_level(key: str) -> int:
+    """실효 참견도 — config 값(기본 1 관찰)을 hard_cap·전역 max_level 로 클램프.
+
+    위험 페르소나는 설정만으로 hard_cap 을 넘길 수 없다(PRD §4 수용 기준).
+    오케스트레이터 밖(설정 화면의 참견도 매트릭스)에서도 이 함수를 쓴다 — 화면이
+    클램프를 따로 계산하면 "3으로 올렸는데 안 뜬다"가 되고, 그건 이 리포가 반복해서
+    없애온 갈라짐이다(단가 표 4곳·노트 판정 2곳 전례)."""
+    p = get_persona(key)
+    if p is None:
+        return 0
+    try:
+        lvl = int(_c(f"facilitation.personas.{key}.level", OBSERVE_LEVEL))
+    except (TypeError, ValueError):
+        lvl = OBSERVE_LEVEL
+    try:
+        max_level = int(_c("facilitation.max_level", 3))
+    except (TypeError, ValueError):
+        max_level = 3
+    if p.hard_cap is not None:
+        lvl = min(lvl, p.hard_cap)
+    return max(0, min(lvl, max_level))
+
+
 def effective_persona_model(key: str) -> str:
     """페르소나 Tier 1 생성 모델(실효값). config > personas.py 기본 > 실효 해석 순.
 
@@ -752,23 +775,8 @@ class FacilitationOrchestrator:
         return self._pool is not None
 
     def persona_level(self, key: str) -> int:
-        """실효 참견도 — config 값(기본 1 관찰)을 hard_cap·전역 max_level 로 클램프.
-
-        위험 페르소나는 설정만으로 hard_cap 을 넘길 수 없다(PRD §4 수용 기준)."""
-        p = get_persona(key)
-        if p is None:
-            return 0
-        try:
-            lvl = int(_c(f"facilitation.personas.{key}.level", OBSERVE_LEVEL))
-        except (TypeError, ValueError):
-            lvl = OBSERVE_LEVEL
-        try:
-            max_level = int(_c("facilitation.max_level", 3))
-        except (TypeError, ValueError):
-            max_level = 3
-        if p.hard_cap is not None:
-            lvl = min(lvl, p.hard_cap)
-        return max(0, min(lvl, max_level))
+        """실효 참견도 — 판정과 화면이 같은 함수를 쓴다(`persona_level` 참조)."""
+        return persona_level(key)
 
     def active_personas(self) -> List[Persona]:
         """참견도 > 0 인 페르소나만 — 0(금지)은 트리아지 입력에서 제외돼 비용이 0이다."""

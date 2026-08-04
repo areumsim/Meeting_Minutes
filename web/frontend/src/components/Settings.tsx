@@ -17,6 +17,7 @@ import { Capacitor } from "@capacitor/core";
 import { typeLabel } from "../lib/format";
 import type { Profile } from "../lib/types";
 import type { WatcherStatus, DiagnoseResult, LocalSttStatus } from "../lib/api";
+import FacilitationSettings from "./FacilitationSettings";
 
 // 네이티브 앱(iOS/Android)에서만 'PC 서버 연결' 카드를 노출한다.
 const IS_NATIVE = Capacitor.isNativePlatform();
@@ -546,7 +547,14 @@ export default function SettingsView() {
       {advanced.length > 0 && (
         <>
           <SectionHeader label="고급" hint="안 써도 됩니다 — 기본값 그대로 둬도 잘 동작해요" />
-          {advanced.map(renderGroup)}
+          {advanced.map((g) => (
+            <React.Fragment key={g.id}>
+              {renderGroup(g)}
+              {/* 페르소나별 참견도는 8×6 매트릭스라 스키마 필드로는 못 쓴다 —
+                  해당 그룹 바로 아래에 전용 카드로 붙인다(PRD §19.6). */}
+              {g.id === "facilitation" && (open[g.id] ?? !g.advanced) && <FacilitationSettings />}
+            </React.Fragment>
+          ))}
         </>
       )}
 

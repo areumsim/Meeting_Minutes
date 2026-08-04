@@ -22,7 +22,7 @@
 | `python run_meeting.py vault-audio [args]` | `vault_audio.py` | Obsidian 노트 임베드 오디오 처리 |
 | `python run_meeting.py vault-indexer --build` | `vault_indexer.py` | TF-IDF 인덱스 빌드 (오프라인 검색용) |
 | `python run_meeting.py prep-brief --title "..."` | `wiki_knowledge.py` | 회의 준비 브리프 생성 — LLM 없이 Vault 검색 + Registry |
-| `python run_meeting.py facilitation-report` | `wiki_core/facilitation.py` | 회의 진행 페르소나(관찰모드) 판정 기록 집계 — 오탐률 실측용. 기능 자체는 기본 꺼짐(`facilitation.enabled`) |
+| `python run_meeting.py facilitation-report` | `wiki_core/facilitation.py` | 회의 진행 페르소나 판정 기록 집계 — 오탐률 실측용. `--replay <세션ID>` 로 지난 회의 전사를 다시 판정해 데이터를 만들 수 있다(STT 재과금 없음, 트리아지 비용만). 기능 자체는 기본 꺼짐(`facilitation.enabled`) |
 
 > **웹/모바일 프론트엔드 아키텍처 주의**  
 > `web/frontend/`는 Capacitor 기반 모바일 앱(iOS, SPM)이며 두 가지 모드로 동작한다.  

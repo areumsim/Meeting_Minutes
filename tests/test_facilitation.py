@@ -1133,25 +1133,76 @@ class TestMidwayBrief:
         assert shown == [] and calls == []           # 캡 검사가 호출 전이다
         assert any(s["kind"] == "capped" for s in status)
 
-    def test_failed_brief_refunds_and_stays_silent(self, cfg, fac_db, monkeypatch):
+    def test_failed_brief_refunds_but_does_not_stay_silent(
+            self, cfg, fac_db, monkeypatch):
+        """호출 자체가 실패하면 환불한다 — 다만 **조용히 끝내지 않는다**.
+
+        [지금 정리]는 눌린 순간 '정리 중…'으로 잠기고 그것을 푸는 것은 요약 카드나
+        상태 이벤트뿐이다. 조용히 return 하면 버튼이 회의 내내 잠긴 채로 남는다."""
         cfg(self._values(**{"facilitation.max_cost_usd_per_meeting": 1.0}))
         self._llm(monkeypatch, boom=True)
-        now, shown = {"t": 0.0}, []
-        orch = self._orch(fac_db, "b10", now, shown)
+        now, shown, status = {"t": 0.0}, [], []
+        orch = self._orch(fac_db, "b10", now, shown, status=status)
         self._drive(orch, now)
         assert shown == []
-        assert orch._session_cost == 0.0             # 환불됨
+        assert orch._session_cost == 0.0             # 과금이 없으므로 환불
         assert usage_log.month_to_date_spend() == 0.0
+        assert [s["kind"] for s in status] == ["empty"]
+        assert "만들지 못했습니다" in status[0]["message"]
 
-    def test_empty_summary_is_not_shown(self, cfg, fac_db, monkeypatch):
-        """모든 절이 비면 카드를 내지 않는다 — 빈 카드는 소음이다."""
+    def test_unparsable_brief_is_still_charged(self, cfg, fac_db, monkeypatch):
+        """호출이 끝났으면 파싱 실패여도 돈은 나갔다 — 기록하고 환불하지 않는다.
+
+        초기 구현은 파싱 실패를 예외로 처리해 환불까지 했다. 실제로 나간 돈이 월
+        합계에서 사라지는 것이라, 트리아지가 이미 막아 둔 결함(기록은 파싱 성공
+        여부와 무관)이 요약 경로에만 남아 있었다."""
+        from meeting_minutes_app.common import pricing
+        cfg(self._values(**{"facilitation.max_cost_usd_per_meeting": 1.0}))
+        self._llm(monkeypatch, payload="JSON 이 아닙니다")
+        now, shown, status = {"t": 0.0}, [], []
+        orch = self._orch(fac_db, "b10b", now, shown, status=status)
+        self._drive(orch, now)
+
+        assert shown == []
+        est = pricing.facilitation_brief_cost("gpt-4o-mini")
+        assert orch._session_cost == pytest.approx(est, abs=1e-9)   # 환불하지 않는다
+        assert usage_log.month_to_date_spend() == pytest.approx(est, abs=1e-9)
+        assert [s["kind"] for s in status] == ["empty"]
+
+    def test_empty_summary_is_not_shown_but_is_charged(self, cfg, fac_db,
+                                                       monkeypatch):
+        """모든 절이 비면 카드를 내지 않는다 — 빈 카드는 소음이다.
+
+        카드를 안 내는 것과 과금이 없는 것은 다르다: 호출은 이미 나갔다."""
+        from meeting_minutes_app.common import pricing
         cfg(self._values())
         self._llm(monkeypatch, payload={"points": [], "decisions": [],
                                         "actions": [], "open_questions": []})
-        now, shown = {"t": 0.0}, []
-        orch = self._orch(fac_db, "b11", now, shown)
+        now, shown, status = {"t": 0.0}, [], []
+        orch = self._orch(fac_db, "b11", now, shown, status=status)
         self._drive(orch, now)
         assert shown == []
+        assert usage_log.month_to_date_spend() == pytest.approx(
+            pricing.facilitation_brief_cost("gpt-4o-mini"), abs=1e-9)
+        assert [s["kind"] for s in status] == ["empty"]
+
+    def test_brief_now_failure_unlocks_the_button(self, cfg, fac_db, monkeypatch):
+        """[지금 정리] 실패의 사용자 체감을 고정한다 — 상태 이벤트가 와야 잠금이 풀린다.
+
+        프런트(Recorder)는 'briefing' 으로 잠그고, 요약 카드(kind=brief) 또는 그 외
+        상태 이벤트에서만 푼다. 실패 경로에서 아무것도 안 오면 버튼이 영구히
+        비활성으로 남는다."""
+        cfg(self._values(**{"facilitation.brief_period_sec": 100000}))
+        self._llm(monkeypatch, boom=True)
+        now, shown, status = {"t": 0.0}, [], []
+        orch = self._orch(fac_db, "b12b", now, shown, status=status)
+        orch.offer_segment("가" * 200)
+        now["t"] += 100
+        assert orch.brief_now() == ""                # 접수됨(= 프런트가 잠근다)
+        orch.shutdown(wait=True)
+        assert shown == []
+        # 잠금을 푸는 이벤트가 반드시 하나는 온다
+        assert any(s["kind"] not in ("pending", "ready", "briefing") for s in status)
 
     def test_brief_now_runs_immediately_and_is_labeled_on_demand(
             self, cfg, fac_db, monkeypatch):

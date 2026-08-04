@@ -1123,18 +1123,28 @@ class FacilitationOrchestrator:
             raw = _call_llm(model, p.system_prompt,
                             self._build_brief_prompt(window_text),
                             max_tokens=pricing.FACILITATION_BRIEF_MAX_OUTPUT_TOKENS)
-            brief = self._parse_brief(raw)
-            if brief is None:
-                raise ValueError("요약 파싱 실패")
         except Exception:
-            if reserved:                            # 실패분 환불(캡을 헛되게 쓰지 않는다)
+            # 호출 자체가 실패했다(양 벤더 모두 실패 시 llm_client 가 raise) —
+            # 과금이 없으므로 예약을 환불한다. **사유는 반드시 화면에 돌려준다**:
+            # [지금 정리]는 눌린 순간 '정리 중…'으로 잠기고 그것을 푸는 것은 요약
+            # 카드나 상태 이벤트뿐이라, 조용히 return 하면 버튼이 회의 내내 잠긴다.
+            if reserved:
                 with self._lock:
                     self._session_cost = max(0.0, self._session_cost - est)
+            self._notify("empty", "중간 정리를 만들지 못했습니다 — 잠시 후 다시 시도하세요")
             return
 
+        # 호출이 끝났으면 **파싱 성공 여부와 무관하게 과금은 발생했다.** 트리아지가
+        # 쓰는 것과 같은 규칙이다(_triage_task 참조). 기록을 파싱 뒤로 미뤘던 초기
+        # 구현은 파싱 실패분을 환불까지 해서, 실제로 나간 돈이 월 합계에서 사라졌다.
         spend_guard.record(spend_guard.KIND_FACILITATION, est, model=model,
                            units=1, unit_kind="brief",
                            note=spend_guard.session_note(self.session_id))
+        brief = self._parse_brief(raw)
+        if brief is None:
+            self._notify("empty",
+                         "중간 정리 결과를 읽지 못했습니다 — 다음 정리 때 다시 시도합니다")
+            return
         text = _brief_to_text(brief)
         with self._lock:
             self._brief_count += 1
@@ -1468,17 +1478,20 @@ class FacilitationOrchestrator:
             user = self._build_generate_prompt(p, cand, window_text, evidence)
             text = _call_llm(model, p.system_prompt, user,
                              max_tokens=pricing.FACILITATION_INTERVENTION_MAX_OUTPUT_TOKENS)
-            text = (text or "").strip()
-            if not text:
-                raise ValueError("빈 응답")
         except Exception:
-            with self._lock:                     # 실패분 환불(캡을 헛되게 소진하지 않는다)
+            with self._lock:                     # 호출 실패 = 과금 없음 → 예약 환불
                 self._session_cost = max(0.0, self._session_cost - est)
             return None
 
+        # 호출이 끝났으면 **결과가 비어도 과금은 발생했다** — 트리아지·중간 요약과
+        # 같은 규칙으로 먼저 기록한다. 빈 응답을 예외로 처리해 환불하던 초기 구현은
+        # 실제로 나간 돈을 월 합계에서 지웠다.
         spend_guard.record(spend_guard.KIND_FACILITATION, est, model=model,
                            units=1, unit_kind="intervention",
                            note=spend_guard.session_note(self.session_id))
+        text = (text or "").strip()
+        if not text:
+            return None                          # 카드는 만들지 않는다(빈 개입 금지)
         span = {}
         if t0 is not None:
             span = {"t0": round(float(t0), 2), "t1": round(float(t1 or t0), 2)}

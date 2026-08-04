@@ -65,6 +65,15 @@ class AudioWatcher:
         self.min_size_bytes = int(min_size_mb * 1024 * 1024)
         self._stop_event = threading.Event()
         self._lock = threading.Lock()
+        #: 지금 이 프로세스에서 처리 중인 파일. 상태 파일의 `processing` 만으로는
+        #: 중복 처리를 막을 수 없다 — 그 상태는 **터미널이 아니라서**(크래시 후
+        #: 재시도되어야 한다) 다음 스캔이 같은 파일을 다시 집어 든다. 실제로 폴링
+        #: 모드에서는 60분짜리 파일 하나를 처리하는 동안 10초마다 재제출돼
+        #: **STT 가 중복 과금**됐다. 프로세스 메모리에 두는 것이 맞다: 크래시하면
+        #: 자연히 비워져 재시도가 다시 열린다.
+        self._inflight: Set[str] = set()
+        #: 진행 중인 안전 재스캔 스레드(watchdog 모드) — 중첩 방지용.
+        self._rescan_thread: Optional[threading.Thread] = None
 
     # ── 상태 파일 ──────────────────────────────────────────
     def _load_state(self) -> Dict[str, Any]:
@@ -118,9 +127,12 @@ class AudioWatcher:
                 "est_cost_usd": entry.get("est_cost_usd", 0.0),
                 "duration_sec": entry.get("duration_sec", 0.0),
                 # 대기 사유 구분 — 화면 문구가 달라야 한다.
-                #   preexisting: 감시를 켜기 전부터 있던 파일(전량 과금 방지)
-                #   그 외:       지출 한도 초과
+                #   preexisting:  감시를 켜기 전부터 있던 파일(전량 과금 방지)
+                #   failed_final: N회 시도 후 자동 재시도를 멈춘 파일
+                #   그 외:        지출 한도 초과
                 "preexisting": bool(entry.get("preexisting", False)),
+                "failed_final": bool(entry.get("failed_final", False)),
+                "attempts": int(entry.get("attempts") or 0),
             })
         out.sort(key=lambda e: e.get("queued_at") or "")
         return out
@@ -130,19 +142,69 @@ class AudioWatcher:
                         extra: Optional[Dict[str, Any]] = None) -> None:
         with self._lock:
             state = self._load_state()
+            prev = state.get(abs_path) or {}
             entry = {
                 "processed_at": datetime.now().isoformat(timespec="seconds"),
                 "status": status,
                 "note_path": note_path,
                 "error": error,
             }
+            # 시도 횟수는 상태가 바뀌어도 이어받는다. 이 항목은 매번 새로 만들어지므로
+            # 이어받지 않으면 처리 시작(`processing`) 표시가 카운터를 지워 재시도
+            # 상한이 영원히 걸리지 않는다. `reprocess()` 는 항목째 지우므로 그때만
+            # 초기화된다(= 사용자가 승인하면 다시 3회).
+            if isinstance(prev.get("attempts"), int):
+                entry["attempts"] = prev["attempts"]
             if extra:
                 entry.update(extra)
             state[abs_path] = entry
             self._save_state(state)
 
+    #: 같은 파일을 자동으로 다시 시도하는 최대 횟수. 넘으면 확인 대기열로 보낸다.
+    #:
+    #: 무한 재시도가 위험한 이유: 실패가 **STT 이후**(회의록 생성·발행)에서 나면
+    #: 재시도마다 STT 가 다시 과금된다. 상태 `failed` 는 터미널이 아니므로 폴링
+    #: 모드에서는 10초마다 되돌아왔다 — 60분 녹음이면 시간당 수십 달러가 될 수 있다.
+    #: 3회로 두는 것은 일시적 오류(네트워크 순단·429)는 자동 복구하되 영구 오류는
+    #: 사람에게 넘기기 위해서다. 승인(reprocess)하면 카운터가 지워져 다시 3회 열린다.
+    MAX_PROCESS_ATTEMPTS = 3
+
+    def _claim(self, abs_path: str) -> bool:
+        """이 파일의 처리를 선점한다. 이미 이 프로세스에서 처리 중이면 False.
+        (중복 제출 방지 — `_inflight` 주석 참조)"""
+        with self._lock:
+            if abs_path in self._inflight:
+                return False
+            self._inflight.add(abs_path)
+            return True
+
+    def _release(self, abs_path: str) -> None:
+        with self._lock:
+            self._inflight.discard(abs_path)
+
+    def _mark_failed(self, abs_path: str, error: str, note_path: str = "") -> None:
+        """실패 기록 — 시도 횟수를 세고, 한도에 닿으면 확인 대기열로 보낸다.
+
+        대기열(`queued`)로 보내는 것은 터미널 상태라 자동 재시도가 멈추고, 사용자가
+        기존 [승인] 버튼으로 다시 돌릴 수 있다 — 새 UI 를 만들지 않고 이미 있는
+        확인 흐름을 그대로 쓴다(한도 초과·기존 파일과 같은 자리)."""
+        with self._lock:
+            prev = self._load_state().get(abs_path) or {}
+        attempts = int(prev.get("attempts") or 0) + 1
+        if attempts >= self.MAX_PROCESS_ATTEMPTS:
+            self._mark_processed(
+                abs_path, "queued", note_path=note_path,
+                error=f"{attempts}회 시도했지만 실패했습니다: {error}",
+                extra={"attempts": attempts, "failed_final": True},
+            )
+            print(f"[watcher] {attempts}회 실패 — 자동 재시도를 멈추고 확인 대기열로 "
+                  f"보냅니다: {Path(abs_path).name}")
+            return
+        self._mark_processed(abs_path, "failed", note_path=note_path, error=error,
+                             extra={"attempts": attempts})
+
     def reprocess(self, abs_path: str) -> None:
-        """상태를 초기화해 재처리를 허용한다."""
+        """상태를 초기화해 재처리를 허용한다(시도 횟수도 함께 지워진다)."""
         with self._lock:
             state = self._load_state()
             state.pop(abs_path, None)
@@ -242,10 +304,24 @@ class AudioWatcher:
     def _handle_file(self, abs_path: str) -> None:
         if self._is_processed(abs_path):
             return
+        # 선점하지 못했으면 이미 이 프로세스가 처리 중이다 — 조용히 물러난다.
+        # (watchdog 이벤트와 안전 재스캔이 같은 파일을 동시에 집을 수 있다)
+        if not self._claim(abs_path):
+            return
+        try:
+            self._process_claimed(abs_path)
+        finally:
+            self._release(abs_path)
+
+    def _process_claimed(self, abs_path: str) -> None:
         if self._paused():
             return
         if not self._is_stable(abs_path):
-            print(f"[watcher] 파일 불안정(복사 중?), 건너뜀: {Path(abs_path).name}")
+            # 아직 쓰이는 중(녹음기가 직접 쓰거나 복사 중)이다. **여기서 끝내면 안
+            # 된다** — watchdog 은 on_created 만 듣고 on_modified 는 듣지 않으므로,
+            # 안전 재스캔(start 참조)이 없으면 이 파일은 다시 볼 기회가 없다.
+            print(f"[watcher] 파일 불안정(복사·녹음 중?), 다음 스캔에서 다시 확인: "
+                  f"{Path(abs_path).name}")
             return
         # 한도 검사는 안정성 확인 뒤에 한다 — 복사 중인 파일은 길이가 엉뚱하게 나온다.
         if self._spend_gate(abs_path):
@@ -264,12 +340,12 @@ class AudioWatcher:
                     if status == "done":
                         self._record_spend(abs_path)
                 else:
-                    self._mark_processed(abs_path, "failed", note_path=note_path, error=error or status)
+                    self._mark_failed(abs_path, error or status, note_path=note_path)
             else:
                 self._mark_processed(abs_path, "done")
                 self._record_spend(abs_path)
         except Exception as e:
-            self._mark_processed(abs_path, "failed", error=str(e))
+            self._mark_failed(abs_path, str(e))
             print(f"[watcher] 처리 실패: {e}")
 
     # ── 폴링 스캔 ─────────────────────────────────────────
@@ -329,6 +405,28 @@ class AudioWatcher:
             for path in candidates:
                 ex.submit(self._handle_file, path)
 
+    def _spawn_rescan(self) -> None:
+        """안전 재스캔을 **별도 스레드**로 돌린다(watchdog 대기 루프 보호).
+
+        `_scan_once()` 는 ThreadPoolExecutor 를 `with` 로 열어 제출한 작업이 전부
+        끝날 때까지 블로킹한다. 대기 루프에서 직접 부르면 60분짜리 파일 하나를
+        처리하는 동안 `stop()` 이 먹지 않아 서버 종료가 그만큼 늦어진다.
+        직전 재스캔이 아직 돌고 있으면 새로 띄우지 않는다(중첩 방지 — 중복 처리는
+        `_claim()` 이 막지만 스레드가 쌓이는 것은 별개 문제다)."""
+        t = self._rescan_thread
+        if t is not None and t.is_alive():
+            return
+
+        def _run() -> None:
+            try:
+                self._scan_once()
+            except Exception as e:
+                print(f"[watcher] 안전 재스캔 실패(무시): {e}")
+
+        self._rescan_thread = threading.Thread(
+            target=_run, name="watcher-rescan", daemon=True)
+        self._rescan_thread.start()
+
     def _polling_loop(self) -> None:
         print(f"[watcher] 폴링 모드 (interval={self.poll_interval}s)")
         while not self._stop_event.is_set():
@@ -336,8 +434,19 @@ class AudioWatcher:
             self._stop_event.wait(self.poll_interval)
 
     # ── 감시 시작/중지 ────────────────────────────────────
+    #: watchdog 모드에서도 주기적으로 폴더를 다시 훑는 간격의 하한(초).
+    #:
+    #: FS 이벤트만으로는 부족하다 — `on_created` 는 파일이 **만들어지는 순간** 오는데,
+    #: 그때는 아직 쓰이는 중이라 `_is_stable()` 이 False 를 준다. 이 클래스는
+    #: `on_modified` 를 듣지 않으므로 그대로 두면 그 파일을 다시 볼 기회가 영영 없다
+    #: (앱을 재시작해야 첫 스캔이 줍는데, 그때는 '기존 파일'로 분류돼 승인이 필요하다).
+    #: 녹음기가 감시 폴더에 직접 쓰거나 네트워크 드라이브에서 복사하는 경우가 정확히
+    #: 이 조건이다. 재스캔은 이벤트를 대체하지 않고 **놓친 것만 줍는 안전망**이라
+    #: 하한을 두어 큰 폴더에서 glob 이 자주 돌지 않게 한다.
+    SAFETY_RESCAN_MIN_SEC = 60.0
+
     def start(self) -> None:
-        """감시를 시작한다. watchdog 있으면 FS 이벤트 기반, 없으면 폴링."""
+        """감시를 시작한다. watchdog 있으면 FS 이벤트 기반(+안전 재스캔), 없으면 폴링."""
         # 시작 시 기존 파일 스캔 — 처리하지 않고 대기열에 넣는다(_scan_once 참조).
         print(f"[watcher] 감시 폴더: {self.watch_folders}")
         self._scan_once(first_scan=True)
@@ -377,10 +486,19 @@ class AudioWatcher:
                 if os.path.isdir(folder):
                     observer.schedule(handler, folder, recursive=True)
             observer.start()
-            print("[watcher] watchdog FS 이벤트 모드 시작")
+            rescan_every = max(self.poll_interval, self.SAFETY_RESCAN_MIN_SEC)
+            print(f"[watcher] watchdog FS 이벤트 모드 시작 "
+                  f"(안전 재스캔 {rescan_every:.0f}초)")
             try:
+                next_scan = time.monotonic() + rescan_every
                 while not self._stop_event.is_set():
                     self._stop_event.wait(1)
+                    if self._stop_event.is_set():
+                        break
+                    if time.monotonic() < next_scan:
+                        continue
+                    next_scan = time.monotonic() + rescan_every
+                    self._spawn_rescan()
             finally:
                 observer.stop()
                 observer.join()

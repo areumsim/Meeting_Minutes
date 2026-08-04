@@ -143,6 +143,35 @@ def session_spend(session_id: str, kind: Optional[str] = None,
         c.close()
 
 
+def session_spend_by_kind(session_id: str,
+                          db_path: Optional[Union[str, Path]] = None) -> dict:
+    """특정 세션에 딸린 usage_log 지출을 kind 별로 합산.
+
+    `session_spend()` 를 kind 마다 부르는 대신 이것을 쓴다. 호출부가 kind 를 하나씩
+    적으면 새 kind 가 생길 때마다 빠뜨리기 때문이다 — 실제로 회의 상세 화면이
+    `facilitation` 만 되찾고 `web_research`(회의 중 웹 검색 보완)를 빠뜨려서, 그
+    회의가 쓴 돈인데도 '세션에 잡히지 않는 지출'에만 보였다.
+    """
+    sid = str(session_id or "").strip()
+    if not sid:
+        return {}
+    from meeting_minutes_app.common import spend_guard
+    note = spend_guard.session_note(sid)
+    c = _connect(db_path)
+    if c is None:
+        return {}
+    try:
+        rows = c.execute(
+            "SELECT kind, COALESCE(SUM(cost_usd), 0) FROM usage_log "
+            "WHERE note = ? GROUP BY kind", (note,),
+        ).fetchall()
+        return {str(k): float(v or 0.0) for k, v in rows if float(v or 0.0)}
+    except sqlite3.Error:
+        return {}                         # usage_log 없는 구버전 DB
+    finally:
+        c.close()
+
+
 def month_to_date_by_kind(now: Optional[datetime] = None,
                           db_path: Optional[Union[str, Path]] = None) -> dict:
     """이번 달 usage_log 를 kind 별로 합산(대시보드 표시용)."""

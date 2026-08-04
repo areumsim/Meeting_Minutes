@@ -11,6 +11,7 @@ import { getSession, getSessionStatus, generateSummaryForSession, getTargetEmail
   mirrorServerSession, retrySession, getSessionRelatedNotes, type SessionCost,
   type RelatedNoteRow, type RelatedNoteCross } from "../lib/api";
 import { formatDuration, formatTime, typeLabel, statusLabel } from "../lib/format";
+import { kindLabel } from "../lib/costKinds";
 import type { Session, Segment, Document as Doc, SessionGraph, GraphNeighbors } from "../lib/types";
 
 interface Props {
@@ -329,10 +330,16 @@ export default function SessionDetail({ id, onBack, onOpenGraph }: Props) {
             {cost && typeof cost.total === "number" && (
               <span
                 className="flex items-center gap-1 text-emerald-700 bg-emerald-50 px-2 py-0.5 rounded-md font-medium"
-                title={`STT $${cost.stt} + 번역 $${cost.translate} + 회의록 $${cost.minutes}`
-                  // 회의 진행 페르소나는 이 회의가 쓴 돈이지만 세션 비용 테이블에는
-                  // 안 들어간다(이중 집계 방지) — 빠뜨리면 상세 금액이 실제보다 적다.
-                  + (cost.facilitation ? ` + 회의 진행 페르소나 $${cost.facilitation}(실측)` : "")
+                title={`STT $${cost.stt}`
+                  // 실시간 경로는 보정 패스로 STT 과금이 두 번 난다 — 빼고 적으면
+                  // 항목 합이 총액과 안 맞아 "계산이 틀렸다"로 읽힌다.
+                  + (cost.stt_revise ? ` + 보정 전사 $${cost.stt_revise}` : "")
+                  + ` + 번역 $${cost.translate} + 회의록 $${cost.minutes}`
+                  // 회의 중에 쓴 돈이지만 세션 비용 테이블에는 안 들어가는 항목들
+                  // (이중 집계 방지). 서버가 kind 목록을 주므로 화면이 kind 를
+                  // 하나씩 적지 않는다 — 적으면 새 과금 경로를 조용히 빠뜨린다.
+                  + (cost.actual_kinds ?? [])
+                      .map((k) => ` + ${kindLabel(k)} $${cost[k]}(실측)`).join("")
                   + ` (${cost.stt_model}) · 대략치`}
               >
                 💵 예상 ${cost.total?.toFixed(3)}

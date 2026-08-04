@@ -905,6 +905,53 @@ class TestCostIsVisibleWhereItHappens:
         assert body["total"] >= 0.0123
         assert body["facilitation_actual"] is True
 
+    def test_session_cost_includes_every_session_scoped_kind(self, tmp_path,
+                                                             monkeypatch):
+        """kind 를 하나씩 적으면 새 과금 경로를 조용히 빠뜨린다.
+
+        회의 중 웹 검색 보완(KIND_WEB_RESEARCH)은 facilitation 과 **똑같은 규약**으로
+        세션 키를 남기는데, 상세 화면이 facilitation 만 되찾아서 그 회의가 쓴 돈인데도
+        '세션에 잡히지 않는 지출'에만 보였다. 세션 키가 붙은 모든 kind 를 합산한다.
+        """
+        from fastapi.testclient import TestClient
+        from web.backend import database as db
+        from web.backend.app import app
+
+        dbp = tmp_path / "t.db"
+        monkeypatch.setattr(db, "DB_PATH", dbp)
+        monkeypatch.setattr(usage_log, "_resolve_db_path", lambda p=None: dbp)
+        db.init_db()
+        sid = db.create_session(title="회의", source="web", mode="realtime_2")
+        db.update_session_status(sid, "completed", duration_sec=600)
+        note = spend_guard.session_note(sid)
+        spend_guard.record(spend_guard.KIND_FACILITATION, 0.01, note=note)
+        spend_guard.record(spend_guard.KIND_WEB_RESEARCH, 0.04, note=note)
+        # 다른 회의의 지출은 섞이지 않는다
+        spend_guard.record(spend_guard.KIND_WEB_RESEARCH, 9.99,
+                           note=spend_guard.session_note("다른회의"))
+
+        body = TestClient(app).get(f"/api/sessions/{sid}/cost").json()
+        assert body["facilitation"] == pytest.approx(0.01)
+        assert body["web_research"] == pytest.approx(0.04)
+        assert sorted(body["actual_kinds"]) == ["facilitation", "web_research"]
+        # 추정분 + 실측 두 건이 모두 총액에 들어간다
+        assert body["total"] == pytest.approx(
+            body["stt"] + body["stt_revise"] + body["translate"]
+            + body["minutes"] + 0.05, abs=1e-6)
+
+    def test_session_spend_by_kind_ignores_other_sessions(self, fac_db):
+        """세션 키 규약이 쓰는 쪽·읽는 쪽에서 같은지 — 한쪽만 바뀌면 조용히 0 이 된다."""
+        spend_guard.record(spend_guard.KIND_FACILITATION, 0.002,
+                           note=spend_guard.session_note("sA"))
+        spend_guard.record(spend_guard.KIND_WEB_RESEARCH, 0.003,
+                           note=spend_guard.session_note("sA"))
+        spend_guard.record(spend_guard.KIND_WATCHER, 1.0)   # 세션 없는 지출
+        assert usage_log.session_spend_by_kind("sA") == {
+            spend_guard.KIND_FACILITATION: pytest.approx(0.002),
+            spend_guard.KIND_WEB_RESEARCH: pytest.approx(0.003)}
+        assert usage_log.session_spend_by_kind("sB") == {}
+        assert usage_log.session_spend_by_kind("") == {}
+
     def test_finalize_estimate_never_includes_facilitation(self):
         """sessions.cost_estimate 기록 경로가 facilitation 을 켜면 이중 집계된다.
 

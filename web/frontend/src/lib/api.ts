@@ -264,9 +264,17 @@ export const cancelUpload = async (
 export interface SessionCost {
   ok: boolean; duration_sec?: number; stt?: number; translate?: number;
   minutes?: number; total?: number; stt_model?: string;
-  /** 회의 진행 페르소나(트리아지) — 다른 항목과 달리 추정이 아니라 **실제 기록된** 금액.
-   *  세션 비용 테이블에는 넣지 않고 usage_log 에서 되찾는다(이중 집계 방지). */
+  /** 2단계 보정 전사의 추가 STT 과금(실시간 경로에만 있다). two_pass=false 면 0. */
+  stt_revise?: number;
+  two_pass?: boolean;
+  /** 회의 중에 발생했지만 세션 비용 테이블에는 안 들어가는 과금의 kind 목록
+   *  (facilitation / web_research …). 이 항목들만 추정이 아니라 **기록된 실측**이다.
+   *  금액은 같은 이름의 키로 최상위에 실려 온다 — kind 를 하나씩 적지 않는 이유는
+   *  새 과금 경로가 생길 때 화면이 조용히 빠뜨리기 때문이다(web_research 전례). */
+  actual_kinds?: string[];
   facilitation?: number;
+  /** 인덱스 시그니처 — actual_kinds 의 kind 를 이름으로 읽는다. */
+  [key: string]: unknown;
 }
 export const getSessionCost = async (sessionId: string): Promise<SessionCost | null> => {
   try {

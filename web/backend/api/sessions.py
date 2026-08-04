@@ -75,20 +75,26 @@ def get_session_cost(session_id: str):
         two_pass=_two_pass, revise_model=_m["revise_model"],
         # facilitation 은 추정하지 않는다 — 아래에서 **실제 발생액**으로 채운다.
     )
-    # 회의 진행 페르소나(트리아지)는 세션 중에 발생하지만 sessions.cost_estimate 에는
-    # 넣지 않는다(usage_log 와 이중 집계 방지, pricing 독스트링). 그래서 이 회의가
-    # 쓴 돈인데도 상세 화면에서 빠져 보였다 — 추정이 아니라 기록된 실제 금액을 더한다.
+    # 회의 중에 발생하지만 sessions.cost_estimate 에는 넣지 않는 과금(이중 집계 방지,
+    # pricing 독스트링)을 usage_log 에서 되찾는다. 그래서 이 회의가 쓴 돈인데도 상세
+    # 화면에서 빠져 보였다 — 추정이 아니라 기록된 실제 금액을 더한다.
+    #
+    # **kind 를 하나씩 적지 않는다.** 예전에는 facilitation 만 되찾아서, 나중에 추가된
+    # web_research(회의 중 웹 검색 보완)가 같은 규약으로 기록되는데도 상세에서 빠졌다.
+    # 세션 키가 붙은 모든 kind 를 합산하면 새 과금 경로가 자동으로 포함된다.
     try:
-        from meeting_minutes_app.common import spend_guard, usage_log
-        fac = usage_log.session_spend(session_id, spend_guard.KIND_FACILITATION)
+        from meeting_minutes_app.common import usage_log
+        actual = usage_log.session_spend_by_kind(session_id)
     except Exception:
-        fac = 0.0
-    if fac:
-        cost["facilitation"] = round(fac, 6)
-        cost["total"] = round(float(cost.get("total") or 0.0) + fac, 6)
+        actual = {}
+    for kind, usd in actual.items():
+        cost[kind] = round(float(usd), 6)
+    if actual:
+        cost["total"] = round(
+            float(cost.get("total") or 0.0) + sum(actual.values()), 6)
     return {"ok": True, "stt_model": stt_model, "llm": llm,
-            # facilitation 항만 추정이 아니라 실측이라는 표시(화면 문구 구분용)
-            "facilitation_actual": True, **cost}
+            # 아래 kind 들은 추정이 아니라 기록된 실측이라는 표시(화면 문구 구분용)
+            "actual_kinds": sorted(actual), "facilitation_actual": True, **cost}
 
 
 @router.get("/sessions/{session_id}/related-notes")

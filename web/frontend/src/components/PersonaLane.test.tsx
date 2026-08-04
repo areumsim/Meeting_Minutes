@@ -46,14 +46,16 @@ describe("PersonaLane", () => {
     expect(screen.getByText(/담당자와 기한이 비어 있습니다/)).toBeInTheDocument();
   });
 
-  it("끄는 버튼은 항상 보이고, 끄면 '표시하지 않습니다'로 바뀐다", async () => {
+  it("끄는 버튼은 항상 보이고, 끄면 '생성을 멈췄다'로 바뀐다", async () => {
     const onMute = vi.fn();
     const { rerender } = render(<PersonaLane items={[item()]} onMute={onMute} />);
     await userEvent.click(screen.getByRole("button", { name: "이번 회의 끔" }));
     expect(onMute).toHaveBeenCalledOnce();
 
     rerender(<PersonaLane items={[]} muted onMute={onMute} />);
-    expect(screen.getByText(/이번 회의에는 표시하지 않습니다/)).toBeInTheDocument();
+    // 문구가 실제 동작과 같아야 한다: 표시만 끄는 게 아니라 서버가 생성을 멈춘다.
+    // "표시하지 않습니다"로만 적혀 있던 동안 서버는 계속 개입을 만들고 과금했다.
+    expect(screen.getByText(/개입 생성을 멈췄습니다/)).toBeInTheDocument();
     // 끈 뒤에는 카드도, 다시 끄는 버튼도 없다
     expect(screen.queryByRole("button", { name: "이번 회의 끔" })).toBeNull();
   });

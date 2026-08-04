@@ -443,6 +443,17 @@ class TestObservationIsMeasurable:
         assert facilitation.observations(session_id="m7") == []
         assert facilitation.triages(session_id="m7") == []
 
+    def test_db_failure_never_breaks_the_stream(self, cfg, fac_db, monkeypatch):
+        """기록은 부수 효과다 — DB 를 못 열어도 전사·트리아지는 계속 돈다."""
+        cfg({"facilitation.enabled": True})
+        self._one_candidate(monkeypatch)
+        monkeypatch.setattr(facilitation, "_connect", lambda p=None: None)
+        orch = FacilitationOrchestrator(session_id="m8")
+        orch.offer_segment("발화입니다.")          # 예외가 새면 실시간 스트림이 깨진다
+        orch.shutdown(wait=True)
+        assert orch.status()["observed_count"] == 0   # 기록은 실패했지만 조용히 넘어간다
+        assert orch.status()["triage_count"] == 1     # 트리아지 자체는 성공
+
     def test_span_key_normalizes_whitespace_and_case(self):
         a = facilitation.span_key("critic", "이 방식이  항상 더 빠릅니다")
         b = facilitation.span_key("critic", "이 방식이 항상 더 빠릅니다 ")

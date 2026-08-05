@@ -157,8 +157,12 @@ describe("모바일 [더보기] 시트 — 모든 화면에 도달할 수 있어
     const sheet = within(screen.getByRole("dialog"));
     await user.click(sheet.getByRole("button", { name: "도움말" }));
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-    // 도움말 화면이 실제로 로드된다(지연 로드 — 화면 고유 문구로 확인)
-    expect(await screen.findByText(/사용법|자주 묻는/)).toBeInTheDocument();
+    // 도움말 화면이 실제로 로드된다(지연 로드 — 화면 고유 문구로 확인).
+    // 타임아웃을 늘려 둔다: 이 화면은 React.lazy 청크라 기본 1초가 **전체 스위트를
+    // 함께 돌릴 때** 부족했다(단독 실행은 통과, 전체 실행은 실패 → 수치 정본이
+    // 실행 방식에 따라 달라졌다). 기다리는 대상은 렌더가 아니라 청크 로드다.
+    expect(await screen.findByText(/사용법|자주 묻는/, {}, { timeout: 5000 }))
+      .toBeInTheDocument();
   });
 });
 

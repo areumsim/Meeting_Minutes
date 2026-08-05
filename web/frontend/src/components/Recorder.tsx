@@ -320,22 +320,27 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
   };
 
   /**
-   * 이번 회의 끔 — 설정은 그대로 두고 이 세션의 개입을 멈춘다(§19.4 업계 교훈).
+   * '이번 회의 끔'을 **서버에 알린다** — 두 끄기(페르소나·관련 노트)의 공통 부분.
    *
-   * **서버에도 반드시 알린다.** 프런트에서 카드만 버리면 서버는 회의 끝까지 개입·
-   * 중간 요약을 계속 생성해 과금하고, 그 금액은 아래 러닝 미터(setFacCostUsd)에
-   * 잡히지 않아 표시 금액이 실제보다 작아진다. 서버가 생성을 멈추는 것이 본체이고
-   * 이 로컬 상태는 이미 도착한 카드를 치우는 것뿐이다.
+   * 이게 본체다. 프런트에서 목록만 숨기면 서버는 회의 끝까지 생성·검색을 계속해
+   * 과금하고, 그 금액은 러닝 미터에 잡히지 않아 표시 금액이 실제보다 작아진다.
+   * 로컬 상태 정리는 이미 도착한 것을 치우는 것뿐이라 호출부에 남긴다(끄는 대상이
+   * 서로 다르다).
    */
+  const sendMute = (type: "facilitation_mute" | "related_notes_mute") => {
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    try { ws.send(JSON.stringify({ type })); } catch (e) {}
+  };
+
+  /** 페르소나 [이번 회의 끔] — 설정은 그대로 두고 이 세션의 개입을 멈춘다(§19.4). */
   const facMute = () => {
     facMutedRef.current = true;
     setFacMuted(true);
     setInterventions([]);
     setFacPending(0);
     setFacStatus(null);
-    const ws = wsRef.current;
-    if (!ws || ws.readyState !== WebSocket.OPEN) return;
-    try { ws.send(JSON.stringify({ type: "facilitation_mute" })); } catch (e) {}
+    sendMute("facilitation_mute");
   };
 
   /**
@@ -350,9 +355,22 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
     setWikiMuted(true);
     setRelatedNotes([]);
     setWikiExpanded(false);
-    const ws = wsRef.current;
-    if (!ws || ws.readyState !== WebSocket.OPEN) return;
-    try { ws.send(JSON.stringify({ type: "related_notes_mute" })); } catch (e) {}
+    sendMute("related_notes_mute");
+  };
+
+  /**
+   * 관련 노트 바를 새 녹음 기준으로 되돌린다 — `resetFacilitation` 과 같은 역할.
+   *
+   * 끄기는 **그 회의에서만** 유효하므로 mute 상태도 함께 지운다. 종전엔 시작 경로에만
+   * 인라인으로 있었고 취소·이탈 경로에는 없어서, 껐다가 취소하면 대기 화면에
+   * "이번 회의 끔" 초록 바가 남아 있었다(바 표시 조건에 muted 가 들어간다).
+   */
+  const resetRelatedNotes = () => {
+    wikiMutedRef.current = false;
+    setWikiMuted(false);
+    setRelatedNotes([]);
+    setWikiStatus(null);
+    setWikiExpanded(false);
   };
 
   /**
@@ -868,12 +886,8 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
       // 위쪽을 차지해 전사 영역이 좁아진다(사용자가 다시 펼 수 있음).
       setIsSettingsCollapsed(true);
       setLiveTranscript([]);
-      setRelatedNotes([]);
-      setWikiStatus(null);
-      setWikiExpanded(false);
       // 끄기는 **그 회의에서만** 유효하다 — 새 녹음에서는 다시 켜진다(페르소나와 동일).
-      wikiMutedRef.current = false;
-      setWikiMuted(false);
+      resetRelatedNotes();
       resetFacilitation();
       setBackendMode(false);
       setDuration(0);
@@ -1316,9 +1330,7 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
     setIsRecording(false);
     setIsPaused(false);
     setLiveTranscript([]);
-    setRelatedNotes([]);
-    setWikiStatus(null);
-    setWikiExpanded(false);
+    resetRelatedNotes();
     resetFacilitation();
     setDuration(0);
     setSessionId(null);
@@ -1338,9 +1350,7 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
     }
     wsRef.current = null;
     setLiveTranscript([]);
-    setRelatedNotes([]);
-    setWikiStatus(null);
-    setWikiExpanded(false);
+    resetRelatedNotes();
     resetFacilitation();
     setDuration(0);
     setSessionId(null);

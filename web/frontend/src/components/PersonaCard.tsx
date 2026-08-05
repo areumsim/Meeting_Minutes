@@ -45,11 +45,15 @@ const KIND_LABEL: Record<string, string> = {
   brief: "중간 요약",
 };
 
-/** 근거 출처 아이콘 — 서버 `realtime_search.SOURCE_ICON` 과 같은 표(TS라 복제).
+/** 근거 출처 아이콘 — 서버 `realtime_search.SOURCE_ICON` + `personas.EV_REGISTRY`.
  *  "지난 회의 결정"과 "논문"과 "웹"이 같은 📄 로 보이면 무엇과 대조했는지 알 수 없다. */
 const EVIDENCE_ICON: Record<string, string> = {
   note: "📄", paper: "🎓", web: "🌐", registry: "🗂",
 };
+
+/** 카드에 펼쳐 보일 근거 줄 수. 지난 회의 기록은 결정 5 + 액션 5 까지 올 수 있어
+ *  전부 그리면 카드가 화면을 덮는다. 넘치는 건수는 숨기지 않고 숫자로 알린다. */
+const EVIDENCE_MAX = 5;
 
 /** 중간 요약 절 — 서버 `facilitation.BRIEF_SECTIONS` 와 같은 순서·같은 말. */
 const BRIEF_SECTIONS: { key: keyof NonNullable<Facilitation["brief"]>; label: string }[] = [
@@ -136,16 +140,35 @@ export default function PersonaCard({
             <p className="text-[11px] text-zinc-500 italic">“{item.quote}”</p>
           )}
           {(item.evidence || []).length > 0 && (
+            /* 근거는 서버가 한 목록으로 준다(노트·논문·지난 회의 기록·웹). 지난 회의
+               기록(🗂)까지 여기 오는 이유는 "이전과 다르다"는 카드가 무엇과 대조했는지
+               보여야 하기 때문이다(§6-5) — 종전엔 프롬프트에만 있어 화면에 없었다.
+               EVIDENCE_MAX 로 잘라 카드가 길어지지 않게 한다(지난 결정 5 + 액션 5 가
+               올 수 있다). 남은 건수는 아래에 숫자로 알린다 — 조용히 감추지 않는다. */
             <ul className="space-y-0.5">
-              {(item.evidence || []).map((e, i) => (
-                <li key={`${e.title}-${i}`} className="text-[11px] text-zinc-600">
+              {(item.evidence || []).slice(0, EVIDENCE_MAX).map((e, i) => (
+                <li
+                  key={`${e.title}-${i}`}
+                  className="text-[11px] text-zinc-600"
+                  title={e.segment ? `"${e.segment}" 발화에서 검색된 결과` : undefined}
+                >
                   {EVIDENCE_ICON[e.source || "note"] || "📄"} <b>{e.title}</b>
+                  {/* 다른 발화에서 나간 웹 검색이면 그 사실을 밝힌다 — 이 카드의
+                      주장을 '검증된 것'으로 읽지 않게 한다(searched 배지와 같은 근거). */}
+                  {e.source === "web" && e.matched === false && (
+                    <span className="text-zinc-400"> (다른 발화)</span>
+                  )}
                   {typeof e.score === "number" && e.score > 0 && (
                     <span className="text-zinc-500"> · {e.score.toFixed(3)}</span>
                   )}
                   {e.snippet && <span className="text-zinc-500"> — {e.snippet}</span>}
                 </li>
               ))}
+              {(item.evidence || []).length > EVIDENCE_MAX && (
+                <li className="text-[11px] text-zinc-400">
+                  … 그 밖에 {(item.evidence || []).length - EVIDENCE_MAX}건
+                </li>
+              )}
             </ul>
           )}
           <div className="flex items-center gap-2 pt-0.5">

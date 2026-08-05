@@ -134,7 +134,15 @@ export interface Facilitation {
   brief?: BriefBody;
   /** 중간 요약이 [지금 정리] 버튼으로 만들어졌는지(주기 자동과 구분) */
   onDemand?: boolean;
-  evidence?: { source: "note" | "web" | string; title: string; url?: string; score?: number; snippet?: string }[];
+  /** 이 개입이 대조한 근거 — 서버가 한 목록으로 준다(`facilitation._persona_evidence`).
+   *  source: note/paper=사내 노트·논문, registry=지난 회의 결정·미완료 액션, web=웹 검색.
+   *  web 에만 붙는 두 필드: `segment`=그 검색이 나간 발화, `matched`=이 발화의 검색인가
+   *  (false 면 카드가 '다른 발화'라고 밝히고 `searched` 배지도 켜지 않는다). */
+  evidence?: {
+    source: "note" | "paper" | "registry" | "web" | string;
+    title: string; url?: string; score?: number; snippet?: string;
+    segment?: string; matched?: boolean;
+  }[];
   /** 근거가 된 발화 구간(초) — 전사 패널 점프용 */
   span?: { t0: number; t1: number };
   /** 트리아지가 근거로 든 발화 인용(짧게) */

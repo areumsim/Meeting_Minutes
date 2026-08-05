@@ -223,3 +223,43 @@ describe("PersonaLane — 소리", () => {
     expect(screen.getByText("소리 없음")).toBeInTheDocument();
   });
 });
+
+describe("카드의 근거 — 무엇과 대조했는지 보여야 한다(§6-5)", () => {
+  it("지난 회의 기록(registry)도 근거 줄로 보인다", async () => {
+    // 종전엔 이 재료가 생성 프롬프트에만 있어서, 카드가 "이전 회의에서 정한 것과
+    // 다르다"고 말해도 화면에는 그 근거가 없었다(아이콘 표조차 도달 불가 코드였다).
+    const user = userEvent.setup();
+    render(<PersonaLane items={[item({
+      persona: "critic",
+      evidence: [{ source: "registry", title: "지난 회의 결정",
+                   snippet: "[2026-07-15] STT 기본 모델은 mini 로 간다" }],
+    })]} onMute={vi.fn()} />);
+    await user.click(screen.getByText(/담당자와 기한/));
+    expect(screen.getByText(/STT 기본 모델은 mini 로 간다/)).toBeInTheDocument();
+    expect(screen.getByText("지난 회의 결정")).toBeInTheDocument();
+  });
+
+  it("다른 발화에서 나간 웹 결과는 그 사실을 밝힌다", async () => {
+    // 이 표시가 없으면 30분 전 검색이 방금 나온 수치를 검증한 것처럼 읽힌다.
+    const user = userEvent.setup();
+    render(<PersonaLane items={[item({
+      persona: "fact_checker",
+      searched: false,
+      evidence: [{ source: "web", title: "https://e.com/x", snippet: "일반 정보",
+                   segment: "다음 회의는 다음 주 화요일입니다", matched: false }],
+    })]} onMute={vi.fn()} />);
+    await user.click(screen.getByText(/담당자와 기한/));
+    expect(screen.getByText("(다른 발화)")).toBeInTheDocument();
+  });
+
+  it("근거가 많아도 카드를 덮지 않는다 — 남은 건수는 숫자로 알린다", async () => {
+    const user = userEvent.setup();
+    const many = Array.from({ length: 9 }, (_, i) => ({
+      source: "registry", title: "미완료 액션", snippet: `액션 ${i}`,
+    }));
+    render(<PersonaLane items={[item({ evidence: many })]} onMute={vi.fn()} />);
+    await user.click(screen.getByText(/담당자와 기한/));
+    expect(screen.getByText(/그 밖에 4건/)).toBeInTheDocument();
+    expect(screen.queryByText("액션 8")).toBeNull();   // 잘렸다
+  });
+});

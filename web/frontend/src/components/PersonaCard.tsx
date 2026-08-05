@@ -45,6 +45,12 @@ const KIND_LABEL: Record<string, string> = {
   brief: "중간 요약",
 };
 
+/** 근거 출처 아이콘 — 서버 `realtime_search.SOURCE_ICON` 과 같은 표(TS라 복제).
+ *  "지난 회의 결정"과 "논문"과 "웹"이 같은 📄 로 보이면 무엇과 대조했는지 알 수 없다. */
+const EVIDENCE_ICON: Record<string, string> = {
+  note: "📄", paper: "🎓", web: "🌐", registry: "🗂",
+};
+
 /** 중간 요약 절 — 서버 `facilitation.BRIEF_SECTIONS` 와 같은 순서·같은 말. */
 const BRIEF_SECTIONS: { key: keyof NonNullable<Facilitation["brief"]>; label: string }[] = [
   { key: "points", label: "논점" },
@@ -133,7 +139,7 @@ export default function PersonaCard({
             <ul className="space-y-0.5">
               {(item.evidence || []).map((e, i) => (
                 <li key={`${e.title}-${i}`} className="text-[11px] text-zinc-600">
-                  {e.source === "web" ? "🌐" : "📄"} <b>{e.title}</b>
+                  {EVIDENCE_ICON[e.source || "note"] || "📄"} <b>{e.title}</b>
                   {typeof e.score === "number" && e.score > 0 && (
                     <span className="text-zinc-500"> · {e.score.toFixed(3)}</span>
                   )}

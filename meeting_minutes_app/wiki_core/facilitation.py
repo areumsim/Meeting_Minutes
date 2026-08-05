@@ -847,6 +847,7 @@ class FacilitationOrchestrator:
                  evidence_provider: Optional[Callable[[], List[Dict[str, Any]]]] = None,
                  search_provider: Optional[
                      Callable[[str, int], List[Dict[str, Any]]]] = None,
+                 web_provider: Optional[Callable[[], List[Dict[str, Any]]]] = None,
                  on_status: Optional[Callable[[Dict[str, Any]], None]] = None):
         """clock/note/enabled_override 는 **리플레이 전용 주입점**이다(replay_session).
 
@@ -871,6 +872,11 @@ class FacilitationOrchestrator:
         #: "이 수치와 대조할 근거"가 아니라 "요즘 자주 뜬 노트"를 주면 근거처럼
         #: 보이는 무관한 문단으로 검증을 흉내내게 된다. 없으면 누적분으로 폴백.
         self.search_provider = search_provider
+        #: 회의 중 이미 나간 웹 검색 결과(`_web_findings`). 근거 소스에 "web" 을 적은
+        #: 페르소나(팩트체커)에게만 붙는다. **여기서 웹을 새로 부르지 않는다** —
+        #: 웹 호출은 호출부가 이미 한도·기록 3관문을 지나 수행했고, 개입 생성이
+        #: 몰래 유료 검색을 한 번 더 하는 경로를 만들면 안 된다.
+        self.web_provider = web_provider
         #: 상태 변화(건너뜀 사유·예산 소진)를 화면에 알리는 콜백. 조용히 꺼지면
         #: 기능이 없는 것처럼 보인다(이 리포 반복 규칙).
         self.on_status = on_status
@@ -1556,7 +1562,18 @@ class FacilitationOrchestrator:
 
         검색기가 없거나(터미널·리플레이) 0건이면 누적분으로 폴백한다 — 근거 필수
         페르소나가 검색 실패만으로 침묵하면 기능이 조용히 사라진 것처럼 보인다.
-        근거 소스에 "vault" 가 없는 페르소나(촉진자·서기·주니어)는 대화만 본다."""
+        근거 소스에 "vault" 가 없는 페르소나(촉진자·서기·주니어)는 대화만 본다.
+
+        근거 소스에 "web" 을 적은 페르소나에게는 **회의 중 이미 나간** 웹 검색 결과가
+        내부 자료 뒤에 붙는다(FR-10 내부 우선). 그 전까지 웹 결과는 회의록 memo 로만
+        갔고, 정작 팩트체커 프롬프트는 "라이브 검색 근거가 없으면 개입하지 마세요"
+        라고 적혀 있었다 — 프롬프트·코드 가드·실제 데이터가 3중으로 어긋나 있었다."""
+        out = self._vault_evidence(p, cand)
+        out.extend(self._web_evidence(p))
+        return out
+
+    def _vault_evidence(self, p: Persona,
+                        cand: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
         if EV_VAULT not in (p.evidence or ()):
             return []
         notes: List[Dict[str, Any]] = []
@@ -1586,6 +1603,33 @@ class FacilitationOrchestrator:
             })
         return out
 
+    def _web_evidence(self, p: Persona) -> List[Dict[str, Any]]:
+        """이미 나간 웹 검색 결과 중 최근 2건 — 새 검색은 하지 않는다(비용 0).
+
+        최근 것을 쓰는 이유: 웹 보완은 발화별로 나가므로 뒤쪽일수록 지금 논의에
+        가깝다. 볼트 근거처럼 후보 발화로 재검색하지 않는 것은, 그러려면 유료
+        웹 검색을 개입마다 한 번 더 해야 하기 때문이다(회의당 비용이 예측 불가가
+        된다). 라이브 재검색은 M2 몫이다."""
+        if EV_WEB not in (p.evidence or ()) or self.web_provider is None:
+            return []
+        try:
+            found = list(self.web_provider() or [])
+        except Exception:
+            return []
+        out: List[Dict[str, Any]] = []
+        for f in found[-2:]:
+            if not isinstance(f, dict):
+                continue
+            srcs = f.get("sources") or []
+            out.append({
+                "source": "web",
+                "title": str((srcs[0] if srcs else "") or "웹 검색 결과")[:120],
+                "url": str((srcs[0] if srcs else "") or ""),
+                "score": 0.0,
+                "snippet": str(f.get("result") or "")[:300],
+            })
+        return out
+
     def _generate(self, cand: Dict[str, Any], window_text: str,
                   t0: Optional[float], t1: Optional[float],
                   level: int) -> Optional[Dict[str, Any]]:
@@ -1600,6 +1644,12 @@ class FacilitationOrchestrator:
         evidence = self._persona_evidence(p, cand)
         # 근거가 필수인 페르소나(도메인·팩트체커)는 근거 없이 개입하지 않는다
         # ("추측 금지" — system_prompt 와 PRD §6 의 게이트를 코드로도 막는다).
+        # **웹 근거만 요구하지는 않는다.** 팩트체커 프롬프트에 있던 "라이브 검색
+        # 근거가 없으면 개입하지 마세요"는 이 제품의 설계(FR-10 내부 자료 우선 —
+        # 볼트에서 찾으면 웹을 아예 부르지 않는다)와 어긋나 있었고, 코드 가드는
+        # 볼트만 봐서 프롬프트·가드·데이터가 3중으로 갈라져 있었다. 사내 노트·논문·
+        # 지난 회의 결정도 대조 근거로 충분하다 — 프롬프트를 그 사실에 맞췄고,
+        # 웹 근거의 유무는 카드의 `searched`(⚠ 미검증 배지)로 구분해 보여준다.
         if p.key in ("domain_expert", "fact_checker") and not evidence:
             return None
 
@@ -1670,9 +1720,11 @@ class FacilitationOrchestrator:
             # 개입은 시간에 비례하지 않아 분당 요율로는 표현할 수 없고, 추정 대신
             # **실제 발생 건수**로 보여주기 위해 여기서 함께 보낸다(pricing 주석 참조).
             "costUsd": round(est, 6),
-            # 라이브 웹검색은 M2 몫 — M1 에서는 항상 False 로 나가고, 팩트체커는
-            # 애초에 참견도 1(관찰)에 잠겨 있어 이 값이 화면에 쓰이지 않는다(§6).
-            "searched": False,
+            # 이 개입이 **웹 근거를 실제로 달고 나가는가**. 카드의 "⚠ 미검증" 배지가
+            # 이 값으로 갈린다. 종전엔 무조건 False 라 배지가 상수였고, 그래서
+            # 아무것도 말해 주지 않았다. 웹 근거는 회의 중 이미 나간 검색 결과이며
+            # 여기서 새로 검색하지는 않는다(라이브 재검색은 M2).
+            "searched": any(e.get("source") == "web" for e in evidence),
             "draft": True,      # 항상 true — "초안/보조" 고정 라벨(§8)
         }
 

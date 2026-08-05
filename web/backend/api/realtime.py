@@ -779,7 +779,8 @@ class BrowserRealtimeSession:
                 on_intervention=self._emit_facilitation,
                 on_status=self._emit_facilitation_status,
                 evidence_provider=self._facilitation_evidence,
-                search_provider=self._facilitation_search)
+                search_provider=self._facilitation_search,
+                web_provider=self._facilitation_web)
         except Exception:
             return None
 
@@ -795,6 +796,16 @@ class BrowserRealtimeSession:
             return self._searcher.collected_evidence(limit=5)
         except Exception:
             return []
+
+    def _facilitation_web(self):
+        """회의 중 **이미 나간** 웹 검색 결과 — 팩트체커의 근거로 넘긴다.
+
+        여기서 새로 검색하지 않는다. 웹 호출은 `_web_research_segment` 가 한도·기록
+        3관문을 지나 수행하며, 개입 생성이 몰래 유료 검색을 한 번 더 하는 경로를
+        만들면 회의당 비용이 예측 불가가 된다. 그때까지 이 결과는 회의록 memo 로만
+        갔고 페르소나는 보지 못했다."""
+        with self._notes_lock:
+            return list(self._web_findings)
 
     def _facilitation_search(self, text: str, limit: int = 3):
         """지금 판정 중인 발화로 볼트를 1회 검색 — **같은 검색기**를 그대로 쓴다.

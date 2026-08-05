@@ -2330,3 +2330,151 @@ class TestCandidateScopedEvidence:
             search_provider=lambda t, limit=3: queried.append(t) or [])
         _offer_and_drain(orch, ["수율이 90%라고 하셨죠"])
         assert queried == []
+
+
+class TestWebEvidenceReachesThePersona:
+    """회의 중 나간 웹 검색이 팩트체커에게 실제로 닿는가 + `searched` 가 사실인가.
+
+    종전엔 웹 결과가 회의록 memo 로만 갔는데 팩트체커 프롬프트는 "라이브 검색 근거가
+    없으면 개입하지 마세요"였고, 코드 가드는 볼트만 봤고, 카드는 무조건
+    `searched: false` 였다 — 프롬프트·가드·데이터·표시가 4중으로 어긋나 있었다.
+    """
+
+    def _values(self, **over):
+        values = {"facilitation.enabled": True,
+                  "facilitation.triage_period_sec": 600,
+                  "facilitation.max_cost_usd_per_meeting": 0.0,
+                  "facilitation.min_confidence": 0.6,
+                  "facilitation.max_interventions_per_session": 12}
+        for k in personas.PERSONAS:
+            values[f"facilitation.personas.{k}.level"] = 1
+        values["facilitation.personas.fact_checker.level"] = 3
+        values.update(over)
+        return values
+
+    def _llm(self, monkeypatch, cands):
+        calls = []
+
+        def _fake(model, system, user, max_tokens=None):
+            triage = "트리아지" in system
+            calls.append({"user": user, "triage": triage})
+            return json.dumps(cands, ensure_ascii=False) if triage else "대조합니다."
+
+        monkeypatch.setattr(facilitation, "_call_llm", _fake)
+        return calls
+
+    CAND = [{"persona": "fact_checker", "trigger_type": "fact", "confidence": 0.9,
+             "span": "수율이 90%라고 하셨죠", "need_search": False}]
+
+    WEB = [{"segment_text": "수율", "result": "2026년 3분기 수율은 82%로 보고됨",
+            "sources": ["https://example.com/q3"]}]
+
+    def test_web_finding_becomes_evidence_and_searched_is_true(
+            self, cfg, fac_db, monkeypatch):
+        cfg(self._values())
+        calls = self._llm(monkeypatch, self.CAND)
+        shown = []
+        orch = FacilitationOrchestrator(
+            session_id="w1", on_intervention=shown.append,
+            web_provider=lambda: list(self.WEB))
+        _offer_and_drain(orch, ["수율이 90%라고 하셨죠"])
+
+        ev = shown[0]["evidence"]
+        assert [e["source"] for e in ev] == ["web"]
+        assert ev[0]["url"] == "https://example.com/q3"
+        assert shown[0]["searched"] is True          # 배지가 사실을 말한다
+        gen = [c for c in calls if not c["triage"]][0]
+        assert "[web] " in gen["user"] and "82%" in gen["user"]
+
+    def test_internal_evidence_comes_first(self, cfg, fac_db, monkeypatch):
+        """FR-10 — 사내 자료가 앞줄, 웹이 뒷줄."""
+        cfg(self._values())
+        self._llm(monkeypatch, self.CAND)
+        shown = []
+        orch = FacilitationOrchestrator(
+            session_id="w2", on_intervention=shown.append,
+            search_provider=lambda t, limit=3: [
+                {"title": "사내 수율 노트", "filename": "n.md", "snippet": "…",
+                 "source_type": "note"}],
+            web_provider=lambda: list(self.WEB))
+        _offer_and_drain(orch, ["수율이 90%라고 하셨죠"])
+        assert [e["source"] for e in shown[0]["evidence"]] == ["note", "web"]
+
+    def test_no_web_means_searched_false_but_still_intervenes(
+            self, cfg, fac_db, monkeypatch):
+        """웹이 없어도 사내 근거가 있으면 개입한다 — 대신 '⚠ 미검증'으로 나간다.
+
+        웹 근거를 필수로 걸면, 내부 자료 우선 설계(볼트에서 찾으면 웹을 아예
+        부르지 않는다) 때문에 팩트체커가 사실상 영구 침묵한다."""
+        cfg(self._values())
+        self._llm(monkeypatch, self.CAND)
+        shown = []
+        orch = FacilitationOrchestrator(
+            session_id="w3", on_intervention=shown.append,
+            search_provider=lambda t, limit=3: [
+                {"title": "사내 수율 노트", "filename": "n.md", "snippet": "…",
+                 "source_type": "note"}])
+        _offer_and_drain(orch, ["수율이 90%라고 하셨죠"])
+        assert len(shown) == 1
+        assert shown[0]["searched"] is False
+
+    def test_no_evidence_at_all_still_blocks_the_intervention(
+            self, cfg, fac_db, monkeypatch):
+        """근거가 하나도 없으면 개입하지 않는다 — 추측 금지 게이트는 그대로."""
+        cfg(self._values())
+        self._llm(monkeypatch, self.CAND)
+        shown = []
+        orch = FacilitationOrchestrator(session_id="w4",
+                                        on_intervention=shown.append)
+        _offer_and_drain(orch, ["수율이 90%라고 하셨죠"])
+        assert shown == []
+
+    def test_non_web_persona_never_sees_web_findings(
+            self, cfg, fac_db, monkeypatch):
+        """근거 소스에 web 이 없는 페르소나에는 붙지 않는다.
+
+        악마의 변호인은 볼트는 보되 웹은 보지 않는다(evidence=(dialog, vault)).
+        팩트체커·도메인 전문가만 web 을 적어 두었다 — 이 판정은 레지스트리 데이터가
+        하고, 코드가 페르소나 키를 하드코딩하지 않는다."""
+        assert personas.EV_WEB not in personas.PERSONAS["devils_advocate"].evidence
+        cfg(self._values(**{"facilitation.personas.devils_advocate.level": 3}))
+        self._llm(monkeypatch, [dict(self.CAND[0], persona="devils_advocate")])
+        shown = []
+        orch = FacilitationOrchestrator(
+            session_id="w5", on_intervention=shown.append,
+            search_provider=lambda t, limit=3: [
+                {"title": "사내 노트", "filename": "n.md", "snippet": "…",
+                 "source_type": "note"}],
+            web_provider=lambda: list(self.WEB))
+        _offer_and_drain(orch, ["수율이 90%라고 하셨죠"])
+        assert [e["source"] for e in shown[0]["evidence"]] == ["note"]
+
+    def test_broken_web_provider_does_not_break_the_stream(
+            self, cfg, fac_db, monkeypatch):
+        cfg(self._values())
+        self._llm(monkeypatch, self.CAND)
+
+        def _boom():
+            raise RuntimeError("웹 결과 없음")
+
+        shown = []
+        orch = FacilitationOrchestrator(
+            session_id="w6", on_intervention=shown.append,
+            search_provider=lambda t, limit=3: [
+                {"title": "사내 노트", "filename": "n.md", "snippet": "…",
+                 "source_type": "note"}],
+            web_provider=_boom)
+        _offer_and_drain(orch, ["수율이 90%라고 하셨죠"])
+        assert len(shown) == 1 and shown[0]["searched"] is False
+
+    def test_web_provider_is_read_only_no_new_search(
+            self, cfg, fac_db, monkeypatch):
+        """개입 생성이 유료 웹 검색을 새로 부르지 않는다 — 회의당 비용 예측 가능성."""
+        cfg(self._values())
+        self._llm(monkeypatch, self.CAND)
+        hits = []
+        orch = FacilitationOrchestrator(
+            session_id="w7", on_intervention=lambda i: None,
+            web_provider=lambda: hits.append(1) or list(self.WEB))
+        _offer_and_drain(orch, ["수율이 90%라고 하셨죠"])
+        assert hits == [1]          # 있는 결과를 1회 읽을 뿐이다

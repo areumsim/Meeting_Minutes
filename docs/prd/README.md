@@ -105,7 +105,7 @@
 
 | 문서 주장 | 확인 명령 | 결과 |
 |---|---|---|
-| 테스트 수 | `python -m pytest -q` 마지막 줄 | **1092 passed, 1 skipped** (2026-08-05 재실행) — `CLAUDE.md` 와 일치 |
+| 테스트 수 | `python -m pytest -q` 마지막 줄 | **1105 passed, 1 skipped** (2026-08-05 재실행) — `CLAUDE.md` 와 일치 |
 | 프런트엔드 테스트 수 | `cd web/frontend && npx vitest run` 마지막 줄 | **102** (2026-08-05 재실행, 2026-08-04 의 93 에서 증가) |
 | 배포 의존성 고정(파이썬) | `grep -c '==' scripts/build/constraints-web.txt` | **52** |
 | 페르소나 화면 개입이 실제로 나가는가 | `grep -n 'on_intervention' meeting_minutes_app/wiki_core/facilitation.py` | 존재·호출됨 → "M0 관찰모드(화면 없음)" 표기는 폐기됐다 |

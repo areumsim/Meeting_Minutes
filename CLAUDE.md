@@ -25,9 +25,8 @@ Obsidian 기반 **회의록 자동화 + LLM Wiki 지식순환** 시스템. 오�
 pip install -e .                       # 개발 설치
 python run_meeting.py <cmd> [args]     # CLI (run_meeting.bat 도 동일)
 webUI_실행.bat                          # 웹 UI 로컬 실행 (데이터 = 리포 루트)
-python -m pytest                       # 테스트 (2026-08-05: 1092 passed, 1 skipped) ← 수치 정본
-cd web/frontend && npx vitest run      # 프런트 컴포넌트 테스트 (102 passed)
-cd web/frontend && npm test            # 프런트 테스트 (2026-08-04: 93 passed)
+python -m pytest                       # 테스트 (2026-08-05: 1105 passed, 1 skipped) ← 수치 정본
+cd web/frontend && npx vitest run      # 프런트 테스트 (2026-08-05: 105 passed) ← 정본 명령
 python run_meeting.py reindex          # 위키/그래프 인덱스 재빌드
 ```
 

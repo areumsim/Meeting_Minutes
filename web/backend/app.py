@@ -347,3 +347,27 @@ if FRONTEND_DIST.exists():
         if file_path.exists() and file_path.is_file():
             return FileResponse(str(file_path))
         return FileResponse(str(FRONTEND_DIST / "index.html"))
+else:
+    # 프런트 번들이 없다 = 소스에서 실행하는데 `npm run build` 를 안 한 상태다.
+    # `web/frontend/dist` 는 `.gitignore` 의 `dist/` 에 걸려 **커밋되지 않으므로**,
+    # 새로 클론한 PC 에서 이 경우가 정상적으로 발생한다. 종전엔 라우트가 아예 mount
+    # 되지 않아 브라우저가 빈 404 를 봤고(런처는 `/api/health` 만 보고 성공 판정해
+    # 브라우저를 연다) 어디에도 안내가 없었다 — 원인을 알 수 있게 화면과 콘솔이
+    # 같은 말을 한다. 포터블 배포본에는 번들이 포함되므로 이 경로를 타지 않는다.
+    _BUILD_HINT = (
+        "웹 화면(프런트엔드) 번들이 없습니다.\n\n"
+        "  cd web/frontend\n  npm ci\n  npm run build\n\n"
+        f"를 실행한 뒤 새로 고치세요. (찾은 경로: {FRONTEND_DIST})\n"
+        "API 는 정상 동작 중입니다 — /api/health 로 확인할 수 있습니다."
+    )
+    print(f"[web] {_BUILD_HINT.splitlines()[0]} → web/frontend 에서 "
+          f"`npm ci && npm run build` 필요 ({FRONTEND_DIST})")
+
+    @app.get("/{full_path:path}")
+    async def missing_frontend(full_path: str):
+        from fastapi import HTTPException as _HTTPException
+        from fastapi.responses import PlainTextResponse
+        if full_path.startswith(("api/", "ws/", "mcp", "assets/")):
+            raise _HTTPException(status_code=404)
+        # 503: 서버는 살아 있고 화면 자산만 없다(설정 오류가 아니다).
+        return PlainTextResponse(_BUILD_HINT, status_code=503)

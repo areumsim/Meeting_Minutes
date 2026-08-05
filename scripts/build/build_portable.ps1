@@ -97,16 +97,23 @@ if (-not (Test-Path $ffmpeg)) {
 Step '2/8' 'Preparing output folder...'
 $dataBak = $null
 if (Test-Path (Join-Path $OutDir 'MeetingMinutesData')) {
-    # 기존 사용자 데이터(설정·회의록) 보존 시도. 폴더가 실행 중 서버 등에 잠겨 이동이
-    # 실패해도 빌드를 죽이지 않는다 — 릴리즈 zip은 어차피 Step 8에서 MeetingMinutesData를
-    # 제외하므로, 최악의 경우 백업만 건너뛰고 계속 진행한다.
+    # 기존 사용자 데이터(설정·회의록·API 키) 보존. 이 폴더는 실기 검증으로 배포본을
+    # 실행하면 만들어지고, 그 안에 config.json(키)·meeting_assistant.db(회의)가 있다.
     $dataBak = Join-Path $env:TEMP ("MMP_DATA_" + [System.IO.Path]::GetRandomFileName())
     try {
         Move-Item (Join-Path $OutDir 'MeetingMinutesData') $dataBak -ErrorAction Stop
         Write-Host "  기존 데이터 백업: $dataBak"
     } catch {
-        Write-Host "  [WARN] MeetingMinutesData 백업 건너뜀(잠김/사용중) — 릴리즈 zip엔 미포함" -ForegroundColor Yellow
+        # **백업 실패는 빌드를 중단시킨다.** 종전엔 경고만 남기고 계속 진행했는데,
+        # 바로 아래에서 OutDir 내용물을 지우므로 그 데이터가 **부분 파괴**됐다
+        # (잠긴 파일은 남고, 잠기지 않은 config.json 은 삭제된다). 경고 문구도
+        # "릴리즈 zip엔 미포함"이라 안심하고 넘기게 되어 있었다.
+        # 원인은 거의 항상 '배포본이 실행 중'이다 — 닫고 다시 빌드하면 된다.
         $dataBak = $null
+        Fail ("MeetingMinutesData 를 백업할 수 없습니다(잠김/사용중). " +
+              "실행 중인 MeetingMinutes.bat / 서버를 닫고 다시 빌드하세요. " +
+              "이 상태로 계속하면 그 폴더의 config.json(API 키)과 회의 DB 가 지워집니다. " +
+              "정말 버려도 되면 해당 폴더를 직접 삭제한 뒤 다시 실행하세요.")
     }
 }
 if (Test-Path $OutDir) {

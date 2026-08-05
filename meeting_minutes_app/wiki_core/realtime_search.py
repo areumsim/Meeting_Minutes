@@ -213,9 +213,12 @@ class RealtimeVaultSearcher:
         **유료 웹 검색**까지 나간다(검색 1,000회당 $10). 아무도 볼 수 없는 결과에
         돈을 쓰는 것이고, 이 리포는 같은 결함을 개입 카드에서 이미 한 번 고쳤다.
 
-        멈추는 것: 볼트 검색·웹 보완·화면 표시. 유지되는 것: 이미 모인 결과
-        (`collected_*`) — 끄기 전까지 찾은 관련 노트는 회의록에 남는다. 이건 이미
-        지불한 것이고, 지우면 사용자가 잃기만 한다.
+        멈추는 것: **이 모듈의** 볼트 검색과 화면 표시(`offer_segment`·`search_now`).
+        웹 보완은 이 모듈이 하지 않으므로(모듈 상단 주석) 호출부가 `muted` 를 보고
+        함께 멈춘다 — `api/realtime.py::_maybe_web_research` 앞단 guard 가 그것이다.
+        새 호출부를 만들 때 그 guard 를 빼면 **비싼 쪽(검색 1,000회당 $10)만 남는다**.
+        유지되는 것: 이미 모인 결과(`collected_*`) — 끄기 전까지 찾은 관련 노트는
+        회의록에 남는다. 이건 이미 지불한 것이고, 지우면 사용자가 잃기만 한다.
 
         되돌리는 함수는 두지 않는다 — 페르소나 mute 와 같은 이유(세션 중 토글은
         "껐는데 왜 또 뜨냐"를 만든다). 새 녹음에서 다시 켜진다."""
@@ -465,7 +468,11 @@ class RealtimeVaultSearcher:
             if self._indexer is None and self._obs is None:
                 self._disabled = True  # 이후 offer_segment는 전부 no-op
                 self._reason = reason or "no_backend"
-            else:
+            elif not self._muted:
+                # **mute 사유를 덮지 않는다.** 사용자가 끈 직후에도 그 전에 제출된
+                # 검색 작업이 초기화를 끝낼 수 있다(인덱스 로드는 수 초 걸린다).
+                # 그때 사유를 ""(정상)으로 밀면 status() 가 "꺼졌지만 이유는 없음"
+                # 이라는 거짓을 말한다.
                 self._reason = ""
         finally:
             self._init_done = True

@@ -161,6 +161,10 @@ class BrowserRealtimeSession:
         # WS가 유효한 전사 없이 실패하면 같은 오디오 스트림으로 HTTP 청크 전사에 폴백한다.
         self._ws_failed = False
         self._user_stopped = False
+        #: 사용자가 '저장하지 않고 취소'를 눌렀는가. 취소는 정지와 **다른 경로**다 —
+        #: 회의록도 마지막 정리(LLM)도 만들지 않는다(`_cancel_session`). 두 수신
+        #: 루프(WS·HTTP 폴백)가 같은 플래그를 세운다.
+        self._cancelled = False
 
         # 이벤트 상태 추적
         self._current_text: Dict[str, str] = {}
@@ -463,6 +467,13 @@ class BrowserRealtimeSession:
                             if msg.get("type") == "stop":
                                 self._user_stopped = True
                                 break
+                            elif msg.get("type") == "cancel":
+                                # '저장 안 하고 취소' — HTTP 폴백 경로에만 있던 처리다.
+                                # 여기 없던 동안 WS 모드의 취소는 '연결 끊김'으로 보여
+                                # 정상 종료(마지막 정리 LLM + 회의록 생성)로 갔다.
+                                self._user_stopped = True
+                                self._cancelled = True
+                                break
                             elif msg.get("type") == "facilitation_check":
                                 self._facilitation_check()
                             elif msg.get("type") == "facilitation_feedback":
@@ -508,6 +519,11 @@ class BrowserRealtimeSession:
                 return
             except Exception:
                 traceback.print_exc()
+
+        if self._cancelled:
+            # 취소: 회의록도, 마지막 정리도 만들지 않는다(공통 정리 한 곳).
+            await self._cancel_session()
+            return
 
         # 정상 종료: 풀/검색 정리 후 최종 처리
         self._stop = True
@@ -763,12 +779,17 @@ class BrowserRealtimeSession:
             return None
 
     def _create_facilitator(self, topic: str, speakers: str = ""):
-        """회의 진행 페르소나 오케스트레이터(M0 관찰모드) 생성.
+        """회의 진행 페르소나 오케스트레이터 생성(M1 — 화면 개입까지).
 
         게이트(config.facilitation.enabled, 기본 꺼짐)는 모듈 내부에서 검사한다 —
         꺼져 있으면 스레드풀도 만들지 않는 no-op 이라 LLM 호출이 0회다.
-        관찰모드라 화면(WS) 이벤트는 보내지 않는다 — 판정은 facilitation_log 에만
-        남는다. 생성 실패는 녹음을 막지 않는다(_create_searcher 와 같은 규칙)."""
+        참견도 3(옆 카드)로 올린 페르소나의 개입은 `on_intervention` 으로 브라우저에
+        push 되고, 참견도 0·1 은 여전히 `facilitation_log` 기록만 남는다(채널 판정은
+        `_dispatch` 한 곳). 생성 실패는 녹음을 막지 않는다(_create_searcher 와 같은 규칙).
+
+        근거 공급자 3종을 주입한다 — 새 검색기·새 registry 로더를 만들지 않기 위해서다
+        (PRD §6·§7): 후보 발화 검색(`_facilitation_search`) · 누적 폴백
+        (`_facilitation_evidence`) · 이미 나간 웹 결과(`_facilitation_web`)."""
         try:
             from meeting_minutes_app.wiki_core.facilitation import FacilitationOrchestrator
             # 참석자를 넘기면 미완료 액션을 owner 로 우선 걸러 준다(그 사람 액션이
@@ -801,15 +822,24 @@ class BrowserRealtimeSession:
     async def _wrap_up_facilitator(self):
         """정상 종료 마무리 — 마지막 정리 1회 후 트리아지 풀 drain.
 
-        **취소 경로에서는 부르지 않는다**(버린 회의에 새 과금을 만들지 않는다).
-        주기가 기본 600초라 25분 회의면 요약이 t=600 의 1건뿐이고 마지막 15분이
-        통째로 빠진다 — 사용자가 회의 끝에 확인하려는 것이 정확히 그 구간이다.
-        `finalize_brief` 는 LLM 호출을 기다리므로 워커 스레드에서 돌린다."""
+        **취소 경로에서는 부르지 않는다**(버린 회의에 새 과금을 만들지 않는다 —
+        `_cancel_session`). 주기가 기본 600초라 25분 회의면 요약이 t=600 의 1건뿐이고
+        마지막 15분이 통째로 빠진다 — 사용자가 회의 끝에 확인하려는 것이 정확히 그
+        구간이다. `finalize_brief` 는 LLM 호출을 기다리므로 워커 스레드에서 돌린다."""
         if self._facilitator is None:
             return
         try:
+            # 요약이 실제로 만들어질 조건일 때만 화면에 알린다 — 종료 대기가 최대
+            # 25초 늘어나는데 아무 안내가 없으면 "멈췄나?"로 읽힌다(다른 단계는
+            # 전부 상태를 보낸다: "전사 보정 중...", "회의록 생성 중...").
+            will_brief = self._facilitator.brief_enabled()
+            if will_brief:
+                self._send_to_browser({"type": "status",
+                                       "message": "마지막 정리 중..."})
             reason = await asyncio.to_thread(self._facilitator.finalize_brief)
-            if reason:
+            # 꺼 둔 기능의 '건너뜀'은 로그로 남기지 않는다 — 기본값이 OFF 라
+            # 모든 사용자가 녹음마다 무의미한 한 줄을 보게 된다.
+            if reason and will_brief:
                 print(f"[facilitation] 마지막 정리 건너뜀: {reason}")
         except Exception as e:
             print(f"[facilitation] 마지막 정리 실패(무시): {e}")
@@ -817,6 +847,54 @@ class BrowserRealtimeSession:
             self._facilitator.shutdown(wait=True)
         except Exception:
             pass
+
+    async def _cancel_session(self):
+        """'저장하지 않고 취소' 공통 마무리 — WS 경로와 HTTP 폴백 경로가 같은 것을 한다.
+
+        **여기서는 새 LLM 호출을 만들지 않는다** — 마지막 정리도, 회의록 생성도 없다.
+        버린 회의에 과금을 만들지 않는 것이 이 경로의 계약이다. 종전엔 이 정리가 HTTP
+        폴백 경로에만 있었고 WS 수신 루프는 `cancel` 메시지를 아예 몰랐다. 그래서
+        WS 모드에서 [취소]를 누르면 서버는 그것을 '연결 끊김'으로 보고 **정상 종료
+        경로**로 들어가, 마지막 정리(LLM 1회)와 회의록 생성까지 그대로 돌았다.
+
+        관찰 로그(발화 인용 ≤500자)도 함께 지운다 — 사용자가 "저장하지 않는다"를
+        고른 회의의 내용이 DB 에 남으면 안 된다(완전 삭제가 같은 이유로 지운다).
+        진행 중이던 트리아지가 직후에 한 줄 더 쓸 수는 있다(풀을 기다리지 않는다 —
+        취소는 즉시 끝나야 한다). 그 잔여분은 휴지통 비우기(purge)가 정리한다."""
+        self._stop = True
+        self._translator_pool.shutdown(wait=False, cancel_futures=True)
+        self._web_pool.shutdown(wait=False, cancel_futures=True)
+        if self._searcher is not None:
+            try:
+                self._searcher.shutdown(wait=False)
+            except Exception:
+                pass
+        if self._facilitator is not None:
+            try:
+                self._facilitator.shutdown(wait=False)
+            except Exception:
+                pass
+        if self.session_id:
+            try:
+                from meeting_minutes_app.wiki_core import facilitation as _fac
+                _fac.delete_session_observations(self.session_id,
+                                                 db_path=db.DB_PATH)
+            except Exception:
+                pass
+            try:
+                db.delete_session(self.session_id)
+            except Exception:
+                db.update_session_status(self.session_id, "error",
+                                        error_detail="사용자 취소")
+            self.session_id = None
+        try:
+            await self.ws.send_json({
+                "type": "cancelled",
+                "message": "녹음을 저장하지 않고 종료했습니다.",
+            })
+        except Exception:
+            pass
+        print("[realtime] 세션 취소 — 저장 없이 종료")
 
     def _facilitation_web(self):
         """회의 중 **이미 나간** 웹 검색 결과 — 팩트체커의 근거로 넘긴다.
@@ -1699,8 +1777,6 @@ class BrowserRealtimeSession:
 
         consumer_task = asyncio.create_task(_consumer())
         revise_task = asyncio.create_task(_revise_worker()) if self._two_pass else None
-        cancelled = False  # 사용자가 '저장 안 하고 취소'를 눌렀는지
-
         try:
             while not self._stop:
                 try:
@@ -1722,7 +1798,7 @@ class BrowserRealtimeSession:
                     if msg.get("type") == "stop":
                         break
                     elif msg.get("type") == "cancel":
-                        cancelled = True
+                        self._cancelled = True
                         break
                     elif msg.get("type") == "facilitation_check":
                         self._facilitation_check()
@@ -1759,8 +1835,10 @@ class BrowserRealtimeSession:
         except WebSocketDisconnect:
             pass
 
-        if cancelled:
+        if self._cancelled:
             # 취소: 회의록을 만들지 않고 세션·진행물을 버린다(새 녹음 즉시 시작용).
+            # 이 경로 전용은 **asyncio 태스크 취소**뿐이고(HTTP 폴백만 태스크를 쓴다),
+            # 나머지 정리는 WS 경로와 공유한다(`_cancel_session`).
             _cancel_targets = [consumer_task, revise_task,
                                *list(fast_tr_tasks), *list(stt_workers)]
             for t in _cancel_targets:
@@ -1770,34 +1848,7 @@ class BrowserRealtimeSession:
                 *[t for t in _cancel_targets if t is not None],
                 return_exceptions=True,
             )
-            # HTTP 경로 전용 종료 — 스레드풀을 여기서도 정리(과거 WS 경로만 정리해 누수)
-            self._translator_pool.shutdown(wait=False, cancel_futures=True)
-            self._web_pool.shutdown(wait=False, cancel_futures=True)
-            if self.session_id:
-                try:
-                    db.delete_session(self.session_id)
-                except Exception:
-                    db.update_session_status(self.session_id, "error",
-                                             error_detail="사용자 취소")
-                self.session_id = None
-            if self._searcher is not None:
-                try:
-                    self._searcher.shutdown(wait=False)
-                except Exception:
-                    pass
-            if self._facilitator is not None:
-                try:
-                    self._facilitator.shutdown(wait=False)
-                except Exception:
-                    pass
-            try:
-                await self.ws.send_json({
-                    "type": "cancelled",
-                    "message": "녹음을 저장하지 않고 종료했습니다.",
-                })
-            except Exception:
-                pass
-            print("[realtime] 세션 취소 — 저장 없이 종료")
+            await self._cancel_session()
             return
 
         # 종료: 남은 버퍼를 반드시 마지막 청크로 flush한 뒤 소비자를 드레인한다
@@ -2075,7 +2126,7 @@ class BrowserRealtimeSession:
                     from meeting_minutes_app.wiki_core import facilitation as _fac
                     _final_text = "\n".join(
                         (s.get("text") or "") for s in self.segments)
-                    _fac.mark_revised_spans(self.session_id, _final_text)
+                    _fac.mark_confirmed_spans(self.session_id, _final_text)
                 except Exception as _me:
                     print(f"[facilitation] 조각/확정 대조 표시 실패(무시): {_me}")
 

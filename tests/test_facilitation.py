@@ -17,6 +17,7 @@ TestReplayPastMeetings 가 그 네 게이트를 각각 고정한다.
 """
 
 import json
+import threading
 import time
 from pathlib import Path
 
@@ -1500,7 +1501,41 @@ class TestMuteStopsSpending:
         assert "def _facilitation_mute" in src
         front = Path("web/frontend/src/components/Recorder.tsx").read_text(
             encoding="utf-8")
-        assert 'type: "facilitation_mute"' in front
+        assert 'sendMute("facilitation_mute")' in front
+        # 공통 전송기가 실제로 WS 로 내보내는지까지 본다 — 호출만 있고 전송이 없으면
+        # 서버는 계속 생성한다(이 테스트가 막으려는 것이 바로 그 상태다).
+        assert "ws.send(JSON.stringify({ type }))" in front
+
+    def test_related_notes_mute_is_wired_in_both_loops(self):
+        """관련 노트 끄기도 **두 수신 루프 모두**에 있어야 한다.
+
+        페르소나 쪽에만 이 회귀 테스트가 있었다. 한쪽 루프에만 넣으면 폴백 세션에서
+        조용히 안 먹고, 그러면 서버는 회의 끝까지 볼트 검색과 유료 웹 보완을 계속한다."""
+        from pathlib import Path
+        src = Path("web/backend/api/realtime.py").read_text(encoding="utf-8")
+        assert src.count('"related_notes_mute"') == 2   # WS 경로 + HTTP 경로
+        assert "def _related_notes_mute" in src
+        # 볼트만 멈추고 웹이 계속 나가면 **비싼 쪽만 남는다**(검색 1,000회당 $10)
+        assert 'getattr(self._searcher, "muted", False)' in src
+        front = Path("web/frontend/src/components/Recorder.tsx").read_text(
+            encoding="utf-8")
+        assert 'sendMute("related_notes_mute")' in front
+        # 끄기는 그 회의에서만 유효하다 — 시작·취소·이탈 3경로가 같은 리셋을 쓴다
+        # (종전엔 시작 경로에만 있어 취소 후 대기 화면에 '이번 회의 끔'이 남았다).
+        assert front.count("resetRelatedNotes()") == 3
+
+    def test_cancel_is_wired_in_both_loops(self):
+        """'저장 안 하고 취소'도 두 루프 모두에 있어야 한다.
+
+        WS 수신 루프에 없던 동안, WS 모드의 취소는 '연결 끊김'으로 보여 **정상 종료**
+        경로로 갔다 — 버린 회의에 마지막 정리(LLM)와 회의록 생성이 그대로 돌았다."""
+        from pathlib import Path
+        src = Path("web/backend/api/realtime.py").read_text(encoding="utf-8")
+        assert src.count('"cancel"') == 2               # WS 경로 + HTTP 경로
+        assert src.count("await self._cancel_session()") == 2
+        # 취소 경로는 마지막 정리를 부르지 않는다(새 과금 금지)
+        assert "_wrap_up_facilitator" not in src.split(
+            "async def _cancel_session")[1].split("async def ")[0]
 
 
 class TestHumanFeedbackLabels:
@@ -2139,8 +2174,10 @@ class TestPriorMeetingContext:
         _offer_and_drain(orch, ["지난번과 다르게 갑시다. 다음 안건으로."])
 
         assert "critic" in gen_prompts and "facilitator" in gen_prompts
-        assert "이전 회의에서 정해진 것" in gen_prompts["critic"]        # registry 있음
-        assert "이전 회의에서 정해진 것" not in gen_prompts["facilitator"]  # 없음
+        # 실제 재료 문장으로 확인한다 — 안내 문구(범례)만 보면 재료가 비어도 통과한다
+        assert "STT 기본 모델은 mini 로 간다" in gen_prompts["critic"]     # registry 있음
+        assert "[registry]" in gen_prompts["critic"]
+        assert "STT 기본 모델은 mini 로 간다" not in gen_prompts["facilitator"]  # 없음
 
     def test_registry_failure_does_not_stop_interventions(
             self, cfg, fac_db, monkeypatch):
@@ -2182,6 +2219,155 @@ class TestPriorMeetingContext:
         for k in ("critic", "fact_checker", "scribe", "domain_expert"):
             assert k not in prompt, f"금지된 {k} 가 프롬프트에 들어갔다"
         assert "이전 회의에서 정해진 것" not in prompt   # 쓸 사람이 없으면 재료도 없다
+
+    def test_no_topic_and_no_attendees_means_no_registry_at_all(
+            self, cfg, fac_db, tmp_path, monkeypatch):
+        """주제·참석자가 모두 없으면 **읽지도 않는다**.
+
+        `_filter_*_by_topic` 은 "필터 기준이 없으면 전체 반환" 계약이다(회의 준비
+        브리핑에서는 사용자가 직접 요청한 것이라 맞는 동작). 그런데 실시간 판정에
+        그대로 쓰면 주제를 안 적은 회의에 **다른 프로젝트의 결정**이 들어가고, 트리아지
+        지시문은 "어긋남을 후보로 올려라"까지 붙는다 — 오탐을 만드는 재료다.
+        주제 칸은 선택 입력이라 빈 경우가 흔하다."""
+        self._seed_registry(tmp_path, monkeypatch)
+        cfg(self._values())
+        calls = []
+        monkeypatch.setattr(facilitation, "_call_llm",
+                            lambda m, s, u, max_tokens=None: calls.append(u) or "[]")
+        orch = FacilitationOrchestrator(session_id="pc6", topic="", db_path=fac_db)
+        _offer_and_drain(orch, ["주제를 안 적고 그냥 녹음을 시작했습니다."])
+        assert orch.prior_context_block() == ""
+        assert "배포는 포터블 zip 이 정본" not in calls[0]
+
+    def test_attendees_alone_still_filter_actions(
+            self, cfg, fac_db, tmp_path, monkeypatch):
+        """참석자만 있으면 **그 사람의 액션**은 재료가 된다(owner 필터가 동작한다).
+
+        결정에는 참석자 필터가 없으므로 주제 없이 결정을 넣지는 않는다 — 넣으면
+        '최근 전체'가 되어 위 오탐 경로가 그대로 열린다."""
+        self._seed_registry(tmp_path, monkeypatch)
+        cfg(self._values())
+        orch = FacilitationOrchestrator(session_id="pc7", topic="",
+                                        attendees=["홍길동"], db_path=fac_db)
+        block = orch.prior_context_block()
+        assert "STT 인덱스 재빌드" in block          # 참석자 액션은 들어온다
+        assert "배포는 포터블 zip 이 정본" not in block   # 결정은 안 들어온다
+
+    def test_registry_is_read_once_even_with_concurrent_workers(
+            self, cfg, fac_db, tmp_path, monkeypatch):
+        """재료는 세션당 1회만 읽는다 — 판정 스레드가 2개라 락 없이는 두 번 읽는다.
+
+        (읽기를 __init__ 밖으로 옮긴 이유는 이 객체가 이벤트 루프 스레드에서 만들어져,
+        거기서 파일을 읽으면 '녹음 시작'이 그만큼 늦어지기 때문이다.)"""
+        self._seed_registry(tmp_path, monkeypatch)
+        cfg(self._values())
+        from meeting_minutes_app.wiki_core import wiki_knowledge as wk
+        reads = []
+        real = wk.recent_decisions_for
+        monkeypatch.setattr(wk, "recent_decisions_for",
+                            lambda *a, **k: reads.append(1) or real(*a, **k))
+        orch = FacilitationOrchestrator(session_id="pc8", topic="STT", db_path=fac_db)
+        assert reads == []                     # 생성 시점에는 파일을 읽지 않는다
+        threads = [threading.Thread(target=orch.prior_context_block)
+                   for _ in range(4)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+        assert len(reads) == 1
+
+
+class TestRegistryCountsAsEvidence:
+    """지난 회의 기록이 **근거로 인정되는가** — 가드·프롬프트·카드가 같은 목록을 보나.
+
+    종전엔 registry 가 생성 프롬프트의 별도 블록으로만 들어갔다. 그래서 근거 필수
+    가드(`domain_expert`·`fact_checker`)가 그것을 근거로 세지 않아, 볼트 히트가 0이면
+    "이전 회의에서 정한 것과 다르다"는 개입이 **통째로 버려졌다** — 볼트를 쓰지 않는
+    사용자에게는 사용자가 원한 그 기능이 영구 침묵이었다. 카드도 무엇과 대조했는지
+    보여줄 수 없었다(§6-5).
+    """
+
+    CAND = [{"persona": "fact_checker", "trigger_type": "fact", "confidence": 0.9,
+             "span": "지난번 결정과 다르게 mini 를 씁니다", "need_search": False}]
+
+    def _values(self):
+        values = {"facilitation.enabled": True,
+                  "facilitation.triage_period_sec": 600,
+                  "facilitation.max_cost_usd_per_meeting": 0.0,
+                  "facilitation.min_confidence": 0.6,
+                  "facilitation.context_decisions": 5,
+                  "facilitation.context_actions": 5}
+        for k in personas.PERSONAS:
+            values[f"facilitation.personas.{k}.level"] = 1
+        values["facilitation.personas.fact_checker.level"] = 3
+        return values
+
+    def _llm(self, monkeypatch):
+        prompts = []
+
+        def _fake(model, system, user, max_tokens=None):
+            if "트리아지" in system:
+                return json.dumps(self.CAND, ensure_ascii=False)
+            prompts.append(user)
+            return "지난 회의 결정과 다른 것 같습니다."
+
+        monkeypatch.setattr(facilitation, "_call_llm", _fake)
+        return prompts
+
+    def test_registry_only_still_intervenes(self, cfg, fac_db, tmp_path,
+                                            monkeypatch):
+        """볼트·웹 근거가 하나도 없어도 지난 회의 기록만으로 개입한다."""
+        TestPriorMeetingContext()._seed_registry(tmp_path, monkeypatch)
+        cfg(self._values())
+        prompts = self._llm(monkeypatch)
+        shown = []
+        orch = FacilitationOrchestrator(
+            session_id="rg1", topic="STT", db_path=fac_db,
+            on_intervention=shown.append)          # search_provider·web_provider 없음
+        _offer_and_drain(orch, ["지난번 결정과 다르게 mini 를 씁니다"])
+
+        assert len(shown) == 1, "지난 회의 기록이 근거로 인정되지 않았다"
+        srcs = [e["source"] for e in shown[0]["evidence"]]
+        assert srcs and set(srcs) == {"registry"}
+        # 카드가 무엇과 대조했는지 보여줄 수 있어야 한다(§6-5)
+        assert "STT 기본 모델은 mini 로 간다" in shown[0]["evidence"][0]["snippet"]
+        assert "[registry]" in prompts[0]
+        # 웹 근거가 없으므로 '미검증'으로 나간다(배지가 사실을 말한다)
+        assert shown[0]["searched"] is False
+
+    def test_no_material_at_all_still_blocks(self, cfg, fac_db, tmp_path,
+                                             monkeypatch):
+        """registry 도 비어 있으면 가드는 그대로 막는다 — 추측 금지."""
+        TestPriorMeetingContext()._seed_registry(
+            tmp_path, monkeypatch, decisions=[], actions=[])
+        cfg(self._values())
+        self._llm(monkeypatch)
+        shown = []
+        orch = FacilitationOrchestrator(
+            session_id="rg2", topic="STT", db_path=fac_db,
+            on_intervention=shown.append)
+        _offer_and_drain(orch, ["지난번 결정과 다르게 mini 를 씁니다"])
+        assert shown == []
+
+    def test_blocked_candidate_refunds_the_meeting_cap(
+            self, cfg, fac_db, tmp_path, monkeypatch):
+        """근거 부족으로 만들지 않은 개입이 회의당 캡을 먹으면 안 된다.
+
+        관문을 근거 수집보다 **먼저** 지나게 바꾸면서 예약이 앞으로 왔다 — 환불하지
+        않으면 근거 없는 후보 몇 건이 회의의 남은 예산을 조용히 태운다."""
+        TestPriorMeetingContext()._seed_registry(
+            tmp_path, monkeypatch, decisions=[], actions=[])
+        cfg(self._values())
+        self._llm(monkeypatch)
+        from meeting_minutes_app.common import pricing
+        orch = FacilitationOrchestrator(
+            session_id="rg3", topic="STT", db_path=fac_db,
+            on_intervention=lambda _i: None)
+        _offer_and_drain(orch, ["지난번 결정과 다르게 mini 를 씁니다"])
+        # 남는 것은 실제로 호출된 트리아지 1회분뿐 — 개입 예약은 환불됐다
+        triage_only = pricing.facilitation_triage_call_cost(
+            facilitation.effective_triage_model("gpt-4o-mini"))
+        assert orch.status()["session_cost_usd"] == pytest.approx(triage_only)
 
 
 class TestCandidateScopedEvidence:
@@ -2479,6 +2665,60 @@ class TestWebEvidenceReachesThePersona:
         _offer_and_drain(orch, ["수율이 90%라고 하셨죠"])
         assert hits == [1]          # 있는 결과를 1회 읽을 뿐이다
 
+    # ── 이 발화의 웹 근거인가 (배지가 사실을 말해야 한다) ──────────────
+
+    OTHER_WEB = [{"segment_text": "다음 회의는 다음 주 화요일입니다",
+                  "result": "달력 관련 일반 정보", "sources": ["https://e.com/cal"]}]
+
+    def test_unrelated_web_finding_does_not_claim_verification(
+            self, cfg, fac_db, monkeypatch):
+        """다른 발화에서 나간 웹 결과로 '검증됨'이 되면 안 된다.
+
+        `searched=True` 는 카드의 '⚠ 미검증' 배지를 끄는 값이다. 세션의 최근 웹 결과가
+        있으면 무조건 True 이던 동안, 30분 전 다른 발화를 검색한 결과가 방금 나온 수치를
+        '검증'한 것처럼 보였다 — 볼트 근거에서 이미 반박한 모양(누적 상위 N)과 같다."""
+        cfg(self._values())
+        self._llm(monkeypatch, self.CAND)
+        shown = []
+        orch = FacilitationOrchestrator(
+            session_id="w8", on_intervention=shown.append,
+            web_provider=lambda: list(self.OTHER_WEB))
+        _offer_and_drain(orch, ["수율이 90%라고 하셨죠"])
+        assert len(shown) == 1                     # 맥락으로는 남는다(버리지 않는다)
+        ev = [e for e in shown[0]["evidence"] if e["source"] == "web"]
+        assert len(ev) == 1 and ev[0]["matched"] is False
+        # 어느 발화에서 나온 것인지 카드가 밝힐 수 있어야 한다(§6-5)
+        assert ev[0]["segment"] == "다음 회의는 다음 주 화요일입니다"
+        assert shown[0]["searched"] is False       # 배지는 '미검증'이어야 한다
+
+    def test_matching_web_finding_is_preferred_over_recency(
+            self, cfg, fac_db, monkeypatch):
+        """이 발화에서 나간 검색이 있으면 그것을 쓴다 — '최근 것'보다 우선한다."""
+        cfg(self._values())
+        self._llm(monkeypatch, self.CAND)
+        shown = []
+        orch = FacilitationOrchestrator(
+            session_id="w9", on_intervention=shown.append,
+            # 최근(뒤쪽)이 무관한 발화, 앞쪽이 이 발화의 검색이다
+            web_provider=lambda: list(self.WEB) + list(self.OTHER_WEB))
+        _offer_and_drain(orch, ["수율이 90%라고 하셨죠"])
+        ev = [e for e in shown[0]["evidence"] if e["source"] == "web"]
+        assert [e["matched"] for e in ev] == [True]
+        assert "82%" in ev[0]["snippet"]           # 수율 검색 결과가 실렸다
+        assert shown[0]["searched"] is True
+
+    def test_prompt_marks_web_finding_from_another_utterance(
+            self, cfg, fac_db, monkeypatch):
+        """모델에게도 '다른 발화의 검색'임을 밝힌다 — 없는 검증을 주장하지 않게."""
+        cfg(self._values())
+        calls = self._llm(monkeypatch, self.CAND)
+        orch = FacilitationOrchestrator(
+            session_id="w10", on_intervention=lambda i: None,
+            web_provider=lambda: list(self.OTHER_WEB))
+        _offer_and_drain(orch, ["수율이 90%라고 하셨죠"])
+        gen = [c for c in calls if not c["triage"]][0]["user"]
+        assert "발화에서 검색된 결과" in gen
+
 
 class TestBriefsSurviveTheMeeting:
     """회의 중 요약이 회의가 끝나도 남는가 + 마지막 구간이 빠지지 않는가.
@@ -2545,11 +2785,25 @@ class TestBriefsSurviveTheMeeting:
 
     def test_markdown_orders_briefs_and_labels_their_trigger(
             self, cfg, fac_db, monkeypatch):
+        """문서 순서는 **회의 시각** 순이다 — 요약 생성이 끝난 순서가 아니다.
+
+        요약 풀은 워커가 2개라 두 요약이 겹칠 수 있다. 그래서 이 테스트의 LLM 대역도
+        호출 순서가 아니라 **창 내용**으로 응답을 고른다 — 순서 의존 대역이었을 때
+        이 테스트는 간헐적으로 실패했고, 그건 제품 결함이 아니라 대역의 결함이었다.
+        """
         cfg(self._values())
-        self._llm(monkeypatch, [{"points": ["첫 구간"], "decisions": [],
-                                 "actions": [], "open_questions": []},
-                                {"points": ["둘째 구간"], "decisions": [],
-                                 "actions": [], "open_questions": []}])
+        calls = []
+
+        def _fake(model, system, user, max_tokens=None):
+            if "중간 요약" not in system:
+                return "[]"
+            calls.append(user)
+            point = "첫 구간" if "가" in user else "둘째 구간"
+            return json.dumps({"points": [point], "decisions": [],
+                               "actions": [], "open_questions": []},
+                              ensure_ascii=False)
+
+        monkeypatch.setattr(facilitation, "_call_llm", _fake)
         now, shown = {"t": 0.0}, []
         orch = self._orch(fac_db, "bs2", now, shown)
         orch.offer_segment("시작합니다.")
@@ -2643,6 +2897,34 @@ class TestBriefsSurviveTheMeeting:
         assert [c["brief"] for c in calls] == []
         assert any(s["kind"] == "capped" for s in status)   # 사유가 화면으로 나간다
 
+    def test_auto_brief_off_means_no_final_brief(self, cfg, fac_db, monkeypatch):
+        """주기 0(자동 요약 끔)이면 마지막 정리도 만들지 않는다.
+
+        주기 0 은 "자동으로는 요약하지 마라"는 뜻인데, 종료 시 1건은 사용자가 누른 것이
+        아니라 자동 생성이다 — 끈 기능이 과금을 만들면 안 된다. [지금 정리] 버튼은
+        사용자가 그때 누른 것이므로 이 조건과 무관하게 계속 동작한다."""
+        cfg(self._values(**{"facilitation.brief_period_sec": 0}))
+        calls = self._llm(monkeypatch)
+        now, shown = {"t": 0.0}, []
+        orch = self._orch(fac_db, "bs9", now, shown)
+        orch.offer_segment("가" * 700)
+        reason = orch.finalize_brief()
+        orch.shutdown(wait=True)
+        assert "자동 중간 요약이 꺼져" in reason
+        assert [c["brief"] for c in calls] == []
+        assert usage_log.month_to_date_spend() == 0.0
+
+    def test_manual_brief_still_works_with_auto_off(self, cfg, fac_db, monkeypatch):
+        """자동을 껐어도 [지금 정리] 버튼은 동작한다(사용자가 누른 것이다)."""
+        cfg(self._values(**{"facilitation.brief_period_sec": 0}))
+        calls = self._llm(monkeypatch)
+        now, shown = {"t": 0.0}, []
+        orch = self._orch(fac_db, "bs10", now, shown)
+        orch.offer_segment("가" * 700)
+        assert orch.brief_now() == ""
+        orch.shutdown(wait=True)
+        assert [c["brief"] for c in calls] == [True]
+
 
 class TestProvisionalIsNotOvercounted:
     """조각(보정 전) 판정 계상 — 보정이 **교체를 포기한** 경우까지 세면 과대 계상이다.
@@ -2660,39 +2942,43 @@ class TestProvisionalIsNotOvercounted:
 
     def test_span_present_in_final_transcript_is_marked(self, fac_db):
         self._seed(fac_db, ["수율이 90%입니다", "다음 주에 봅시다"])
-        n = facilitation.mark_revised_spans(
+        n = facilitation.mark_confirmed_spans(
             "pv1", "안녕하세요. 수율이 90%입니다. 확인하겠습니다.", db_path=fac_db)
         assert n == 1
         rows = {o["span"]: o for o in
                 facilitation.observations("pv1", db_path=fac_db)}
-        assert rows["수율이 90%입니다"]["revised"] == 1
-        assert not rows["다음 주에 봅시다"]["revised"]
+        # 컬럼 이름이 값의 뜻과 같아야 한다 — `revised=1` 은 '바뀌었다'로 읽혀
+        # 정반대였다(이 표시는 "보정이 바꾸지 않았다"는 뜻이다).
+        assert rows["수율이 90%입니다"]["span_confirmed"] == 1
+        assert not rows["다음 주에 봅시다"]["span_confirmed"]
 
-    def test_report_separates_actually_changed_fragments(self, fac_db):
+    def test_report_separates_confirmed_from_unknown(self, fac_db):
         self._seed(fac_db, ["수율이 90%입니다", "다음 주에 봅시다"])
         before = facilitation.report("pv1", db_path=fac_db)
-        # 표시 전에는 모르는 것을 아는 척하지 않는다 — 두 값이 같다
+        # 표시 전에는 모르는 것을 아는 척하지 않는다 — 전부 '미확인'이다
         assert before["provisional_candidates"] == 2
-        assert before["provisional_unrevised"] == 2
+        assert before["provisional_confirmed"] == 0
+        assert before["provisional_unconfirmed"] == 2
 
-        facilitation.mark_revised_spans("pv1", "수율이 90%입니다", db_path=fac_db)
+        facilitation.mark_confirmed_spans("pv1", "수율이 90%입니다", db_path=fac_db)
         after = facilitation.report("pv1", db_path=fac_db)
         assert after["provisional_candidates"] == 2      # 원래 수치는 그대로
-        assert after["provisional_unrevised"] == 1       # 실제로 바뀐 것만
+        assert after["provisional_confirmed"] == 1
+        assert after["provisional_unconfirmed"] == 1     # 확인되지 않은 것만
 
     def test_whitespace_and_case_differences_still_match(self, fac_db):
         """전사 표기 차이(공백·대소문자)로 같은 문장을 다르다고 하면 안 된다."""
         self._seed(fac_db, ["TSMC 3nm  수율"])
-        assert facilitation.mark_revised_spans(
+        assert facilitation.mark_confirmed_spans(
             "pv1", "…tsmc 3nm 수율 이야기…", db_path=fac_db) == 1
 
     def test_confirmed_rows_are_never_touched(self, fac_db):
         """provisional=0(확정 전사 기반) 행은 대상이 아니다 — 리플레이 판정 포함."""
         self._seed(fac_db, ["확정 전사로 판정"], provisional=False)
-        assert facilitation.mark_revised_spans(
+        assert facilitation.mark_confirmed_spans(
             "pv1", "확정 전사로 판정", db_path=fac_db) == 0
 
     def test_empty_inputs_are_noops(self, fac_db):
         self._seed(fac_db, ["무언가"])
-        assert facilitation.mark_revised_spans("pv1", "   ", db_path=fac_db) == 0
-        assert facilitation.mark_revised_spans("", "무언가", db_path=fac_db) == 0
+        assert facilitation.mark_confirmed_spans("pv1", "   ", db_path=fac_db) == 0
+        assert facilitation.mark_confirmed_spans("", "무언가", db_path=fac_db) == 0

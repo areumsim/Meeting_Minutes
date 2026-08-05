@@ -120,9 +120,20 @@ def _int_conf(key: str, default: int) -> int:
     """정수 설정값 — 잘못 적힌 값(빈 문자열·문자)은 기본값으로 흡수한다.
 
     설정 파일은 사람이 손으로 고치는 파일이라 타입이 틀릴 수 있고, 그때 실시간
-    스트림이 죽으면 안 된다."""
+    스트림이 죽으면 안 된다. **이 모듈의 숫자 설정은 전부 이 둘을 지난다** —
+    같은 try/except 를 자리마다 복제하면 한 곳을 빼먹었을 때만 죽는다(초기 구현이
+    `brief_period_sec` 하나를 빼먹어, 값을 잘못 적으면 오케스트레이터 생성이 통째로
+    실패하고 기능이 조용히 사라졌다)."""
     try:
         return int(_c(key, default))
+    except (TypeError, ValueError):
+        return default
+
+
+def _float_conf(key: str, default: float) -> float:
+    """실수 설정값 — `_int_conf` 와 같은 계약(잘못된 값은 기본값)."""
+    try:
+        return float(_c(key, default))
     except (TypeError, ValueError):
         return default
 
@@ -200,7 +211,7 @@ CREATE TABLE IF NOT EXISTS facilitation_log (
     t1           REAL,
     provisional  INTEGER DEFAULT 0,
     repeats      INTEGER DEFAULT 0,
-    revised      INTEGER DEFAULT 0,
+    span_confirmed INTEGER DEFAULT 0,
     need_search  INTEGER,
     level        INTEGER,
     note         TEXT
@@ -240,8 +251,11 @@ _LOG_COLUMNS = {
     "feedback": "TEXT",
     "feedback_ts": "TEXT",
     # 조각(provisional) 전사로 판정한 행 중, 그 인용이 **확정 전사에 그대로 남은** 것.
-    # 1 = 조각과 최종본이 같았다(전사 품질 문제가 아니었다), 0/NULL = 미확인.
-    "revised": "INTEGER DEFAULT 0",
+    # 1 = 조각과 최종본이 같았다(전사 품질 문제가 아니었다), 0/NULL = **미확인**
+    # (보정이 바꿨을 수도 있고, 종료 후 대조가 아직 안 돌았을 수도 있다).
+    # 이름을 `revised` 로 두면 1 이 '바뀌었다'로 읽혀 뜻이 정반대가 된다 —
+    # 그래서 '확정 전사에서 확인됨'을 그대로 쓴다(`mark_confirmed_spans` 참조).
+    "span_confirmed": "INTEGER DEFAULT 0",
 }
 
 #: 사람이 카드에 남기는 라벨(M1). 이 두 값이 §15 오탐률 실측의 **사람 라벨링 채널**이다 —
@@ -287,12 +301,32 @@ def _ensure(c: sqlite3.Connection) -> None:
 _WS_RE = re.compile(r"\s+")
 
 
+def _norm(text: str) -> str:
+    """인용 비교용 정규화 — 공백·대소문자만 없앤다.
+
+    이 모듈에서 문자열을 '같은가' 판정하는 곳(후보 dedup 키·조각/확정 대조·웹 근거가
+    이 발화의 것인지)이 **모두 이 함수 하나**를 쓴다. 유사도 임계값 같은 상수는 두지
+    않는다(§9-0 실측 없는 상수 금지) — 판정은 항상 '포함 여부'다."""
+    return _WS_RE.sub(" ", (text or "").strip().lower())
+
+
+def _quotes_overlap(a: str, b: str) -> bool:
+    """두 인용이 같은 발화를 가리키는가 — 한쪽이 다른 쪽에 포함되면 그렇다고 본다.
+
+    웹 보완은 발화 앞 80자로 검색하고(`api/realtime.py`), 후보 span 은 그 발화의
+    인용이라 길이가 서로 다르다. 그래서 양방향 포함을 본다."""
+    na, nb = _norm(a), _norm(b)
+    if not na or not nb:
+        return False
+    return na in nb or nb in na
+
+
 def span_key(persona: str, span: str, trigger_type: str = "") -> str:
     """같은 후보인지 판정하는 키. 공백·대소문자 차이는 같은 것으로 본다.
 
     근거 인용(span)이 비면 트리거 유형으로 대체한다 — 그러면 "근거 없는 같은 유형의
     후보"가 회차마다 새 행으로 쌓이는 것을 막는다(빈 문자열끼리는 서로 같다)."""
-    base = _WS_RE.sub(" ", (span or "").strip().lower())[:200]
+    base = _norm(span)[:200]
     if not base:
         base = f"@{(trigger_type or '').strip().lower()}"
     return hashlib.sha1(f"{persona}|{base}".encode("utf-8")).hexdigest()[:16]
@@ -461,8 +495,8 @@ def _rows(table: str, session_id: Optional[str],
         c.close()
 
 
-def mark_revised_spans(session_id: str, final_text: str,
-                       db_path: Optional[Union[str, Path]] = None) -> int:
+def mark_confirmed_spans(session_id: str, final_text: str,
+                         db_path: Optional[Union[str, Path]] = None) -> int:
     """조각 전사로 판정한 행 중 **인용이 확정 전사에 그대로 남은** 것을 표시한다.
 
     왜 필요한가 — `provisional` 은 "판정 당시 보정 전 조각이었다"만 뜻한다. 그런데
@@ -474,13 +508,17 @@ def mark_revised_spans(session_id: str, final_text: str,
     있으면 1. 유사도 임계값 같은 것은 두지 않는다 — 실측 없는 상수를 넣지 않는다는
     이 리포의 규칙이고(§9-0), 부분 일치를 어디서 끊을지는 근거가 없다.
     반환: 표시한 행 수.
+
+    이름 주의(초기 구현은 컬럼을 `revised` 라고 불렀다): 이 표시는 "보정이 인용을
+    **바꾸지 않았다**"는 뜻이다. `revised=1` 이 '바뀌었다'로 읽혀 정반대의 의미가
+    되므로 `span_confirmed`(확정 전사에서 확인됨)로 바꿨다.
     """
     if not session_id or not (final_text or "").strip():
         return 0
     c = _connect(db_path)
     if c is None:
         return 0
-    haystack = _WS_RE.sub(" ", final_text).strip().lower()
+    haystack = _norm(final_text)
     n = 0
     try:
         _ensure(c)
@@ -489,13 +527,14 @@ def mark_revised_spans(session_id: str, final_text: str,
             "WHERE session_id = ? AND provisional = 1", (session_id,)).fetchall()
         ids = []
         for row_id, row_span in rows:      # row_factory 는 호출자마다 다를 수 있다
-            span = _WS_RE.sub(" ", str(row_span or "")).strip().lower()
+            span = _norm(str(row_span or ""))
             if span and span in haystack:
                 ids.append(row_id)
         if ids:
             with c:
-                c.executemany("UPDATE facilitation_log SET revised = 1 WHERE id = ?",
-                              [(i,) for i in ids])
+                c.executemany(
+                    "UPDATE facilitation_log SET span_confirmed = 1 WHERE id = ?",
+                    [(i,) for i in ids])
             n = len(ids)
         return n
     except sqlite3.Error:
@@ -594,14 +633,19 @@ def report(session_id: Optional[str] = None,
                                 == TRIGGER_BRIEF_ON_DEMAND),
         "candidate_repeats": sum(int(o.get("repeats") or 0) for o in obs),
         "provisional_candidates": sum(1 for o in obs if o.get("provisional")),
-        # 위 숫자에서 **인용이 확정 전사에 그대로 남은** 건을 뺀 값. 보정이 교체를
-        # 포기하는 경로가 3개(1초 미만·무음·반복 과다) 있어, provisional 만 세면
-        # 최종본과 똑같은 조각까지 "조각 기반 판정"으로 계상된다(과대 계상).
-        # 종료 후 mark_revised_spans() 가 표시한 것만 빠진다 — 표시 전에는
-        # provisional_candidates 와 같은 값이다(모르는 것을 아는 척하지 않는다).
-        "provisional_unrevised": sum(1 for o in obs
+        # 조각 기반 판정 중 **인용이 확정 전사에 그대로 남은**(=보정이 바꾸지 않은) 건.
+        # 보정이 교체를 포기하는 경로가 3개(1초 미만·무음·반복 과다) 있어, provisional
+        # 만 세면 최종본과 똑같은 조각까지 "조각 기반 판정"으로 계상된다(과대 계상).
+        "provisional_confirmed": sum(1 for o in obs
                                      if o.get("provisional")
-                                     and not o.get("revised")),
+                                     and o.get("span_confirmed")),
+        # 나머지 = **미확인**. "보정이 바꿨다"가 아니다 — 종료 후
+        # mark_confirmed_spans() 가 아직 안 돌았거나(구세션·예외) 인용이 세그먼트
+        # 경계를 걸쳐 포함 판정이 실패한 경우도 여기 들어온다. 표시 전에는
+        # provisional_candidates 와 같은 값이다(모르는 것을 아는 척하지 않는다).
+        "provisional_unconfirmed": sum(1 for o in obs
+                                       if o.get("provisional")
+                                       and not o.get("span_confirmed")),
         # 회의 중 카드에 남긴 사람 라벨(§19.4). 화면에 뜬 개입만 라벨될 수 있으므로
         # 분모는 candidates 가 아니라 'shown' 이다 — 여기서는 세지 않고(오케스트레이터
         # 메모리 값이라 DB 에 없다) 라벨 수만 정직하게 센다.
@@ -625,14 +669,8 @@ def persona_level(key: str) -> int:
     p = get_persona(key)
     if p is None:
         return 0
-    try:
-        lvl = int(_c(f"facilitation.personas.{key}.level", OBSERVE_LEVEL))
-    except (TypeError, ValueError):
-        lvl = OBSERVE_LEVEL
-    try:
-        max_level = int(_c("facilitation.max_level", 3))
-    except (TypeError, ValueError):
-        max_level = 3
+    lvl = _int_conf(f"facilitation.personas.{key}.level", OBSERVE_LEVEL)
+    max_level = _int_conf("facilitation.max_level", 3)
     if p.hard_cap is not None:
         lvl = min(lvl, p.hard_cap)
     return max(0, min(lvl, max_level))
@@ -948,28 +986,25 @@ class FacilitationOrchestrator:
 
         self._gate = (bool(_c("facilitation.enabled", False))
                       if enabled_override is None else bool(enabled_override))
-        self._period = max(float(_c("facilitation.triage_period_sec", 25) or 25), 1.0)
+        # `or 25` 는 남긴다 — 0/빈값은 "설정 안 함"이지 "1초마다 판정"이 아니다
+        # (0 을 그대로 쓰면 하한 1.0 초로 떨어져 상시 경로가 25배 비싸진다).
+        self._period = max(_float_conf("facilitation.triage_period_sec", 25) or 25, 1.0)
         # 설정값과 실제 과금 모델은 다를 수 있다 — 추정·한도·기록·로그는 전부
         # 실효 모델을 쓴다(effective_triage_model 독스트링 참조).
         self._configured_model = str(_c("facilitation.triage_model", "gpt-4o-mini")
                                      or "gpt-4o-mini")
         self._triage_model = effective_triage_model(self._configured_model)
-        self._meeting_cap = float(_c("facilitation.max_cost_usd_per_meeting", 0.50)
-                                  or 0.0)
+        # 잘못 적힌 값(빈 문자열·null)은 **기본 캡**으로 흡수한다 — 종전엔 `or 0.0` 이라
+        # 오타 하나가 "캡 없음"이 됐다(0 은 사용자가 명시적으로 고른 '캡 없음'이므로 유지).
+        self._meeting_cap = _float_conf("facilitation.max_cost_usd_per_meeting", 0.50)
         #: 세션당 화면 개입 예산(PRD §4). 초과분은 관찰(기록)로 강등된다 —
         #: 회의를 시끄럽게 만들지 않기 위한 장치.
-        try:
-            self._budget = int(_c("facilitation.max_interventions_per_session", 12))
-        except (TypeError, ValueError):
-            self._budget = 12
+        self._budget = _int_conf("facilitation.max_interventions_per_session", 12)
         #: 후보 신뢰도 하한. **페르소나별 상수를 임의로 만들지 않는다** — 실측 전에
         #: 8개 숫자를 지어내면 이 리포가 금지한 '근거 없는 랭킹 휴리스틱'이 된다.
         #: 전역 1개만 두고 사용자가 조절하게 하며, 모든 후보의 confidence 는 관찰
         #: 로그에 남으므로 나중에 분포를 보고 페르소나별로 나눌 수 있다. `[미검증]`
-        try:
-            self._min_conf = float(_c("facilitation.min_confidence", 0.6))
-        except (TypeError, ValueError):
-            self._min_conf = 0.6
+        self._min_conf = _float_conf("facilitation.min_confidence", 0.6)
 
         self._lock = threading.Lock()
         self._window: List[Utterance] = []
@@ -988,16 +1023,14 @@ class FacilitationOrchestrator:
         #: 중간 요약(summarizer) 상태. 주기·내용 게이트는 트리아지와 **같은 이유**로
         #: 둔다: 시간만 보면 침묵 구간에 빈 요약이 나가고, 내용만 보면 발화량이 비용을
         #: 정한다(RealtimeVaultSearcher 도 같은 2단 게이트를 쓴다).
-        self._brief_period = float(_c("facilitation.brief_period_sec", 600) or 0.0)
-        try:
-            self._brief_min_chars = int(
-                _c("facilitation.brief_min_new_chars", 600))
-        except (TypeError, ValueError):
-            self._brief_min_chars = 600
+        self._brief_period = _float_conf("facilitation.brief_period_sec", 600)
+        self._brief_min_chars = _int_conf("facilitation.brief_min_new_chars", 600)
         self._brief_buf: List[Utterance] = []    # 마지막 요약 이후 발화
         self._brief_chars = 0                    # 그 글자 수(내용 게이트)
         self._last_brief: Optional[float] = None  # None = 첫 주기가 아직 안 지났음
         self._brief_count = 0
+        #: 요약 구간의 제출 순번 — 문서 정렬의 근거(`briefs_markdown`).
+        self._brief_seq = 0
         self._last_brief_text = ""               # 이전 요약(누적 압축용, FR-A2)
         #: 회의 중 만든 요약 **전문** 누적. 관찰 로그(`facilitation_log.span`)에는
         #: 500자로 잘려서만 남기 때문에 그것으로는 회의 후 문서를 복원할 수 없다.
@@ -1011,10 +1044,18 @@ class FacilitationOrchestrator:
         #: 모델이 아무리 좋아도 모르는 것을 대조할 수는 없다.
         #: 로드는 JSON 파일 읽기라 비용이 0이고, 실패는 빈 목록으로 흡수한다
         #: (실시간 스트림 보호 — 재료가 없다고 개입 전체가 멈추면 안 된다).
+        #: **읽기는 __init__ 이 아니라 첫 판정 때 워커 스레드에서 한다** — 이 객체는
+        #: 이벤트 루프 스레드에서 만들어지므로(api/realtime.py), 여기서 파일을 읽으면
+        #: registry 가 커진 만큼 '녹음 시작'이 늦어진다.
         self._prior_decisions: List[Dict[str, Any]] = []
         self._prior_actions: List[Dict[str, Any]] = []
-        if self._gate:
-            self._load_prior_context(attendees)
+        self._prior_attendees = [str(a).strip() for a in (attendees or [])
+                                 if str(a).strip()]
+        self._prior_loaded = False
+        self._prior_lock = threading.Lock()
+        #: 조립된 대조 블록 캐시 — 세션 내 불변인데 트리아지마다(기본 25초) 다시
+        #: 만들 이유가 없다.
+        self._prior_block: Optional[str] = None
 
         # 게이트가 꺼져 있으면 풀 자체를 만들지 않는다 — LLM 호출 0회가 구조적으로
         # 보장된다(수용 기준 §14 첫 항목, 테스트 고정).
@@ -1025,51 +1066,93 @@ class FacilitationOrchestrator:
 
     # ── 이전 회의 재료 ────────────────────────────────────
 
-    def _load_prior_context(self, attendees: Optional[List[str]]) -> None:
-        """지난 결정·미완료 액션을 주제로 걸러 세션 시작 시 1회 담아 둔다.
+    def _ensure_prior_context(self) -> None:
+        """지난 결정·미완료 액션을 **첫 판정 때 1회** 읽어 담아 둔다(워커 스레드).
 
         로딩·필터는 `wiki_knowledge` 의 공개 진입점 하나만 쓴다 — 회의 준비
         브리핑(prep-brief)과 **같은 함수**다. 여기에 필터를 다시 구현하면 두 경로가
-        갈라진다(이 리포가 반복해서 대가를 치른 패턴)."""
-        try:
-            from meeting_minutes_app.wiki_core import wiki_knowledge as wk
-            n_dec = _int_conf("facilitation.context_decisions", 5)
-            n_act = _int_conf("facilitation.context_actions", 5)
-            self._prior_decisions = wk.recent_decisions_for(self.topic, limit=n_dec)
-            self._prior_actions = wk.open_actions_for(
-                self.topic, attendees=attendees, limit=n_act)
-        except Exception as e:
-            # 재료가 없다고 개입 전체가 멈추면 안 된다 — 대조만 못 할 뿐이다.
-            print(f"[facilitation] 이전 회의 재료 로드 건너뜀: {e}")
-            self._prior_decisions = []
-            self._prior_actions = []
+        갈라진다(이 리포가 반복해서 대가를 치른 패턴).
+
+        **주제(또는 참석자)가 없으면 읽지 않는다.** `_filter_*_by_topic` 은 "필터
+        기준이 아예 없으면 전체 반환" 계약이다(회의 준비 브리핑에서는 사용자가 직접
+        요청한 것이라 맞는 동작이다). 그런데 실시간 판정에 그대로 쓰면, 주제를 안 적은
+        회의에 **다른 프로젝트의 최근 결정·전체 미완료 액션**이 들어가고 트리아지에는
+        "어긋남을 후보로 올려라"까지 붙는다 — 오탐을 만드는 재료다. 주제 칸은 선택
+        입력이라(녹음 화면) 빈 경우가 흔하다.
+        결정은 주제로만 걸러지고, 액션은 참석자(owner)로도 걸러지므로 조건이 다르다.
+
+        `_lock` 이 아니라 전용 락을 쓴다 — 파일 I/O 를 `_lock` 안에서 하면 STT 핫패스의
+        `offer_segment()` 가 그만큼 멈춘다(다른 스레드가 대기하게 하되 진입은 1회).
+        """
+        if self._prior_loaded:
+            return
+        with self._prior_lock:
+            if self._prior_loaded:      # 락 대기 중에 다른 스레드가 끝냈다
+                return
+            try:
+                topic = (self.topic or "").strip()
+                if not topic and not self._prior_attendees:
+                    print("[facilitation] 회의 주제·참석자가 없어 이전 회의 대조를 "
+                          "건너뜁니다(무관한 결정을 넣지 않기 위함)")
+                    return
+                from meeting_minutes_app.wiki_core import wiki_knowledge as wk
+                n_dec = _int_conf("facilitation.context_decisions", 5)
+                n_act = _int_conf("facilitation.context_actions", 5)
+                if topic:
+                    self._prior_decisions = wk.recent_decisions_for(
+                        topic, limit=n_dec)
+                self._prior_actions = wk.open_actions_for(
+                    topic, attendees=self._prior_attendees, limit=n_act)
+            except Exception as e:
+                # 재료가 없다고 개입 전체가 멈추면 안 된다 — 대조만 못 할 뿐이다.
+                print(f"[facilitation] 이전 회의 재료 로드 건너뜀: {e}")
+                self._prior_decisions = []
+                self._prior_actions = []
+            finally:
+                # 성공·실패·건너뜀 모두 재시도하지 않는다(세션 중 registry 는 안 바뀐다).
+                self._prior_loaded = True
 
     def prior_context_block(self) -> str:
-        """트리아지·생성 프롬프트에 넣는 대조용 블록. 재료가 없으면 빈 문자열.
+        """트리아지 프롬프트에 넣는 대조용 블록. 재료가 없으면 빈 문자열.
 
-        같은 문자열을 두 프롬프트가 공유한다 — 한쪽만 고치면 "트리아지는 아는데
-        생성은 모르는" 상태가 되어 근거 없는 개입이 나간다."""
+        **생성 프롬프트는 이 문자열이 아니라 `_registry_evidence()` 로 같은 재료를
+        받는다** — 근거는 한 목록(evidence)에만 담아야 코드 가드·프롬프트·카드가 같은
+        것을 본다(그 셋이 갈라져 있던 것이 이 기능의 최초 결함이었다). 두 경로의 재료
+        자체는 `_prior_decisions`/`_prior_actions` 하나이므로 갈라지지 않는다."""
+        self._ensure_prior_context()
+        if self._prior_block is None:
+            self._prior_block = self._build_prior_block()
+        return self._prior_block
+
+    def _build_prior_block(self) -> str:
         parts: List[str] = []
-        if self._prior_decisions:
-            lines = []
-            for d in self._prior_decisions:
-                when = str(d.get("created_at", ""))[:10]
-                summary = str(d.get("summary", "")).strip()[:160]
-                if summary:
-                    lines.append(f"- [{when}] {summary}" if when else f"- {summary}")
-            if lines:
-                parts.append("## 이전 회의에서 정해진 것 (대조용)\n" + "\n".join(lines))
-        if self._prior_actions:
-            lines = []
-            for a in self._prior_actions:
-                owner = str(a.get("owner", "")).strip() or "담당 미상"
-                title = str(a.get("title", "")).strip()[:160]
-                due = str(a.get("due", "")).strip()
-                if title:
-                    lines.append(f"- {owner}: {title}" + (f" (기한 {due})" if due else ""))
-            if lines:
-                parts.append("## 아직 끝나지 않은 액션\n" + "\n".join(lines))
+        lines = [f"- {t}" for t in self._prior_decision_lines()]
+        if lines:
+            parts.append("## 이전 회의에서 정해진 것 (대조용)\n" + "\n".join(lines))
+        lines = [f"- {t}" for t in self._prior_action_lines()]
+        if lines:
+            parts.append("## 아직 끝나지 않은 액션\n" + "\n".join(lines))
         return "\n\n".join(parts)
+
+    def _prior_decision_lines(self) -> List[str]:
+        """지난 결정 1건 = 한 줄. 트리아지 블록과 생성 근거가 **같은 문장**을 쓴다."""
+        out = []
+        for d in self._prior_decisions:
+            when = str(d.get("created_at", ""))[:10]
+            summary = str(d.get("summary", "")).strip()[:160]
+            if summary:
+                out.append(f"[{when}] {summary}" if when else summary)
+        return out
+
+    def _prior_action_lines(self) -> List[str]:
+        out = []
+        for a in self._prior_actions:
+            owner = str(a.get("owner", "")).strip() or "담당 미상"
+            title = str(a.get("title", "")).strip()[:160]
+            due = str(a.get("due", "")).strip()
+            if title:
+                out.append(f"{owner}: {title}" + (f" (기한 {due})" if due else ""))
+        return out
 
     # ── 상태 ──────────────────────────────────────────────
 
@@ -1096,8 +1179,14 @@ class FacilitationOrchestrator:
         Tier 1 비용을 쓰는 것은 예산 소진 시 생성을 멈추는 것과 같은 이유로 손실이다."""
         return persona_level(BRIEF_PERSONA)
 
-    def brief_enabled(self) -> bool:
-        """중간 요약을 만들 조건 — 화면 채널이 있어야 한다는 조건이 포함된다.
+    def _brief_blocked_reason(self, what: str = "정리") -> str:
+        """중간 요약의 **공통 게이트** — 막혔으면 사용자에게 보여줄 사유, 아니면 "".
+
+        [지금 정리] 버튼·마지막 정리·주기 요약이 **같은 판정 한 곳**을 쓴다. 종전엔
+        네 조건이 두 함수에 복제돼 있었고 문구만 조금씩 달랐다 — 새 트리거를 추가할 때
+        복제가 한 번 더 늘고, 그중 하나만 고쳐지면 "버튼은 되는데 자동은 안 되는" 갈라짐이
+        생긴다. 사유 문자열을 돌려주는 이유는 조용히 실패 금지 규칙이다(버튼은 항상
+        이유를 말한다).
 
         `on_intervention` 이 없는 호출자(리플레이·헤드리스 측정)에서는 요약을 만들지
         않는다. `_dispatch` 가 개입에 대해 이미 쓰는 판정과 **같은 것**인데
@@ -1105,10 +1194,22 @@ class FacilitationOrchestrator:
         그 결과 리플레이가 "트리아지 비용만 든다"는 계약을 어기고, 실행 전에 보여준
         `replay_estimate()` 금액보다 더 쓰면서 아무에게도 보이지 않는 요약을 만들었다.
         """
-        return (self.enabled and not self._muted
-                and self.on_intervention is not None
-                and self._brief_period > 0
-                and self.brief_level() >= COLLECT_LEVEL)
+        if self._pool is None:
+            return "회의 진행 페르소나가 꺼져 있습니다"
+        if self._muted:
+            return "이번 회의는 페르소나를 껐습니다 — 새 녹음에서 다시 켜집니다"
+        if self.on_intervention is None:
+            return f"표시할 화면이 없어 {what}를 만들지 않습니다"
+        if self.brief_level() < COLLECT_LEVEL:
+            return "중간 요약 참견도가 0·1(관찰)이라 요약을 만들지 않습니다"
+        return ""
+
+    def brief_enabled(self) -> bool:
+        """**자동** 중간 요약을 만들 조건 = 공통 게이트 + 주기 설정(0 이면 자동 끔).
+
+        주기 0 은 "자동으로는 만들지 마라"는 뜻이고, [지금 정리] 버튼은 사용자가 그때
+        직접 누른 것이라 이 조건과 무관하게 동작한다."""
+        return not self._brief_blocked_reason() and self._brief_period > 0
 
     @property
     def muted(self) -> bool:
@@ -1245,27 +1346,32 @@ class FacilitationOrchestrator:
                 return
             if self._brief_chars < self._brief_min_chars:
                 return                            # 침묵·짧은 발화 구간은 건너뛴다
-            buf, self._last_brief = self._take_brief_buf_locked(), now
-        self._pool.submit(self._brief_task, buf, TRIGGER_BRIEF_PERIODIC)
+            buf, seq = self._take_brief_buf_locked()
+            self._last_brief = now
+        self._pool.submit(self._brief_task, buf, TRIGGER_BRIEF_PERIODIC, seq)
 
-    def _take_brief_buf_locked(self) -> List[Utterance]:
+    def _take_brief_buf_locked(self) -> Tuple[List[Utterance], int]:
+        """대기 중인 요약 입력을 가져가고 **제출 순번**을 매긴다(호출부가 락을 든다).
+
+        순번은 문서 정렬의 근거다(`briefs_markdown`) — 요약은 병렬로 끝날 수 있고,
+        발화 타임스탬프가 없는 호출자도 있으므로 '언제 제출됐나'만이 항상 참인
+        시간 순서다."""
         buf, self._brief_buf, self._brief_chars = self._brief_buf, [], 0
-        return buf
+        self._brief_seq += 1
+        return buf, self._brief_seq
 
     def brief_now(self) -> str:
         """[지금 정리] — 주기를 기다리지 않고 요약 1회. 반환: '' 또는 건너뜀 사유.
 
         [지금 점검](대기분 방출)과 달리 **이 버튼은 새 과금을 만든다** — 그래서
         (a) 최소 간격(BRIEF_MIN_GAP_SEC)으로 연타를 막고 (b) 새로 쌓인 발화가 없으면
-        돌지 않으며 (c) 사유를 항상 화면에 돌려준다(조용히 실패 금지)."""
-        if self._pool is None:
-            return "회의 진행 페르소나가 꺼져 있습니다"
-        if self._muted:
-            return "이번 회의는 페르소나를 껐습니다 — 새 녹음에서 다시 켜집니다"
-        if self.on_intervention is None:
-            return "표시할 화면이 없어 정리를 만들지 않습니다"
-        if self.brief_level() < COLLECT_LEVEL:
-            return "중간 요약 참견도가 0·1(관찰)이라 요약을 만들지 않습니다"
+        돌지 않으며 (c) 사유를 항상 화면에 돌려준다(조용히 실패 금지).
+
+        주기 설정(`brief_period_sec=0`, 자동 요약 끔)은 이 버튼을 막지 않는다 —
+        사용자가 지금 직접 누른 것이다."""
+        reason = self._brief_blocked_reason("정리")
+        if reason:
+            return reason
         now = float(self._clock())
         with self._lock:
             if (self._last_brief is not None
@@ -1274,8 +1380,9 @@ class FacilitationOrchestrator:
                 return f"방금 정리했습니다 — {left:.0f}초 뒤에 다시 시도하세요"
             if not self._brief_buf:
                 return "지난 정리 이후 새로 쌓인 발화가 없습니다"
-            buf, self._last_brief = self._take_brief_buf_locked(), now
-        self._pool.submit(self._brief_task, buf, TRIGGER_BRIEF_ON_DEMAND)
+            buf, seq = self._take_brief_buf_locked()
+            self._last_brief = now
+        self._pool.submit(self._brief_task, buf, TRIGGER_BRIEF_ON_DEMAND, seq)
         return ""
 
     def finalize_brief(self, wait_sec: float = 25.0) -> str:
@@ -1292,22 +1399,22 @@ class FacilitationOrchestrator:
         `wait_sec` 만큼 풀 작업 완료를 기다린다 — 호출자가 곧바로 shutdown 하면
         요약이 저장되기 전에 풀이 닫힌다. **취소 경로에서는 부르지 않는다**(버린
         회의에 새 과금을 만들지 않는다)."""
-        if self._pool is None:
-            return "회의 진행 페르소나가 꺼져 있습니다"
-        if self._muted:
-            return "이번 회의는 페르소나를 껐습니다"
-        if self.on_intervention is None:
-            return "표시할 화면이 없어 마지막 정리를 만들지 않습니다"
-        if self.brief_level() < COLLECT_LEVEL:
-            return "중간 요약 참견도가 0·1(관찰)이라 요약을 만들지 않습니다"
+        reason = self._brief_blocked_reason("마지막 정리")
+        if reason:
+            return reason
+        if self._brief_period <= 0:
+            # 주기 0 = "자동으로는 요약하지 마라". 종료 시 1건은 사용자가 누른 것이
+            # 아니라 자동 생성이므로 여기서 만들면 끈 기능이 과금을 만든다.
+            # ([지금 정리] 버튼은 이 조건과 무관하다 — 그건 사용자가 누른 것이다.)
+            return "자동 중간 요약이 꺼져 있어(주기 0) 마지막 정리를 만들지 않습니다"
         with self._lock:
             if self._brief_chars < self._brief_min_chars:
                 # 마지막 요약분이 짧으면 만들지 않는다 — 직전 주기 요약과 거의 같은
                 # 내용에 돈을 한 번 더 쓰는 자리다.
                 return "마지막 정리 이후 새로 쌓인 발화가 적어 건너뜁니다"
-            buf = self._take_brief_buf_locked()
+            buf, seq = self._take_brief_buf_locked()
             self._last_brief = float(self._clock())
-        fut = self._pool.submit(self._brief_task, buf, TRIGGER_BRIEF_FINAL)
+        fut = self._pool.submit(self._brief_task, buf, TRIGGER_BRIEF_FINAL, seq)
         try:
             fut.result(timeout=max(0.0, wait_sec))
         except Exception:
@@ -1326,14 +1433,23 @@ class FacilitationOrchestrator:
 
         회의록(minutes)과 다른 문서로 두는 이유: 회의록은 **끝난 회의의 정본**이고
         이건 **진행 중 시점별 스냅샷**이라, 섞으면 어느 쪽도 신뢰할 수 없게 된다.
-        회의 중 화면에 뜬 것과 같은 내용을 나중에 다시 볼 수 있게 하는 것이 목적이다."""
-        briefs = self.collected_briefs()
+        회의 중 화면에 뜬 것과 같은 내용을 나중에 다시 볼 수 있게 하는 것이 목적이다.
+
+        **순서는 요약 구간의 제출 순번(`seq`)이다 — 생성이 끝난 순서가 아니다.**
+        요약 풀은 워커가 2개라 주기 요약과 [지금 정리]가 겹치면 나중 구간이 먼저 끝날
+        수 있고, 그러면 완료 순서로 번호를 매긴 문서가 회의 흐름을 거꾸로 보여준다
+        (회귀 테스트가 간헐적으로 이 뒤집힘을 잡아냈다).
+        `t0` 로 정렬하지 않는 이유: 발화에 타임스탬프가 없는 호출자(CLI·테스트)에서는
+        t0 가 전부 None 이라 정렬 키가 되지 못한다. `seq` 는 버퍼를 가져가는 시점에
+        락 안에서 매기므로 **항상** 창의 시간 순서다. 번호도 이 정렬 뒤에 다시 매긴다."""
+        briefs = sorted(self.collected_briefs(),
+                        key=lambda b: int(b.get("seq") or 0))
         if not briefs:
             return ""
         lines = ["# 중간 정리 (회의 중 자동 요약)", "",
                  "> 회의가 진행되는 동안 화면에 표시된 요약입니다. 확정된 회의록이 "
                  "아니라 그 시점까지의 초안입니다.", ""]
-        for b in briefs:
+        for idx, b in enumerate(briefs, 1):
             when = ""
             t0 = b.get("t0")
             if t0 is not None:
@@ -1341,7 +1457,7 @@ class FacilitationOrchestrator:
             label = {TRIGGER_BRIEF_ON_DEMAND: "지금 정리",
                      TRIGGER_BRIEF_FINAL: "마지막 정리"}.get(
                          str(b.get("trigger") or ""), "자동 정리")
-            lines.append(f"## {b.get('n')}. {label}{when}")
+            lines.append(f"## {idx}. {label}{when}")
             brief = b.get("brief") or {}
             for key, sec_label in BRIEF_SECTIONS:
                 vals = brief.get(key) or []
@@ -1353,13 +1469,17 @@ class FacilitationOrchestrator:
             lines.append("")
         return "\n".join(lines).strip() + "\n"
 
-    def _brief_task(self, buf: List[Utterance], trigger: str) -> None:
+    def _brief_task(self, buf: List[Utterance], trigger: str,
+                    seq: int = 0) -> None:
         """중간 요약 1회 — 개입 생성과 **같은 3관문**을 지난다(개입보다 입력이 크다).
 
         예산(max_interventions_per_session)은 소모하지 않는다: 요약은 후보 기반이 아니라
         주기 기반이라 횟수가 이미 시간으로 묶여 있고(트리아지와 같은 성질), 기회주의적
         개입 카드가 사용자가 기대하는 주기 요약을 굶기면 안 된다. 상한은 주기와 회의당
-        비용 캡이 맡는다."""
+        비용 캡이 맡는다.
+
+        `seq` = 이 구간의 제출 순번(`_take_brief_buf_locked`). 문서 정렬의 근거다 —
+        요약은 병렬로 끝날 수 있어 완료 순서는 회의 흐름이 아니다."""
         from meeting_minutes_app.common import pricing, spend_guard
         window_text, t0, t1, provisional = self._window_meta(buf)
         if not window_text.strip():
@@ -1427,8 +1547,10 @@ class FacilitationOrchestrator:
             # 전문을 남긴다 — 화면 카드는 회의가 끝나면 사라지고, 관찰 로그의
             # span 은 500자 컷이라 문서로 복원할 수 없다.
             self._briefs.append({
-                "n": n, "trigger": trigger, "brief": brief, "text": text,
-                "t0": t0, "t1": t1,
+                # n = 생성 완료 순서(로그용), seq = 구간 제출 순서(문서 정렬용).
+                # 둘은 다를 수 있다 — 요약 2건이 겹치면 나중 구간이 먼저 끝난다.
+                "n": n, "seq": seq, "trigger": trigger, "brief": brief,
+                "text": text, "t0": t0, "t1": t1,
             })
         # 요약도 관찰 로그에 남긴다 — 완전 삭제(purge)가 함께 지우고, 카드의 확인/닫기
         # 라벨로 '이 요약이 쓸모 있었나'를 실측할 수 있다. trigger_type 으로 개입
@@ -1712,9 +1834,40 @@ class FacilitationOrchestrator:
         근거 소스에 "web" 을 적은 페르소나에게는 **회의 중 이미 나간** 웹 검색 결과가
         내부 자료 뒤에 붙는다(FR-10 내부 우선). 그 전까지 웹 결과는 회의록 memo 로만
         갔고, 정작 팩트체커 프롬프트는 "라이브 검색 근거가 없으면 개입하지 마세요"
-        라고 적혀 있었다 — 프롬프트·코드 가드·실제 데이터가 3중으로 어긋나 있었다."""
+        라고 적혀 있었다 — 프롬프트·코드 가드·실제 데이터가 3중으로 어긋나 있었다.
+
+        순서는 FR-10(내부 우선): 볼트(노트·논문) → 이전 회의 기록(registry) → 웹.
+        **이 목록이 근거의 유일한 표현이다** — 코드 가드(`_generate`)·생성 프롬프트·
+        화면 카드가 전부 이걸 본다. 종전엔 registry 만 별도 프롬프트 블록이라 가드와
+        카드가 그 존재를 몰랐다."""
         out = self._vault_evidence(p, cand)
-        out.extend(self._web_evidence(p))
+        out.extend(self._registry_evidence(p))
+        out.extend(self._web_evidence(p, cand))
+        return out
+
+    def _registry_evidence(self, p: Persona) -> List[Dict[str, Any]]:
+        """지난 결정·미완료 액션을 **근거 항목으로** 싣는다(EV_REGISTRY 페르소나만).
+
+        왜 별도 블록이 아니라 evidence 인가 — 종전엔 이 재료가 생성 프롬프트의 별도
+        블록으로만 들어갔다. 그래서
+          · 근거 필수 가드(`domain_expert`·`fact_checker`)가 이걸 근거로 세지 않아,
+            볼트 히트가 0이면 "이전 회의에서 정한 것과 다르다"는 개입이 **통째로
+            버려졌다**. 볼트를 쓰지 않는 사용자에게는 이 두 페르소나가 영구 침묵이다 —
+            정작 사용자가 원한 기능이 그것이었다.
+          · 카드가 무엇과 대조했는지 보여줄 수 없었다(§6-5 추적 가능성). 프런트의
+            registry 아이콘(🗂)은 도달 불가 코드였다.
+        추가 비용은 0이다(registry 는 파일이고, 문장은 종전 블록과 같은 것이라
+        `pricing.FACILITATION_INTERVENTION_INPUT_TOKENS` 추정도 그대로다)."""
+        if EV_REGISTRY not in (p.evidence or ()):
+            return []
+        self._ensure_prior_context()
+        out: List[Dict[str, Any]] = []
+        for line in self._prior_decision_lines():
+            out.append({"source": EV_REGISTRY, "title": "지난 회의 결정",
+                        "url": "", "score": 0.0, "snippet": line[:300]})
+        for line in self._prior_action_lines():
+            out.append({"source": EV_REGISTRY, "title": "미완료 액션",
+                        "url": "", "score": 0.0, "snippet": line[:300]})
         return out
 
     def _vault_evidence(self, p: Persona,
@@ -1748,30 +1901,49 @@ class FacilitationOrchestrator:
             })
         return out
 
-    def _web_evidence(self, p: Persona) -> List[Dict[str, Any]]:
-        """이미 나간 웹 검색 결과 중 최근 2건 — 새 검색은 하지 않는다(비용 0).
+    def _web_evidence(self, p: Persona,
+                      cand: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
+        """이미 나간 웹 검색 결과 — 새 검색은 하지 않는다(비용 0).
 
-        최근 것을 쓰는 이유: 웹 보완은 발화별로 나가므로 뒤쪽일수록 지금 논의에
-        가깝다. 볼트 근거처럼 후보 발화로 재검색하지 않는 것은, 그러려면 유료
-        웹 검색을 개입마다 한 번 더 해야 하기 때문이다(회의당 비용이 예측 불가가
-        된다). 라이브 재검색은 M2 몫이다."""
+        **이 발화에서 나간 검색을 먼저 고른다.** 웹 보완은 발화별로 나가고 결과에 그
+        발화(`segment_text`)가 함께 담겨 있으므로, 후보 span 과 인용이 겹치는 것을
+        고를 수 있다. 종전엔 무조건 '최근 2건'이었는데, 그것은 바로 앞에서 볼트 근거를
+        고치며 반박한 모양과 같다(세션 누적은 "요즘 자주 뜬 것"이지 "이 주장과 대조할
+        자료"가 아니다). 겹치는 것이 없으면 최근 1건만 참고로 싣고 **`matched=False`**
+        로 표시한다 — 버리지 않는 이유는 인접 발화의 웹 결과가 여전히 맥락이기
+        때문이고, 표시하는 이유는 카드가 "다른 발화에서 검색한 것"임을 밝혀야 하기
+        때문이다(§6-5).
+
+        후보 span 으로 웹을 **재검색하지는 않는다** — 그러려면 개입마다 유료 검색
+        (1,000회당 $10)이 한 번 더 나가고 회의당 비용이 예측 불가가 된다. 라이브
+        재검색은 M2 몫이다. 판정 규칙은 포함 여부 하나(`_quotes_overlap`)이며 유사도
+        임계값 같은 상수는 두지 않는다(§9-0)."""
         if EV_WEB not in (p.evidence or ()) or self.web_provider is None:
             return []
         try:
             found = list(self.web_provider() or [])
         except Exception:
             return []
-        out: List[Dict[str, Any]] = []
-        for f in found[-2:]:
+        span = str((cand or {}).get("span") or "")
+        matched, others = [], []
+        for f in found:
             if not isinstance(f, dict):
                 continue
+            (matched if _quotes_overlap(span, str(f.get("segment_text") or ""))
+             else others).append(f)
+        use = [(f, True) for f in matched[-2:]] or [(f, False) for f in others[-1:]]
+        out: List[Dict[str, Any]] = []
+        for f, tied in use:
             srcs = f.get("sources") or []
             out.append({
-                "source": "web",
+                "source": EV_WEB,
                 "title": str((srcs[0] if srcs else "") or "웹 검색 결과")[:120],
                 "url": str((srcs[0] if srcs else "") or ""),
                 "score": 0.0,
                 "snippet": str(f.get("result") or "")[:300],
+                # 이 웹 결과가 나온 발화. 같은 발화가 아니면 카드가 그걸 밝힌다.
+                "segment": str(f.get("segment_text") or "")[:80],
+                "matched": tied,
             })
         return out
 
@@ -1781,21 +1953,15 @@ class FacilitationOrchestrator:
         """후보 1건 → 개입 1건(Tier 1). 실패·근거 부족이면 None(개입을 만들지 않는다).
 
         비용은 트리아지와 같은 3관문 + 회의당 캡 예약을 지난다 — 개입은 트리아지보다
-        비싼 모델을 쓰므로(§5 티어) 여기가 빠지면 캡이 무의미해진다."""
+        비싼 모델을 쓰므로(§5 티어) 여기가 빠지면 캡이 무의미해진다.
+
+        **관문을 근거 수집보다 먼저 지난다.** 근거 수집은 후보 발화로 볼트를 한 번
+        검색하고(임베딩 1회·0.3~0.5초 블로킹), 그 뒤에 한도로 막히면 그 시간과 호출은
+        그냥 버려진다. 한도 초과·자동실행 일시정지 상태에서는 후보마다 그 낭비가
+        반복된다."""
         from meeting_minutes_app.common import pricing, spend_guard
         p = get_persona(cand["persona"])
         if p is None:
-            return None
-        evidence = self._persona_evidence(p, cand)
-        # 근거가 필수인 페르소나(도메인·팩트체커)는 근거 없이 개입하지 않는다
-        # ("추측 금지" — system_prompt 와 PRD §6 의 게이트를 코드로도 막는다).
-        # **웹 근거만 요구하지는 않는다.** 팩트체커 프롬프트에 있던 "라이브 검색
-        # 근거가 없으면 개입하지 마세요"는 이 제품의 설계(FR-10 내부 자료 우선 —
-        # 볼트에서 찾으면 웹을 아예 부르지 않는다)와 어긋나 있었고, 코드 가드는
-        # 볼트만 봐서 프롬프트·가드·데이터가 3중으로 갈라져 있었다. 사내 노트·논문·
-        # 지난 회의 결정도 대조 근거로 충분하다 — 프롬프트를 그 사실에 맞췄고,
-        # 웹 근거의 유무는 카드의 `searched`(⚠ 미검증 배지)로 구분해 보여준다.
-        if p.key in ("domain_expert", "fact_checker") and not evidence:
             return None
 
         model = effective_persona_model(p.key)
@@ -1820,6 +1986,21 @@ class FacilitationOrchestrator:
                    f"${self._meeting_cap:.2f}에 도달 — 개입 보류")
             self._skip_reason = msg
             self._notify("capped", msg)
+            return None
+
+        evidence = self._persona_evidence(p, cand)
+        # 근거가 필수인 페르소나(도메인·팩트체커)는 근거 없이 개입하지 않는다
+        # ("추측 금지" — system_prompt 와 PRD §6 의 게이트를 코드로도 막는다).
+        # **웹 근거만 요구하지는 않는다.** 팩트체커 프롬프트에 있던 "라이브 검색
+        # 근거가 없으면 개입하지 마세요"는 이 제품의 설계(FR-10 내부 자료 우선 —
+        # 볼트에서 찾으면 웹을 아예 부르지 않는다)와 어긋나 있었고, 코드 가드는
+        # 볼트만 봐서 프롬프트·가드·데이터가 3중으로 갈라져 있었다. 사내 노트·논문·
+        # **지난 회의 결정**(registry)도 대조 근거로 충분하다 — 그래서 그 셋이 모두
+        # `evidence` 한 목록에 담긴다. 웹 근거의 유무는 카드의 `searched`
+        # (⚠ 미검증 배지)로 구분해 보여준다.
+        if p.key in ("domain_expert", "fact_checker") and not evidence:
+            with self._lock:                     # 호출 안 했으므로 예약 환불
+                self._session_cost = max(0.0, self._session_cost - est)
             return None
 
         try:
@@ -1865,11 +2046,14 @@ class FacilitationOrchestrator:
             # 개입은 시간에 비례하지 않아 분당 요율로는 표현할 수 없고, 추정 대신
             # **실제 발생 건수**로 보여주기 위해 여기서 함께 보낸다(pricing 주석 참조).
             "costUsd": round(est, 6),
-            # 이 개입이 **웹 근거를 실제로 달고 나가는가**. 카드의 "⚠ 미검증" 배지가
-            # 이 값으로 갈린다. 종전엔 무조건 False 라 배지가 상수였고, 그래서
-            # 아무것도 말해 주지 않았다. 웹 근거는 회의 중 이미 나간 검색 결과이며
-            # 여기서 새로 검색하지는 않는다(라이브 재검색은 M2).
-            "searched": any(e.get("source") == "web" for e in evidence),
+            # 이 개입이 **이 발화에 대한 웹 근거를 달고 나가는가**. 카드의 "⚠ 미검증"
+            # 배지가 이 값으로 갈린다. 종전엔 무조건 False 라 배지가 상수였고(아무것도
+            # 말해 주지 않았다), 그 다음엔 '세션의 최근 웹 결과가 있으면 True' 였다 —
+            # 30분 전 다른 발화를 검색한 결과로 "검증됨"이 되면 배지가 거짓말을 한다.
+            # 그래서 후보 발화와 인용이 겹치는 웹 근거(`matched`)만 센다.
+            # 웹 근거는 회의 중 이미 나간 검색 결과이며 여기서 새로 검색하지 않는다(M2).
+            "searched": any(e.get("source") == EV_WEB and e.get("matched")
+                            for e in evidence),
             "draft": True,      # 항상 true — "초안/보조" 고정 라벨(§8)
         }
 
@@ -1883,19 +2067,23 @@ class FacilitationOrchestrator:
             parts.append(f"## 이 발화가 근거입니다\n{cand['span']}")
         if cand.get("trigger_type"):
             parts.append(f"## 감지된 트리거\n{cand['trigger_type']}")
-        # 이전 회의 재료는 **그것을 근거로 쓰는 페르소나에게만** 넣는다
-        # (`Persona.evidence` 에 "registry"). 촉진자·주니어까지 주면 대조와 무관한
-        # 카드에 토큰만 늘고, 이 리포가 경계하는 '근거처럼 보이는 배경'이 된다.
-        if EV_REGISTRY in (p.evidence or ()):
-            prior = self.prior_context_block()
-            if prior:
-                parts.append(prior)
         if evidence:
             # 출처를 함께 적는다 — 카드가 "이전과 다르다"고 말하면 무엇과 대조했는지
             # 보여야 한다(PRD_실시간관련정보 §6-5 추적 가능성).
-            lines = [f"- [{e.get('source','note')}] {e['title']}: {e.get('snippet','')}"
-                     for e in evidence]
-            parts.append("## 참고 근거(이것만 사실로 인용하세요)\n" + "\n".join(lines))
+            # 이전 회의 재료(registry)도 **이 목록에** 들어온다(`_registry_evidence`) —
+            # 별도 블록으로 두면 코드 가드와 카드가 그 존재를 모른다.
+            lines = []
+            for e in evidence:
+                line = f"- [{e.get('source','note')}] {e['title']}: {e.get('snippet','')}"
+                # 다른 발화에서 나간 웹 검색이면 그 사실을 모델에게도 밝힌다 —
+                # "이 수치를 검색해 봤다"로 오독하면 카드가 없는 검증을 주장한다.
+                if e.get("source") == EV_WEB and not e.get("matched"):
+                    line += f" (참고: \"{e.get('segment','')}\" 발화에서 검색된 결과)"
+                lines.append(line)
+            parts.append(
+                "## 참고 근거(이것만 사실로 인용하세요)\n"
+                "[note]=사내 노트 · [paper]=논문 · [registry]=이전 회의에서 정해진 것/"
+                "미완료 액션 · [web]=웹 검색 결과\n" + "\n".join(lines))
         parts.append("위 내용에 대해 당신의 역할대로 2~4문장으로 한 가지만 말하세요.")
         return "\n\n".join(parts)
 
@@ -2061,9 +2249,11 @@ def _print_report(session_id: Optional[str], detail: bool) -> None:
     if r["provisional_candidates"]:
         # 조각 기반이라도 인용이 확정 전사에 그대로 남았으면 전사 품질 문제가
         # 아니었다 — 그 차이를 숨기면 위험을 실제보다 크게 잡는다.
-        same = r["provisional_candidates"] - r["provisional_unrevised"]
-        print(f"        그중 확정 전사와 인용이 같은 것 {same}건 → "
-              f"실제로 조각이 바뀐 판정 {r['provisional_unrevised']}건")
+        # 미확인분을 "바뀐 것"이라고 단정하지 않는다 — 종료 후 대조가 안 돌았거나
+        # 인용이 세그먼트 경계를 걸친 경우도 섞여 있다(그걸 모른다는 게 사실이다).
+        print(f"        그중 확정 전사와 인용이 같은 것 {r['provisional_confirmed']}건 · "
+              f"미확인 {r['provisional_unconfirmed']}건"
+              f"(보정이 바꿨거나 대조가 안 된 것 — 구분되지 않는다)")
     if r["by_persona"]:
         print("        페르소나별:")
         for k, d in sorted(r["by_persona"].items(),
@@ -2095,7 +2285,7 @@ def _print_report(session_id: Optional[str], detail: bool) -> None:
                 t = f" [{float(o['t0']):.0f}~{float(o.get('t1') or 0):.0f}s]"
             flag = ""
             if o.get("provisional"):
-                flag = " (조각=최종)" if o.get("revised") else " (조각)"
+                flag = " (조각=최종)" if o.get("span_confirmed") else " (조각)"
             rep = f" ×{1 + int(o.get('repeats') or 0)}" if o.get("repeats") else ""
             fb = {FEEDBACK_ACK: " ✓확인",
                   FEEDBACK_DISMISS: " ✕닫기"}.get(o.get("feedback") or "", "")

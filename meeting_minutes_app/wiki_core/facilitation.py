@@ -167,6 +167,11 @@ BRIEF_MIN_GAP_SEC = 20.0
 #: 요약 행을 개입 후보와 분리해 세는 근거).
 TRIGGER_BRIEF_PERIODIC = "periodic_brief"
 TRIGGER_BRIEF_ON_DEMAND = "brief_now"
+#: 종료 직전 마지막 요약 1회. **주기 게이트만** 우회하고 mute·채널·참견도·내용
+#: 게이트·비용 3관문은 그대로 지난다. 이게 없으면 25분 회의에서 t=600 의 요약 1건만
+#: 남고 **마지막 15분이 통째로 빠진다** — 사용자가 회의 끝에 보게 되는 것이 정확히
+#: 그 구간인데도.
+TRIGGER_BRIEF_FINAL = "final_brief"
 
 
 class Utterance(NamedTuple):
@@ -195,6 +200,7 @@ CREATE TABLE IF NOT EXISTS facilitation_log (
     t1           REAL,
     provisional  INTEGER DEFAULT 0,
     repeats      INTEGER DEFAULT 0,
+    revised      INTEGER DEFAULT 0,
     need_search  INTEGER,
     level        INTEGER,
     note         TEXT
@@ -233,6 +239,9 @@ _LOG_COLUMNS = {
     "repeats": "INTEGER DEFAULT 0",
     "feedback": "TEXT",
     "feedback_ts": "TEXT",
+    # 조각(provisional) 전사로 판정한 행 중, 그 인용이 **확정 전사에 그대로 남은** 것.
+    # 1 = 조각과 최종본이 같았다(전사 품질 문제가 아니었다), 0/NULL = 미확인.
+    "revised": "INTEGER DEFAULT 0",
 }
 
 #: 사람이 카드에 남기는 라벨(M1). 이 두 값이 §15 오탐률 실측의 **사람 라벨링 채널**이다 —
@@ -452,6 +461,49 @@ def _rows(table: str, session_id: Optional[str],
         c.close()
 
 
+def mark_revised_spans(session_id: str, final_text: str,
+                       db_path: Optional[Union[str, Path]] = None) -> int:
+    """조각 전사로 판정한 행 중 **인용이 확정 전사에 그대로 남은** 것을 표시한다.
+
+    왜 필요한가 — `provisional` 은 "판정 당시 보정 전 조각이었다"만 뜻한다. 그런데
+    보정 워커는 세 경우에 교체를 **포기**한다(1초 미만·무음·반복 과다). 그때 조각은
+    최종본과 **글자 그대로 같다**. 그걸 전부 "조각 기반 판정"으로 세면 전사 품질 탓에
+    판정이 흔들렸을 위험을 실제보다 크게 잡게 되고, 오탐률 실측(§15)의 해석이 어긋난다.
+
+    판정 규칙은 **포함 여부 하나뿐**이다: 정규화한 인용이 정규화한 확정 전사 안에
+    있으면 1. 유사도 임계값 같은 것은 두지 않는다 — 실측 없는 상수를 넣지 않는다는
+    이 리포의 규칙이고(§9-0), 부분 일치를 어디서 끊을지는 근거가 없다.
+    반환: 표시한 행 수.
+    """
+    if not session_id or not (final_text or "").strip():
+        return 0
+    c = _connect(db_path)
+    if c is None:
+        return 0
+    haystack = _WS_RE.sub(" ", final_text).strip().lower()
+    n = 0
+    try:
+        _ensure(c)
+        rows = c.execute(
+            "SELECT id, span FROM facilitation_log "
+            "WHERE session_id = ? AND provisional = 1", (session_id,)).fetchall()
+        ids = []
+        for row_id, row_span in rows:      # row_factory 는 호출자마다 다를 수 있다
+            span = _WS_RE.sub(" ", str(row_span or "")).strip().lower()
+            if span and span in haystack:
+                ids.append(row_id)
+        if ids:
+            with c:
+                c.executemany("UPDATE facilitation_log SET revised = 1 WHERE id = ?",
+                              [(i,) for i in ids])
+            n = len(ids)
+        return n
+    except sqlite3.Error:
+        return n
+    finally:
+        c.close()
+
+
 def delete_session_observations(session_id: str,
                                 db_path: Optional[Union[str, Path]] = None) -> int:
     """세션의 관찰 데이터 삭제 — 회의 완전 삭제(purge)가 호출한다.
@@ -542,6 +594,14 @@ def report(session_id: Optional[str] = None,
                                 == TRIGGER_BRIEF_ON_DEMAND),
         "candidate_repeats": sum(int(o.get("repeats") or 0) for o in obs),
         "provisional_candidates": sum(1 for o in obs if o.get("provisional")),
+        # 위 숫자에서 **인용이 확정 전사에 그대로 남은** 건을 뺀 값. 보정이 교체를
+        # 포기하는 경로가 3개(1초 미만·무음·반복 과다) 있어, provisional 만 세면
+        # 최종본과 똑같은 조각까지 "조각 기반 판정"으로 계상된다(과대 계상).
+        # 종료 후 mark_revised_spans() 가 표시한 것만 빠진다 — 표시 전에는
+        # provisional_candidates 와 같은 값이다(모르는 것을 아는 척하지 않는다).
+        "provisional_unrevised": sum(1 for o in obs
+                                     if o.get("provisional")
+                                     and not o.get("revised")),
         # 회의 중 카드에 남긴 사람 라벨(§19.4). 화면에 뜬 개입만 라벨될 수 있으므로
         # 분모는 candidates 가 아니라 'shown' 이다 — 여기서는 세지 않고(오케스트레이터
         # 메모리 값이라 DB 에 없다) 라벨 수만 정직하게 센다.
@@ -939,6 +999,10 @@ class FacilitationOrchestrator:
         self._last_brief: Optional[float] = None  # None = 첫 주기가 아직 안 지났음
         self._brief_count = 0
         self._last_brief_text = ""               # 이전 요약(누적 압축용, FR-A2)
+        #: 회의 중 만든 요약 **전문** 누적. 관찰 로그(`facilitation_log.span`)에는
+        #: 500자로 잘려서만 남기 때문에 그것으로는 회의 후 문서를 복원할 수 없다.
+        #: 종료 시 `briefs_markdown()` 이 이걸로 '중간 정리' 문서를 만든다.
+        self._briefs: List[Dict[str, Any]] = []
 
         #: 이전 회의 재료(지난 결정·미완료 액션) — 세션 시작 시 **1회** 로드.
         #: 이게 없던 동안 "이전 회의와 다른 내용"을 짚을 **입력 자체가 없었다**:
@@ -1214,6 +1278,81 @@ class FacilitationOrchestrator:
         self._pool.submit(self._brief_task, buf, TRIGGER_BRIEF_ON_DEMAND)
         return ""
 
+    def finalize_brief(self, wait_sec: float = 25.0) -> str:
+        """종료 직전 마지막 요약 1회. 반환: '' 또는 건너뜀 사유(로그·상태용).
+
+        **주기 게이트만** 우회한다. mute·화면 채널·참견도·내용 게이트(`brief_min_new_chars`)
+        ·비용 3관문은 그대로 지난다 — 종료라고 해서 한도를 넘거나 아무도 못 볼 요약에
+        돈을 쓰지는 않는다(이 리포의 네 게이트 규칙).
+
+        왜 필요한가: 주기가 기본 600초라 25분 회의면 t=600 요약 1건뿐이고 **마지막
+        15분이 통째로 빠진다**. 그런데 회의 끝에 사용자가 확인하려는 것이 정확히
+        그 구간이다.
+
+        `wait_sec` 만큼 풀 작업 완료를 기다린다 — 호출자가 곧바로 shutdown 하면
+        요약이 저장되기 전에 풀이 닫힌다. **취소 경로에서는 부르지 않는다**(버린
+        회의에 새 과금을 만들지 않는다)."""
+        if self._pool is None:
+            return "회의 진행 페르소나가 꺼져 있습니다"
+        if self._muted:
+            return "이번 회의는 페르소나를 껐습니다"
+        if self.on_intervention is None:
+            return "표시할 화면이 없어 마지막 정리를 만들지 않습니다"
+        if self.brief_level() < COLLECT_LEVEL:
+            return "중간 요약 참견도가 0·1(관찰)이라 요약을 만들지 않습니다"
+        with self._lock:
+            if self._brief_chars < self._brief_min_chars:
+                # 마지막 요약분이 짧으면 만들지 않는다 — 직전 주기 요약과 거의 같은
+                # 내용에 돈을 한 번 더 쓰는 자리다.
+                return "마지막 정리 이후 새로 쌓인 발화가 적어 건너뜁니다"
+            buf = self._take_brief_buf_locked()
+            self._last_brief = float(self._clock())
+        fut = self._pool.submit(self._brief_task, buf, TRIGGER_BRIEF_FINAL)
+        try:
+            fut.result(timeout=max(0.0, wait_sec))
+        except Exception:
+            # 타임아웃·실패는 종료를 막지 않는다. 실패 사유는 _brief_task 가 이미
+            # 화면·로그에 남긴다(조용히 삼키지 않는다).
+            pass
+        return ""
+
+    def collected_briefs(self) -> List[Dict[str, Any]]:
+        """회의 중 만든 요약 **전문** (생성 순서). 종료 후 문서화용."""
+        with self._lock:
+            return [dict(b) for b in self._briefs]
+
+    def briefs_markdown(self) -> str:
+        """'중간 정리' 문서 — 회의 중 요약을 시간 순서로 묶는다. 없으면 ''.
+
+        회의록(minutes)과 다른 문서로 두는 이유: 회의록은 **끝난 회의의 정본**이고
+        이건 **진행 중 시점별 스냅샷**이라, 섞으면 어느 쪽도 신뢰할 수 없게 된다.
+        회의 중 화면에 뜬 것과 같은 내용을 나중에 다시 볼 수 있게 하는 것이 목적이다."""
+        briefs = self.collected_briefs()
+        if not briefs:
+            return ""
+        lines = ["# 중간 정리 (회의 중 자동 요약)", "",
+                 "> 회의가 진행되는 동안 화면에 표시된 요약입니다. 확정된 회의록이 "
+                 "아니라 그 시점까지의 초안입니다.", ""]
+        for b in briefs:
+            when = ""
+            t0 = b.get("t0")
+            if t0 is not None:
+                when = f" · {int(float(t0) // 60):02d}:{int(float(t0) % 60):02d}"
+            label = {TRIGGER_BRIEF_ON_DEMAND: "지금 정리",
+                     TRIGGER_BRIEF_FINAL: "마지막 정리"}.get(
+                         str(b.get("trigger") or ""), "자동 정리")
+            lines.append(f"## {b.get('n')}. {label}{when}")
+            brief = b.get("brief") or {}
+            for key, sec_label in BRIEF_SECTIONS:
+                vals = brief.get(key) or []
+                if not vals:
+                    continue
+                lines.append(f"**{sec_label}**")
+                lines.extend(f"- {v}" for v in vals)
+                lines.append("")
+            lines.append("")
+        return "\n".join(lines).strip() + "\n"
+
     def _brief_task(self, buf: List[Utterance], trigger: str) -> None:
         """중간 요약 1회 — 개입 생성과 **같은 3관문**을 지난다(개입보다 입력이 크다).
 
@@ -1285,6 +1424,12 @@ class FacilitationOrchestrator:
             self._brief_count += 1
             self._last_brief_text = text[:1200]
             n = self._brief_count
+            # 전문을 남긴다 — 화면 카드는 회의가 끝나면 사라지고, 관찰 로그의
+            # span 은 500자 컷이라 문서로 복원할 수 없다.
+            self._briefs.append({
+                "n": n, "trigger": trigger, "brief": brief, "text": text,
+                "t0": t0, "t1": t1,
+            })
         # 요약도 관찰 로그에 남긴다 — 완전 삭제(purge)가 함께 지우고, 카드의 확인/닫기
         # 라벨로 '이 요약이 쓸모 있었나'를 실측할 수 있다. trigger_type 으로 개입
         # 후보와 구분되며 report() 가 분모를 섞지 않는다.
@@ -1913,6 +2058,12 @@ def _print_report(session_id: Optional[str], detail: bool) -> None:
     print(f"\n[분자] 후보 {r['candidates']}건 "
           f"(중복 재판정 {r['candidate_repeats']}회는 행에 합산) · "
           f"보정 전 조각 기반 {r['provisional_candidates']}건")
+    if r["provisional_candidates"]:
+        # 조각 기반이라도 인용이 확정 전사에 그대로 남았으면 전사 품질 문제가
+        # 아니었다 — 그 차이를 숨기면 위험을 실제보다 크게 잡는다.
+        same = r["provisional_candidates"] - r["provisional_unrevised"]
+        print(f"        그중 확정 전사와 인용이 같은 것 {same}건 → "
+              f"실제로 조각이 바뀐 판정 {r['provisional_unrevised']}건")
     if r["by_persona"]:
         print("        페르소나별:")
         for k, d in sorted(r["by_persona"].items(),
@@ -1942,7 +2093,9 @@ def _print_report(session_id: Optional[str], detail: bool) -> None:
             t = ""
             if o.get("t0") is not None:
                 t = f" [{float(o['t0']):.0f}~{float(o.get('t1') or 0):.0f}s]"
-            flag = " (조각)" if o.get("provisional") else ""
+            flag = ""
+            if o.get("provisional"):
+                flag = " (조각=최종)" if o.get("revised") else " (조각)"
             rep = f" ×{1 + int(o.get('repeats') or 0)}" if o.get("repeats") else ""
             fb = {FEEDBACK_ACK: " ✓확인",
                   FEEDBACK_DISMISS: " ✕닫기"}.get(o.get("feedback") or "", "")

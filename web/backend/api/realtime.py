@@ -513,8 +513,7 @@ class BrowserRealtimeSession:
         self._web_pool.shutdown(wait=True, cancel_futures=False)
         if self._searcher is not None:
             self._searcher.shutdown(wait=True)
-        if self._facilitator is not None:
-            self._facilitator.shutdown(wait=True)
+        await self._wrap_up_facilitator()
         await self._finalize(
             openai_client, language, translate, doc_type, topic, title,
         )
@@ -796,6 +795,26 @@ class BrowserRealtimeSession:
             return self._searcher.collected_evidence(limit=5)
         except Exception:
             return []
+
+    async def _wrap_up_facilitator(self):
+        """정상 종료 마무리 — 마지막 정리 1회 후 트리아지 풀 drain.
+
+        **취소 경로에서는 부르지 않는다**(버린 회의에 새 과금을 만들지 않는다).
+        주기가 기본 600초라 25분 회의면 요약이 t=600 의 1건뿐이고 마지막 15분이
+        통째로 빠진다 — 사용자가 회의 끝에 확인하려는 것이 정확히 그 구간이다.
+        `finalize_brief` 는 LLM 호출을 기다리므로 워커 스레드에서 돌린다."""
+        if self._facilitator is None:
+            return
+        try:
+            reason = await asyncio.to_thread(self._facilitator.finalize_brief)
+            if reason:
+                print(f"[facilitation] 마지막 정리 건너뜀: {reason}")
+        except Exception as e:
+            print(f"[facilitation] 마지막 정리 실패(무시): {e}")
+        try:
+            self._facilitator.shutdown(wait=True)
+        except Exception:
+            pass
 
     def _facilitation_web(self):
         """회의 중 **이미 나간** 웹 검색 결과 — 팩트체커의 근거로 넘긴다.
@@ -1797,9 +1816,8 @@ class BrowserRealtimeSession:
         # vault 검색 drain — _finalize()의 collected_notes() 완결성 보장 (WS 경로와 동일)
         if self._searcher is not None:
             self._searcher.shutdown(wait=True)
-        # 페르소나 트리아지 drain — 관찰 로그(facilitation_log) 기록 완결성 보장
-        if self._facilitator is not None:
-            self._facilitator.shutdown(wait=True)
+        # 마지막 정리 1회 + 페르소나 트리아지 drain
+        await self._wrap_up_facilitator()
 
         # 스레드풀 정리 — 과거엔 WS 경로만 shutdown 해 HTTP 세션마다 유휴 스레드가 누적됐다
         self._translator_pool.shutdown(wait=True, cancel_futures=False)
@@ -2025,6 +2043,32 @@ class BrowserRealtimeSession:
                     db.add_related_notes(self.session_id, _rt_evidence)
                 except Exception as _re:
                     print(f"[realtime] 관련 노트 누적 저장 실패(무시): {_re}")
+            # 조각(보정 전) 전사로 판정한 관찰 행 중, 인용이 **확정 전사에 그대로
+            # 남은** 것을 표시한다. 보정 워커는 1초 미만·무음·반복 과다에서 교체를
+            # 포기하므로 그 조각은 최종본과 글자 그대로 같다 — 전부 "조각 기반"으로
+            # 세면 전사 품질 탓에 판정이 흔들렸을 위험을 실제보다 크게 잡는다(§15).
+            if self.session_id and self.segments:
+                try:
+                    from meeting_minutes_app.wiki_core import facilitation as _fac
+                    _final_text = "\n".join(
+                        (s.get("text") or "") for s in self.segments)
+                    _fac.mark_revised_spans(self.session_id, _final_text)
+                except Exception as _me:
+                    print(f"[facilitation] 조각/확정 대조 표시 실패(무시): {_me}")
+
+            # 회의 중 만든 '중간 정리'를 문서로 남긴다. 종전엔 화면 카드로만 존재해
+            # 녹음이 끝나면 사라졌고(관찰 로그 span 은 500자 컷), 회의 중에 본 요약을
+            # 나중에 다시 볼 방법이 없었다. 회의록과 **별도 문서**로 둔다 — 회의록은
+            # 끝난 회의의 정본이고 이건 진행 중 시점별 스냅샷이다.
+            if self._facilitator is not None and self.session_id:
+                try:
+                    _brief_md = self._facilitator.briefs_markdown()
+                    if _brief_md.strip():
+                        db.upsert_document(self.session_id, "brief", _brief_md,
+                                           "markdown")
+                except Exception as _be:
+                    print(f"[realtime] 중간 정리 저장 실패(무시): {_be}")
+
             extra_blocks = []
             if _web_findings:
                 extra_blocks.append("[웹 검색 보완]:\n" + "\n".join(

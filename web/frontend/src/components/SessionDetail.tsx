@@ -20,7 +20,7 @@ interface Props {
   onOpenGraph?: (query?: string) => void;   // 위키링크/노드 클릭 시 지식 그래프로 이동
 }
 
-type Tab = "script" | "minutes" | "summary" | "actions" | "fact_check" | "wiki_context" | "wiki_proposal" | "refined_script" | "graph";
+type Tab = "script" | "minutes" | "summary" | "actions" | "fact_check" | "brief" | "wiki_context" | "wiki_proposal" | "refined_script" | "graph";
 
 // 그래프 노드 타입 -> 섹션 표시 라벨 (이 컴포넌트의 다른 탭 라벨과 톤을 맞춰 영문 사용)
 const GRAPH_TYPE_LABELS: Record<string, string> = {
@@ -261,6 +261,9 @@ export default function SessionDetail({ id, onBack, onOpenGraph }: Props) {
     { key: "minutes", label: "회의록", icon: <FileText size={14} /> },
     { key: "summary", label: "요약", icon: <Zap size={14} /> },
     { key: "fact_check", label: "사실확인", icon: <AlertCircle size={14} /> },
+    // 회의 **중** 화면에 떴던 자동 요약. 문서가 있을 때만 노출된다(isTabAvailable) —
+    // 페르소나를 끈 회의에는 탭 자체가 생기지 않는다.
+    { key: "brief", label: "중간 정리", icon: <Clock size={14} /> },
     { key: "script", label: "스크립트", icon: <List size={14} /> },
     { key: "actions", label: "액션", icon: <CheckCircle size={14} /> },
     { key: "wiki_context", label: "위키 맥락", icon: <FileText size={14} /> },

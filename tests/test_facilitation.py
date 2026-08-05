@@ -2478,3 +2478,221 @@ class TestWebEvidenceReachesThePersona:
             web_provider=lambda: hits.append(1) or list(self.WEB))
         _offer_and_drain(orch, ["수율이 90%라고 하셨죠"])
         assert hits == [1]          # 있는 결과를 1회 읽을 뿐이다
+
+
+class TestBriefsSurviveTheMeeting:
+    """회의 중 요약이 회의가 끝나도 남는가 + 마지막 구간이 빠지지 않는가.
+
+    종전엔 요약이 화면 카드로만 존재했다. 녹음이 끝나면 사라지고, 관찰 로그의 span 은
+    500자 컷이라 문서로 복원할 수 없었다 — 회의 중에 본 것을 나중에 볼 방법이 없었다.
+    그리고 주기가 기본 600초라 25분 회의면 t=600 요약 1건뿐이고 **마지막 15분이 통째로
+    빠졌다**(사용자가 회의 끝에 확인하려는 것이 정확히 그 구간이다).
+    """
+
+    BRIEF = {"points": ["출시 일정"], "decisions": ["9월 1일 확정"],
+             "actions": ["일정표 갱신"], "open_questions": ["예산?"]}
+
+    def _values(self, **over):
+        values = {"facilitation.enabled": True,
+                  "facilitation.triage_period_sec": 100000,
+                  "facilitation.brief_period_sec": 600,
+                  "facilitation.brief_min_new_chars": 600,
+                  "facilitation.max_cost_usd_per_meeting": 0.0}
+        for k in personas.PERSONAS:
+            values[f"facilitation.personas.{k}.level"] = 0
+        values["facilitation.personas.summarizer.level"] = 3
+        values.update(over)
+        return values
+
+    def _llm(self, monkeypatch, payloads=None):
+        calls = []
+        seq = list(payloads or [])
+
+        def _fake(model, system, user, max_tokens=None):
+            brief = "중간 요약" in system
+            calls.append({"brief": brief, "user": user})
+            if not brief:
+                return "[]"
+            return json.dumps(seq.pop(0) if seq else self.BRIEF, ensure_ascii=False)
+
+        monkeypatch.setattr(facilitation, "_call_llm", _fake)
+        return calls
+
+    def _orch(self, fac_db, sid, now, shown):
+        return FacilitationOrchestrator(
+            session_id=sid, clock=lambda: now["t"],
+            on_intervention=shown.append, db_path=fac_db)
+
+    def test_brief_text_is_kept_in_full_not_truncated_to_the_log(
+            self, cfg, fac_db, monkeypatch):
+        """관찰 로그는 500자 컷이라 문서 복원에 쓸 수 없다 — 전문을 따로 들고 있는다."""
+        long_point = "가" * 290
+        cfg(self._values())
+        self._llm(monkeypatch, [{"points": [long_point, long_point],
+                                 "decisions": [long_point], "actions": [],
+                                 "open_questions": []}])
+        now, shown = {"t": 0.0}, []
+        orch = self._orch(fac_db, "bs1", now, shown)
+        orch.offer_segment("시작합니다.")
+        now["t"] += 601
+        orch.offer_segment("나" * 700)
+        orch.shutdown(wait=True)
+
+        md = orch.briefs_markdown()
+        assert md.count(long_point) == 3           # 세 항목 전부 살아 있다
+        logged = facilitation.observations(session_id="bs1", db_path=fac_db)[0]
+        assert len(logged["span"]) <= 500          # 로그는 여전히 컷 — 그래서 필요했다
+
+    def test_markdown_orders_briefs_and_labels_their_trigger(
+            self, cfg, fac_db, monkeypatch):
+        cfg(self._values())
+        self._llm(monkeypatch, [{"points": ["첫 구간"], "decisions": [],
+                                 "actions": [], "open_questions": []},
+                                {"points": ["둘째 구간"], "decisions": [],
+                                 "actions": [], "open_questions": []}])
+        now, shown = {"t": 0.0}, []
+        orch = self._orch(fac_db, "bs2", now, shown)
+        orch.offer_segment("시작합니다.")
+        now["t"] += 601
+        orch.offer_segment("가" * 700)
+        now["t"] += 601
+        orch.offer_segment("나" * 700)
+        orch.shutdown(wait=True)
+
+        md = orch.briefs_markdown()
+        assert md.index("첫 구간") < md.index("둘째 구간")
+        assert "## 1. 자동 정리" in md and "## 2. 자동 정리" in md
+        assert "확정된 회의록이 아니라" in md      # 이게 초안이라는 것을 문서가 말한다
+
+    def test_no_briefs_means_no_document(self, cfg, fac_db, monkeypatch):
+        """페르소나를 끈 회의에는 빈 문서를 만들지 않는다(탭이 생기면 안 된다)."""
+        cfg(self._values(**{"facilitation.personas.summarizer.level": 0}))
+        self._llm(monkeypatch)
+        now, shown = {"t": 0.0}, []
+        orch = self._orch(fac_db, "bs3", now, shown)
+        orch.offer_segment("시작합니다.")
+        orch.shutdown(wait=True)
+        assert orch.briefs_markdown() == ""
+
+    def test_finalize_brief_covers_the_last_stretch(self, cfg, fac_db, monkeypatch):
+        """주기가 오기 전에 회의가 끝나도 마지막 구간이 요약된다."""
+        cfg(self._values())
+        calls = self._llm(monkeypatch, [{"points": ["마지막 15분"], "decisions": [],
+                                         "actions": [], "open_questions": []}])
+        now, shown = {"t": 0.0}, []
+        orch = self._orch(fac_db, "bs4", now, shown)
+        orch.offer_segment("시작합니다.")
+        now["t"] += 300                     # 주기(600) 전이라 자동 요약은 아직 없다
+        orch.offer_segment("가" * 700)
+        assert shown == []
+
+        assert orch.finalize_brief() == ""
+        orch.shutdown(wait=True)
+        assert [c["brief"] for c in calls] == [True]
+        assert "마지막 15분" in orch.briefs_markdown()
+        assert "마지막 정리" in orch.briefs_markdown()
+
+    def test_finalize_brief_skips_when_nothing_new(self, cfg, fac_db, monkeypatch):
+        """직전 요약과 거의 같은 내용에 돈을 한 번 더 쓰지 않는다 — 사유를 돌려준다."""
+        cfg(self._values())
+        calls = self._llm(monkeypatch)
+        now, shown = {"t": 0.0}, []
+        orch = self._orch(fac_db, "bs5", now, shown)
+        orch.offer_segment("시작합니다.")
+        now["t"] += 601
+        orch.offer_segment("가" * 700)      # 주기 요약 1회 — 버퍼를 비운다
+        orch.shutdown(wait=True)
+
+        reason = orch.finalize_brief()
+        assert "새로 쌓인 발화가 적어" in reason
+        assert [c["brief"] for c in calls] == [True]     # 두 번째 호출은 없다
+
+    def test_finalize_brief_respects_mute_and_channel(self, cfg, fac_db, monkeypatch):
+        """네 게이트는 종료에서도 그대로다 — 아무도 못 볼 요약에 돈을 쓰지 않는다."""
+        cfg(self._values())
+        calls = self._llm(monkeypatch)
+        now, shown = {"t": 0.0}, []
+        orch = self._orch(fac_db, "bs6", now, shown)
+        orch.offer_segment("시작합니다.")
+        now["t"] += 300
+        orch.offer_segment("가" * 700)
+        orch.mute()
+        assert "껐습니다" in orch.finalize_brief()
+
+        headless = FacilitationOrchestrator(
+            session_id="bs7", clock=lambda: now["t"], db_path=fac_db)
+        headless.offer_segment("가" * 700)
+        assert "표시할 화면이 없어" in headless.finalize_brief()
+        orch.shutdown(wait=True)
+        assert [c["brief"] for c in calls] == []         # 어느 쪽도 호출하지 않았다
+
+    def test_finalize_brief_still_passes_the_spend_gates(
+            self, cfg, fac_db, monkeypatch):
+        """회의당 캡을 넘으면 마지막 요약도 만들지 않는다(종료가 뒷문이 되면 안 된다)."""
+        cfg(self._values(**{"facilitation.max_cost_usd_per_meeting": 0.000001}))
+        calls = self._llm(monkeypatch)
+        now, shown, status = {"t": 0.0}, [], []
+        orch = FacilitationOrchestrator(
+            session_id="bs8", clock=lambda: now["t"],
+            on_intervention=shown.append, on_status=status.append, db_path=fac_db)
+        orch.offer_segment("시작합니다.")
+        now["t"] += 300
+        orch.offer_segment("가" * 700)
+        orch.finalize_brief()
+        orch.shutdown(wait=True)
+        assert [c["brief"] for c in calls] == []
+        assert any(s["kind"] == "capped" for s in status)   # 사유가 화면으로 나간다
+
+
+class TestProvisionalIsNotOvercounted:
+    """조각(보정 전) 판정 계상 — 보정이 **교체를 포기한** 경우까지 세면 과대 계상이다.
+
+    보정 워커는 세 경우에 교체를 포기한다(1초 미만·무음·반복 과다). 그때 조각은
+    최종본과 글자 그대로 같은데, `provisional` 만 세면 그것도 "전사 품질 탓에 흔들린
+    판정"으로 잡힌다 — §15 오탐률 실측의 해석이 그만큼 어긋난다.
+    """
+
+    def _seed(self, fac_db, spans, provisional=True):
+        for i, span in enumerate(spans):
+            facilitation.record_observation(
+                "pv1", "critic", trigger_type="fact", confidence=0.9, span=span,
+                level=1, provisional=provisional, db_path=fac_db)
+
+    def test_span_present_in_final_transcript_is_marked(self, fac_db):
+        self._seed(fac_db, ["수율이 90%입니다", "다음 주에 봅시다"])
+        n = facilitation.mark_revised_spans(
+            "pv1", "안녕하세요. 수율이 90%입니다. 확인하겠습니다.", db_path=fac_db)
+        assert n == 1
+        rows = {o["span"]: o for o in
+                facilitation.observations("pv1", db_path=fac_db)}
+        assert rows["수율이 90%입니다"]["revised"] == 1
+        assert not rows["다음 주에 봅시다"]["revised"]
+
+    def test_report_separates_actually_changed_fragments(self, fac_db):
+        self._seed(fac_db, ["수율이 90%입니다", "다음 주에 봅시다"])
+        before = facilitation.report("pv1", db_path=fac_db)
+        # 표시 전에는 모르는 것을 아는 척하지 않는다 — 두 값이 같다
+        assert before["provisional_candidates"] == 2
+        assert before["provisional_unrevised"] == 2
+
+        facilitation.mark_revised_spans("pv1", "수율이 90%입니다", db_path=fac_db)
+        after = facilitation.report("pv1", db_path=fac_db)
+        assert after["provisional_candidates"] == 2      # 원래 수치는 그대로
+        assert after["provisional_unrevised"] == 1       # 실제로 바뀐 것만
+
+    def test_whitespace_and_case_differences_still_match(self, fac_db):
+        """전사 표기 차이(공백·대소문자)로 같은 문장을 다르다고 하면 안 된다."""
+        self._seed(fac_db, ["TSMC 3nm  수율"])
+        assert facilitation.mark_revised_spans(
+            "pv1", "…tsmc 3nm 수율 이야기…", db_path=fac_db) == 1
+
+    def test_confirmed_rows_are_never_touched(self, fac_db):
+        """provisional=0(확정 전사 기반) 행은 대상이 아니다 — 리플레이 판정 포함."""
+        self._seed(fac_db, ["확정 전사로 판정"], provisional=False)
+        assert facilitation.mark_revised_spans(
+            "pv1", "확정 전사로 판정", db_path=fac_db) == 0
+
+    def test_empty_inputs_are_noops(self, fac_db):
+        self._seed(fac_db, ["무언가"])
+        assert facilitation.mark_revised_spans("pv1", "   ", db_path=fac_db) == 0
+        assert facilitation.mark_revised_spans("", "무언가", db_path=fac_db) == 0

@@ -23,6 +23,7 @@ import pytest
 
 from meeting_minutes_app.common import spend_guard, usage_log
 from meeting_minutes_app.wiki_core import facilitation, personas
+from meeting_minutes_app.wiki_core.personas import EV_REGISTRY
 from meeting_minutes_app.wiki_core.facilitation import FacilitationOrchestrator
 
 
@@ -2001,3 +2002,160 @@ class TestRegistryData:
         observe = {k for k, lvl in seeded.items() if lvl <= 1}
         assert observe == {"domain_expert", "fact_checker", "devils_advocate",
                            "critic"}
+
+
+class TestPriorMeetingContext:
+    """이전 회의 재료(지난 결정·미완료 액션)가 실시간 판정에 실제로 들어가는가.
+
+    이게 없던 동안 "이전 회의와 다른 내용"을 짚을 **입력 자체가 없었다** — 종료 후
+    경로(`meeting_workflow.build_meeting_context`)는 볼트·그래프·registry·웹을 모두
+    조립해 회의록을 쓰는데, 실시간 경로는 registry 참조가 0건이었다.
+
+    PRD_실시간관련정보 §9-0b 의 교훈을 따른다: **fake 가 규칙을 자체 구현하면 버그를
+    덮는다.** 그래서 registry 파일을 실제로 만들고 `wiki_knowledge` 의 실제 헬퍼가
+    돌게 한 뒤, 프롬프트 문자열에 **몇 건이 실제로 들어갔는지** 센다.
+    """
+
+    def _seed_registry(self, tmp_path, monkeypatch, decisions=None, actions=None):
+        import json as _json
+        from meeting_minutes_app.wiki_core import wiki_knowledge as wk
+        monkeypatch.setattr(wk, "DATA_DIR", tmp_path)
+        (tmp_path / "decision_registry.json").write_text(_json.dumps(
+            {"decisions": decisions if decisions is not None else [
+                {"summary": "STT 기본 모델은 mini 로 간다", "topics": ["STT"],
+                 "created_at": "2026-07-15T10:00:00"},
+                {"summary": "배포는 포터블 zip 이 정본", "topics": ["배포"],
+                 "created_at": "2026-07-20T10:00:00"},
+            ]}, ensure_ascii=False), encoding="utf-8")
+        (tmp_path / "action_registry.json").write_text(_json.dumps(
+            {"actions": actions if actions is not None else [
+                {"title": "STT 인덱스 재빌드", "owner": "홍길동", "status": "open",
+                 "topics": ["STT"], "due": "2026-07-30"},
+                {"title": "이미 끝난 일", "owner": "김영희", "status": "done",
+                 "topics": ["STT"]},
+            ]}, ensure_ascii=False), encoding="utf-8")
+
+    def _values(self, **over):
+        v = {"facilitation.enabled": True,
+             "facilitation.context_decisions": 5,
+             "facilitation.context_actions": 5}
+        v.update(over)
+        return v
+
+    def test_prior_decisions_and_actions_reach_the_triage_prompt(
+            self, cfg, fac_db, tmp_path, monkeypatch):
+        """트리아지 프롬프트에 지난 결정·미완료 액션이 실제 문자열로 들어간다."""
+        self._seed_registry(tmp_path, monkeypatch)
+        cfg(self._values())
+        calls = []
+
+        def _fake(model, system, user, max_tokens=None):
+            calls.append({"system": system, "user": user})
+            return "[]"
+        monkeypatch.setattr(facilitation, "_call_llm", _fake)
+
+        orch = FacilitationOrchestrator(session_id="pc1", topic="STT",
+                                        db_path=fac_db)
+        _offer_and_drain(orch, ["STT 모델을 whisper 로 바꾸는 게 어떨까요."])
+
+        assert len(calls) == 1
+        user = calls[0]["user"]
+        assert "STT 기본 모델은 mini 로 간다" in user
+        assert "STT 인덱스 재빌드" in user
+        assert "홍길동" in user
+        # status != open 인 액션은 들어가지 않는다(끝난 일을 다시 짚지 않게)
+        assert "이미 끝난 일" not in user
+        # 재료를 넣었으면 쓰라는 지시도 함께 간다 — 지시가 없으면 모델이 배경으로만 읽는다
+        assert "critic" in calls[0]["system"] and "어긋" in calls[0]["system"]
+
+    def test_zero_means_no_injection(self, cfg, fac_db, tmp_path, monkeypatch):
+        """0 으로 두면 한 글자도 넣지 않는다 — 상시 토큰을 늘리지 않을 자유."""
+        self._seed_registry(tmp_path, monkeypatch)
+        cfg(self._values(**{"facilitation.context_decisions": 0,
+                            "facilitation.context_actions": 0}))
+        calls = []
+        monkeypatch.setattr(facilitation, "_call_llm",
+                            lambda m, s, u, max_tokens=None: calls.append(u) or "[]")
+        orch = FacilitationOrchestrator(session_id="pc2", topic="STT", db_path=fac_db)
+        _offer_and_drain(orch, ["아무 말이나 합니다."])
+        assert "이전 회의에서 정해진 것" not in calls[0]
+        assert orch.prior_context_block() == ""
+
+    def test_generate_prompt_only_for_registry_personas(
+            self, cfg, fac_db, tmp_path, monkeypatch):
+        """대조 블록은 `Persona.evidence` 에 registry 를 적은 페르소나에게만 간다.
+
+        촉진자·주니어까지 주면 대조와 무관한 카드에 토큰만 늘고, '근거처럼 보이는
+        배경'이 된다."""
+        self._seed_registry(tmp_path, monkeypatch)
+        values = self._values(**{"facilitation.triage_period_sec": 600,
+                                 "facilitation.min_confidence": 0.5})
+        for k in personas.PERSONAS:
+            values[f"facilitation.personas.{k}.level"] = 3
+        cfg(values)
+
+        gen_prompts = {}
+
+        def _fake(model, system, user, max_tokens=None):
+            if "트리아지" in system:
+                return json.dumps([
+                    {"persona": "critic", "trigger_type": "앞말과 모순",
+                     "confidence": 0.9, "span": "지난번과 다르게 갑시다"},
+                    {"persona": "facilitator", "trigger_type": "논점 전환",
+                     "confidence": 0.9, "span": "다음 안건으로"},
+                ], ensure_ascii=False)
+            for key in ("critic", "facilitator"):
+                if personas.PERSONAS[key].system_prompt[:24] in system:
+                    gen_prompts[key] = user
+            return "짧은 개입 문장입니다."
+        monkeypatch.setattr(facilitation, "_call_llm", _fake)
+
+        orch = FacilitationOrchestrator(
+            session_id="pc3", topic="STT", db_path=fac_db,
+            on_intervention=lambda _i: None)
+        _offer_and_drain(orch, ["지난번과 다르게 갑시다. 다음 안건으로."])
+
+        assert "critic" in gen_prompts and "facilitator" in gen_prompts
+        assert "이전 회의에서 정해진 것" in gen_prompts["critic"]        # registry 있음
+        assert "이전 회의에서 정해진 것" not in gen_prompts["facilitator"]  # 없음
+
+    def test_registry_failure_does_not_stop_interventions(
+            self, cfg, fac_db, monkeypatch):
+        """재료 로드가 실패해도 개입 전체가 멈추면 안 된다 — 대조만 못 할 뿐이다."""
+        from meeting_minutes_app.wiki_core import wiki_knowledge as wk
+        monkeypatch.setattr(wk, "recent_decisions_for",
+                            lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
+        cfg(self._values())
+        calls = []
+        monkeypatch.setattr(facilitation, "_call_llm",
+                            lambda m, s, u, max_tokens=None: calls.append(u) or "[]")
+        orch = FacilitationOrchestrator(session_id="pc4", topic="STT", db_path=fac_db)
+        _offer_and_drain(orch, ["그래도 판정은 돌아야 합니다."])
+        assert len(calls) == 1                      # 트리아지는 정상 수행
+        assert orch.prior_context_block() == ""
+
+    def test_disabled_persona_key_never_enters_the_prompt(
+            self, cfg, fac_db, tmp_path, monkeypatch):
+        """참견도 0(금지)인 페르소나는 대조 지시문에도 이름이 나오면 안 된다.
+
+        지시문에 키를 하드코딩했다가 실제로 깨진 계약이다 — "0 = 트리아지 입력에서
+        제외 → 진짜 0 비용". 대조 가능한 페르소나가 하나도 없으면 재료 자체를 넣지
+        않는다(쓸 수 없는 토큰은 낭비다)."""
+        self._seed_registry(tmp_path, monkeypatch)
+        values = self._values()
+        for k in personas.PERSONAS:          # registry 를 쓰는 페르소나를 전부 금지
+            values[f"facilitation.personas.{k}.level"] = (
+                0 if EV_REGISTRY in personas.PERSONAS[k].evidence else 1)
+        cfg(values)
+        calls = []
+        monkeypatch.setattr(
+            facilitation, "_call_llm",
+            lambda m, s, u, max_tokens=None: calls.append(s + u) or "[]")
+
+        orch = FacilitationOrchestrator(session_id="pc5", topic="STT", db_path=fac_db)
+        _offer_and_drain(orch, ["지난번과 다르게 갑시다."])
+
+        prompt = calls[0]
+        for k in ("critic", "fact_checker", "scribe", "domain_expert"):
+            assert k not in prompt, f"금지된 {k} 가 프롬프트에 들어갔다"
+        assert "이전 회의에서 정해진 것" not in prompt   # 쓸 사람이 없으면 재료도 없다

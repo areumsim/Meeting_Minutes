@@ -290,6 +290,8 @@ SCHEMA: List[Dict[str, Any]] = [
             # 올리면 "켰는데 아무 일도 안 일어나는 토글"이 된다 — 이 리포가 반복해서
             # 없애온 UX 함정이다. 기본값·의미는 config.example.json 주석에만 남기고,
             # 해당 마일스톤에서 코드와 함께 여기로 올린다.
+            {"section": "facilitation", "key": "context_decisions", "label": "대조에 쓸 지난 결정 수", "type": "number", "default": 5, "desc": "회의 중 개입이 '이전 회의에서 정한 것과 다르다'를 짚으려면 그 결정을 알아야 합니다. 회의 주제와 관련된 지난 결정을 이 개수만큼 판정에 넣습니다(회의 시작 시 1회 로드, 파일 읽기라 추가 API 비용 없음). 0이면 넣지 않습니다 — 대신 이전 회의와의 대조는 종료 후 회의록 단계에서만 일어납니다."},
+            {"section": "facilitation", "key": "context_actions", "label": "대조에 쓸 미완료 액션 수", "type": "number", "default": 5, "desc": "아직 끝나지 않은 액션을 이 개수만큼 판정에 넣습니다. 서기가 '그 건 어떻게 됐나'를 상기시킬 수 있게 됩니다. 0이면 넣지 않습니다."},
             {"section": "facilitation", "key": "max_cost_usd_per_meeting", "label": "회의당 비용 캡 ($)", "type": "number", "default": 0.5, "desc": "이 기능이 한 회의에서 쓸 수 있는 상한. 월 지출 한도(cost.monthly_cap_usd)가 0(무제한)이어도 이 캡은 동작합니다. 0이면 캡 없음."},
         ],
     },

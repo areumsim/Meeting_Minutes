@@ -476,10 +476,10 @@ def prep_brief(payload: dict):
 
         regular, papers = wk._get_brief_related_notes(
             title, search_topic, indexer, obs, limit=5, memo=memo)
-        action_reg = wk.load_action_registry(wk.DATA_DIR / "action_registry.json")
-        decision_reg = wk.load_decision_registry(wk.DATA_DIR / "decision_registry.json")
-        open_actions = wk._filter_actions_by_topic(action_reg.get("actions", []), search_topic, limit=10)
-        recent_decisions = wk._filter_decisions_by_topic(decision_reg.get("decisions", []), search_topic, limit=10)
+        # 로드+필터는 공개 진입점 하나만 쓴다 — 회의 중 개입(facilitation)도 같은
+        # 함수를 쓰므로, 인라인으로 풀어 쓰면 두 경로의 재료가 갈라진다.
+        open_actions = wk.open_actions_for(search_topic, limit=10)
+        recent_decisions = wk.recent_decisions_for(search_topic, limit=10)
 
         now = datetime.now()
         brief = wk.build_prep_brief(

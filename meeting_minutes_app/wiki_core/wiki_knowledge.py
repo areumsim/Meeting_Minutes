@@ -234,6 +234,50 @@ def _filter_decisions_by_topic(
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#  Registry 조회 — 공개 진입점 (prep-brief · 실시간 개입 공용)
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+#
+# "지난 결정·미완료 액션을 주제로 걸러 N건" 은 두 곳이 필요로 한다:
+#   1. 회의 준비 브리핑(`api/tools.py::prep_brief`)
+#   2. 회의 중 개입 판정(`wiki_core.facilitation`) — 이전 회의와 어긋나는 발화를 짚으려면
+#      그 재료가 실시간 경로에도 있어야 한다(예전엔 참조 0건이라 판정 자체가 불가능했다)
+# 로드+필터를 호출부마다 인라인으로 쓰면 두 경로가 갈라진다 — 이 리포가 반복해서 대가를
+# 치른 패턴이라(단가 표 4곳·노트 판정 2곳·논문 arm 폴더 매칭) 진입점을 여기 하나로 둔다.
+# PRD_실시간관련정보 §6-4 "웹/CLI 공용 로직은 wiki_core 1곳" 과 같은 규율.
+
+
+def recent_decisions_for(topic: str, limit: int = 5,
+                         extra_keywords: Optional[List[str]] = None) -> list:
+    """주제와 관련된 지난 결정 N건(최신순). 실패하면 빈 목록 — 호출부를 막지 않는다."""
+    if limit <= 0:
+        return []
+    try:
+        reg = load_decision_registry(DATA_DIR / "decision_registry.json")
+        return _filter_decisions_by_topic(
+            reg.get("decisions", []), topic, limit=limit,
+            extra_keywords=extra_keywords)
+    except Exception as e:
+        print(f"[wiki] 지난 결정 조회 건너뜀: {e}")
+        return []
+
+
+def open_actions_for(topic: str, attendees: Optional[List[str]] = None,
+                     limit: int = 5,
+                     extra_keywords: Optional[List[str]] = None) -> list:
+    """주제·참석자와 관련된 미완료(open) 액션 N건. 실패하면 빈 목록."""
+    if limit <= 0:
+        return []
+    try:
+        reg = load_action_registry(DATA_DIR / "action_registry.json")
+        return _filter_actions_by_topic(
+            reg.get("actions", []), topic, attendees=attendees, limit=limit,
+            extra_keywords=extra_keywords)
+    except Exception as e:
+        print(f"[wiki] 미완료 액션 조회 건너뜀: {e}")
+        return []
+
+
+# ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 #  Registry 누적 (회의 후 자동 호출)
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 

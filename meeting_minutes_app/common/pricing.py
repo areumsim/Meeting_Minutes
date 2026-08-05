@@ -148,12 +148,15 @@ def minutes_cost(llm: str = "gpt", model: str | None = None) -> float:
 # 한도 판정에서 과소평가는 한도를 넘겨 버리고, 과대평가는 트리아지가 한 번 미뤄질
 # 뿐이다(EMBEDDING_CHARS_PER_TOKEN 과 같은 규칙).
 #
-# 입력 2,300 의 근거: 최근 발화 창 2,000자(facilitation.TRIAGE_WINDOW_CHARS)를
+# 입력 2,600 의 근거: 최근 발화 창 2,000자(facilitation.TRIAGE_WINDOW_CHARS)를
 # 한국어 기준 ~1.2자/토큰으로 보면 ≈1,670, + 시스템 프롬프트 ≈200, + 활성 페르소나
-# 8종 목록·트리거 ≈350, + 회의 주제. PRD §10 의 1.5k 는 한국어 토큰화를 낙관적으로
-# 본 값이었다 `[미검증 — 실사용 usage 로 재교정 필요]`.
-# 창 길이를 바꾸면 이 값도 같이 조정한다.
-FACILITATION_TRIAGE_INPUT_TOKENS  = 2_300
+# 8종 목록·트리거 ≈350, + 회의 주제, + **이전 회의 대조 블록 ≈300**(지난 결정 5건 +
+# 미완료 액션 5건, 한 줄 ≈30토큰 — `facilitation.context_decisions/context_actions`
+# 로 조절, 0이면 안 들어간다). PRD §10 의 1.5k 는 한국어 토큰화를 낙관적으로 본
+# 값이었다 `[미검증 — 실사용 usage 로 재교정 필요]`.
+# **창 길이나 주입 재료를 바꾸면 이 값도 같이 조정한다** — 안 그러면 추정과 실사용이
+# 갈라진다(이 리포의 반복 결함).
+FACILITATION_TRIAGE_INPUT_TOKENS  = 2_600
 # 출력은 호출의 max_tokens 와 **같은 상수**를 쓴다 — 추정이 실제 상한과 갈라지지
 # 않게(초기 구현은 추정 150 / 상한 800 으로 5배 갈라져 있었다).
 FACILITATION_TRIAGE_MAX_OUTPUT_TOKENS = 800
@@ -193,10 +196,12 @@ def web_research_call_cost(model: str | None = None, *, searched: bool = True,
 
 
 # 페르소나 개입 1건(Tier 1 생성) 토큰 — 트리아지와 같이 **상한**으로 잡는다.
-#   입력 3,000: 최근 발화 창(2,000자≈1,670) + 볼트 근거 스니펫 몇 개 + 시스템 프롬프트.
+#   입력 3,400: 최근 발화 창(2,000자≈1,670) + 볼트·웹 근거 스니펫 몇 개 +
+#               **이전 회의 대조 블록 ≈300**(registry 를 근거로 쓰는 페르소나만)
+#               + 시스템 프롬프트.
 #   출력 400: 개입 문장은 2~4문장(COMMON_RULES)이지만 호출 상한과 같은 값을 쓴다.
 # `[미검증 — 실사용 usage 로 재교정 필요]`
-FACILITATION_INTERVENTION_INPUT_TOKENS = 3_000
+FACILITATION_INTERVENTION_INPUT_TOKENS = 3_400
 FACILITATION_INTERVENTION_MAX_OUTPUT_TOKENS = 400
 FACILITATION_INTERVENTION_OUTPUT_TOKENS = FACILITATION_INTERVENTION_MAX_OUTPUT_TOKENS
 

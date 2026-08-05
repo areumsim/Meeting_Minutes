@@ -304,7 +304,7 @@ class BrowserRealtimeSession:
 
         # API 키 확인을 통과한 뒤에 만든다 — 위의 조기 return 경로에서 유휴
         # 스레드풀이 남지 않게 한다(게이트가 꺼져 있으면 어차피 no-op).
-        self._facilitator = self._create_facilitator(topic)
+        self._facilitator = self._create_facilitator(topic, speakers)
         self._announce_facilitation()
 
         ssl_verify = cfg.get("ssl.verify", True)  # 안전 기본값: 키 누락 시 검증 켜짐
@@ -761,7 +761,7 @@ class BrowserRealtimeSession:
         except Exception:
             return None
 
-    def _create_facilitator(self, topic: str):
+    def _create_facilitator(self, topic: str, speakers: str = ""):
         """회의 진행 페르소나 오케스트레이터(M0 관찰모드) 생성.
 
         게이트(config.facilitation.enabled, 기본 꺼짐)는 모듈 내부에서 검사한다 —
@@ -770,8 +770,12 @@ class BrowserRealtimeSession:
         남는다. 생성 실패는 녹음을 막지 않는다(_create_searcher 와 같은 규칙)."""
         try:
             from meeting_minutes_app.wiki_core.facilitation import FacilitationOrchestrator
+            # 참석자를 넘기면 미완료 액션을 owner 로 우선 걸러 준다(그 사람 액션이
+            # 먼저 보인다) — prep-brief 와 같은 필터를 쓴다.
+            attendees = [s.strip() for s in (speakers or "").split(",") if s.strip()]
             return FacilitationOrchestrator(
                 session_id=self.session_id or "", topic=topic,
+                attendees=attendees,
                 on_intervention=self._emit_facilitation,
                 on_status=self._emit_facilitation_status,
                 evidence_provider=self._facilitation_evidence)

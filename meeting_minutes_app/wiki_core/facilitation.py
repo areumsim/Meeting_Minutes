@@ -101,7 +101,8 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, NamedTuple, Optional, Tuple, Union
 
 from meeting_minutes_app.wiki_core.personas import (
-    BRIEF_PERSONA, Persona, all_personas, get_persona, triage_personas)
+    BRIEF_PERSONA, EV_REGISTRY, EV_VAULT, EV_WEB, Persona, all_personas,
+    get_persona, triage_personas)
 
 try:
     from meeting_minutes_app.common import config_loader as _cfg
@@ -113,6 +114,17 @@ except ImportError:
 
 def _c(key: str, default: Any = None) -> Any:
     return _cfg.get(key, default) if _cfg_ok else default
+
+
+def _int_conf(key: str, default: int) -> int:
+    """정수 설정값 — 잘못 적힌 값(빈 문자열·문자)은 기본값으로 흡수한다.
+
+    설정 파일은 사람이 손으로 고치는 파일이라 타입이 틀릴 수 있고, 그때 실시간
+    스트림이 죽으면 안 된다."""
+    try:
+        return int(_c(key, default))
+    except (TypeError, ValueError):
+        return default
 
 
 #: 관찰(silent) 참견도 — **config 키가 없을 때의 폴백**.
@@ -827,6 +839,7 @@ class FacilitationOrchestrator:
     """
 
     def __init__(self, *, session_id: str = "", topic: str = "",
+                 attendees: Optional[List[str]] = None,
                  on_intervention: Optional[Callable[[Dict[str, Any]], None]] = None,
                  clock: Optional[Callable[[], float]] = None,
                  note: str = "", enabled_override: Optional[bool] = None,
@@ -914,12 +927,72 @@ class FacilitationOrchestrator:
         self._brief_count = 0
         self._last_brief_text = ""               # 이전 요약(누적 압축용, FR-A2)
 
+        #: 이전 회의 재료(지난 결정·미완료 액션) — 세션 시작 시 **1회** 로드.
+        #: 이게 없던 동안 "이전 회의와 다른 내용"을 짚을 **입력 자체가 없었다**:
+        #: 종료 후 경로(`meeting_workflow.build_meeting_context`)는 볼트·그래프·registry·
+        #: 웹을 전부 조립해 회의록을 쓰는데, 실시간 경로는 registry 참조가 0건이었다.
+        #: 모델이 아무리 좋아도 모르는 것을 대조할 수는 없다.
+        #: 로드는 JSON 파일 읽기라 비용이 0이고, 실패는 빈 목록으로 흡수한다
+        #: (실시간 스트림 보호 — 재료가 없다고 개입 전체가 멈추면 안 된다).
+        self._prior_decisions: List[Dict[str, Any]] = []
+        self._prior_actions: List[Dict[str, Any]] = []
+        if self._gate:
+            self._load_prior_context(attendees)
+
         # 게이트가 꺼져 있으면 풀 자체를 만들지 않는다 — LLM 호출 0회가 구조적으로
         # 보장된다(수용 기준 §14 첫 항목, 테스트 고정).
         self._pool: Optional[ThreadPoolExecutor] = None
         if self._gate:
             self._pool = ThreadPoolExecutor(
                 max_workers=2, thread_name_prefix="facilitation")
+
+    # ── 이전 회의 재료 ────────────────────────────────────
+
+    def _load_prior_context(self, attendees: Optional[List[str]]) -> None:
+        """지난 결정·미완료 액션을 주제로 걸러 세션 시작 시 1회 담아 둔다.
+
+        로딩·필터는 `wiki_knowledge` 의 공개 진입점 하나만 쓴다 — 회의 준비
+        브리핑(prep-brief)과 **같은 함수**다. 여기에 필터를 다시 구현하면 두 경로가
+        갈라진다(이 리포가 반복해서 대가를 치른 패턴)."""
+        try:
+            from meeting_minutes_app.wiki_core import wiki_knowledge as wk
+            n_dec = _int_conf("facilitation.context_decisions", 5)
+            n_act = _int_conf("facilitation.context_actions", 5)
+            self._prior_decisions = wk.recent_decisions_for(self.topic, limit=n_dec)
+            self._prior_actions = wk.open_actions_for(
+                self.topic, attendees=attendees, limit=n_act)
+        except Exception as e:
+            # 재료가 없다고 개입 전체가 멈추면 안 된다 — 대조만 못 할 뿐이다.
+            print(f"[facilitation] 이전 회의 재료 로드 건너뜀: {e}")
+            self._prior_decisions = []
+            self._prior_actions = []
+
+    def prior_context_block(self) -> str:
+        """트리아지·생성 프롬프트에 넣는 대조용 블록. 재료가 없으면 빈 문자열.
+
+        같은 문자열을 두 프롬프트가 공유한다 — 한쪽만 고치면 "트리아지는 아는데
+        생성은 모르는" 상태가 되어 근거 없는 개입이 나간다."""
+        parts: List[str] = []
+        if self._prior_decisions:
+            lines = []
+            for d in self._prior_decisions:
+                when = str(d.get("created_at", ""))[:10]
+                summary = str(d.get("summary", "")).strip()[:160]
+                if summary:
+                    lines.append(f"- [{when}] {summary}" if when else f"- {summary}")
+            if lines:
+                parts.append("## 이전 회의에서 정해진 것 (대조용)\n" + "\n".join(lines))
+        if self._prior_actions:
+            lines = []
+            for a in self._prior_actions:
+                owner = str(a.get("owner", "")).strip() or "담당 미상"
+                title = str(a.get("title", "")).strip()[:160]
+                due = str(a.get("due", "")).strip()
+                if title:
+                    lines.append(f"- {owner}: {title}" + (f" (기한 {due})" if due else ""))
+            if lines:
+                parts.append("## 아직 끝나지 않은 액션\n" + "\n".join(lines))
+        return "\n\n".join(parts)
 
     # ── 상태 ──────────────────────────────────────────────
 
@@ -1463,7 +1536,7 @@ class FacilitationOrchestrator:
         """볼트 근거 — 이미 상시 수집 중인 결과를 가져다 쓴다(추가 검색 0회, PRD §6).
 
         근거 소스에 "vault" 가 없는 페르소나(촉진자·서기·주니어·비판자)는 대화만 본다."""
-        if "vault" not in (p.evidence or ()) or self.evidence_provider is None:
+        if EV_VAULT not in (p.evidence or ()) or self.evidence_provider is None:
             return []
         try:
             ev = self.evidence_provider() or []
@@ -1582,10 +1655,19 @@ class FacilitationOrchestrator:
             parts.append(f"## 이 발화가 근거입니다\n{cand['span']}")
         if cand.get("trigger_type"):
             parts.append(f"## 감지된 트리거\n{cand['trigger_type']}")
+        # 이전 회의 재료는 **그것을 근거로 쓰는 페르소나에게만** 넣는다
+        # (`Persona.evidence` 에 "registry"). 촉진자·주니어까지 주면 대조와 무관한
+        # 카드에 토큰만 늘고, 이 리포가 경계하는 '근거처럼 보이는 배경'이 된다.
+        if EV_REGISTRY in (p.evidence or ()):
+            prior = self.prior_context_block()
+            if prior:
+                parts.append(prior)
         if evidence:
-            lines = [f"- {e['title']}: {e.get('snippet','')}" for e in evidence]
-            parts.append("## 사내 노트 근거(이것만 사실로 인용하세요)\n"
-                         + "\n".join(lines))
+            # 출처를 함께 적는다 — 카드가 "이전과 다르다"고 말하면 무엇과 대조했는지
+            # 보여야 한다(PRD_실시간관련정보 §6-5 추적 가능성).
+            lines = [f"- [{e.get('source','note')}] {e['title']}: {e.get('snippet','')}"
+                     for e in evidence]
+            parts.append("## 참고 근거(이것만 사실로 인용하세요)\n" + "\n".join(lines))
         parts.append("위 내용에 대해 당신의 역할대로 2~4문장으로 한 가지만 말하세요.")
         return "\n\n".join(parts)
 
@@ -1635,6 +1717,12 @@ class FacilitationOrchestrator:
     def _build_triage_prompt(self, window_text: str,
                              active: List[Persona]) -> tuple:
         """(system, user) — 활성 페르소나만 넣는다(0=금지는 여기 등장하지 않는다)."""
+        # 대조를 실제로 할 수 있는 **활성** 페르소나만 추린다. 키를 하드코딩하면
+        # 참견도 0(금지)으로 꺼 둔 페르소나 이름이 프롬프트에 들어가 "0 = 트리아지
+        # 입력에서 제외, 진짜 0 비용" 계약이 깨진다(기존 회귀 테스트가 잡아낸 결함).
+        # 아무도 대조를 못 하면 재료도 넣지 않는다 — 쓸 수 없는 토큰은 낭비다.
+        contrast_keys = [p.key for p in active if EV_REGISTRY in (p.evidence or ())]
+        prior = self.prior_context_block() if contrast_keys else ""
         system = (
             "당신은 회의 진행 보조 에이전트의 트리아지(1차 선별) 판정기입니다. "
             "아래 활성 페르소나 각각에 대해, 최근 발화에 그 페르소나가 개입할 후보가 "
@@ -1645,6 +1733,15 @@ class FacilitationOrchestrator:
             '"need_search": true|false}] '
             "persona 키는 반드시 아래 목록의 키만 사용합니다."
         )
+        if prior:
+            # 이 지시가 없으면 대조 재료를 넣어도 모델이 '배경 정보'로만 읽고
+            # 어긋남을 후보로 올리지 않는다(재료 공급과 사용 지시는 별개다).
+            system += (
+                " 이전 회의 자료가 함께 주어지면, 최근 발화가 그 결정·액션과 "
+                "**어긋나거나 이미 정해진 것을 다시 논의**하는지도 함께 보세요 — "
+                f"그런 경우 {' 또는 '.join(contrast_keys)} 후보로 올리고, span 에 그 "
+                "발화를 인용하세요. 어긋남이 없으면 굳이 만들어내지 마세요."
+            )
         lines = [
             f"- {p.key}: {p.role} (트리거: {', '.join(p.triggers)})"
             for p in active
@@ -1652,6 +1749,7 @@ class FacilitationOrchestrator:
         topic = f"\n회의 주제: {self.topic}" if self.topic else ""
         user = ("## 활성 페르소나\n" + "\n".join(lines)
                 + topic
+                + (f"\n\n{prior}" if prior else "")
                 + "\n\n## 최근 발화\n" + window_text)
         return system, user
 

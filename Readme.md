@@ -1,4 +1,4 @@
-# 🎙️ Meeting Minutes Generator v2.1
+# 🎙️ Meeting Minutes Generator
 
 음성/영상 파일에서 자동으로 **스크립트 + 회의록 + 요약본 + 노트 대조 + Wiki 업데이트 후보**를 생성하고,
 누적된 회의록·결정사항·액션을 **지식그래프(Wiki Knowledge Graph)**로 정착시킵니다.
@@ -144,12 +144,12 @@ python run_meeting.py web --port 9000        # 포트 변경
 
 | 페이지 | 기능 |
 | --- | --- |
-| **Dashboard** | 세션 목록, 검색/필터, 상태 배지, CLI로 생성한 세션도 자동 표시 |
-| **Recorder** | 브라우저 마이크 → 실시간 STT, 라이브 트랜스크립트, 볼륨 시각화 |
-| **File Upload** | 드래그앤드롭 파일 업로드 → 배치 처리 (7가지 모드 지원) |
+| **Dashboard** | 세션 목록, 검색/필터, 상태 배지, 이번 달 비용 요약, 휴지통, CLI로 생성한 세션도 자동 표시 |
+| **Recorder** | 브라우저 마이크 → 실시간 STT, 라이브 트랜스크립트, 볼륨 시각화, **관련 노트 바**(근거 펼침 · [이번 회의 끔]), **페르소나 레인**(개입 카드 · ✓확인/✕닫기 · [지금 점검]/[지금 정리]), 경과시간·예상 비용 러닝 미터 |
+| **File Upload** | 드래그앤드롭 파일 업로드 → 배치 처리 (7가지 모드 지원), 업로드 전 예상 비용 확인 |
 | **Text Analysis** | 텍스트 붙여넣기 → AI 분석 |
-| **Settings** | STT/GPT/Claude 모델 설정, 실시간 녹음 설정 (VAD, 노이즈), 프로파일 CRUD |
-| **Session Detail** | 멀티탭 문서 뷰어 (회의록/요약/노트 대조/Wiki Context/Wiki Proposal/스크립트/액션아이템), 복사/다운로드, 세그먼트 타임라인 |
+| **Settings** | STT/GPT/Claude 모델, 실시간 녹음(VAD·노이즈), 프로파일 CRUD, **페르소나별 참견도**(0~3 · 위험 역할 경고), **월 지출 한도·회의당 캡**, 노트 폴더·인덱스 재빌드, Obsidian 진단 |
+| **Session Detail** | 멀티탭 문서 뷰어 — 회의록 · 요약 · **사실확인** · **중간 정리** · 스크립트 · 액션 · 위키 맥락 · 위키 제안 · 정제본 · 그래프 (문서가 있는 탭만 표시), 복사/다운로드/공유, 세그먼트 타임라인, 참조된 관련 노트 |
 
 ### CLI ↔ 웹 동기화
 
@@ -418,7 +418,12 @@ flowchart LR
 | **실시간 화자 보강** | Realtime 모드는 기본 화자분리 없음. 종료 후 발화 패턴 기반 화자 추론 또는 pyannote/WhisperX 후처리로 보강 |
 | **환각·반복 필터** | 무음 구간은 전사하지 않고, 되풀이 문장은 1회로 축약, 회의 언어에 없는 이질 문자(중국어·일본어·키릴 등)는 `[불명]` 표시 (`common/text_filters.py`) |
 | **STT 교정 (개선)** | 세션 종료 후 회의록 생성 **이전에** 맥락·주제 기반으로 오탈자·고유명사 교정 (`*_refined_script.txt`) |
-| **상세 회의록 프롬프트** | 스크립트 1분 분량당 200~400자 이상 기준 적용, 맥락 제거 금지 |
+| **상세 회의록 프롬프트** | 맥락 제거 금지(수치·근거·반론 포함), 이슈별 반론·Q/A·`(미결)` 구조화. **분량 하한은 두지 않는다** — 내용 없이 길이를 채우던 지시를 제거했다 |
+| **회의 진행 페르소나** | 회의 중 확인이 필요한 대목을 옆 카드로 — 사실 대조 · 지난 회의 결정과 어긋남 · 빠진 담당자·기한 · 반대 시나리오 · 중간 정리. **기본 전원 꺼짐**, 역할마다 참견도 0~3, 회의당 비용 캡·개입 예산, [이번 회의 끔]이 서버 생성·검색까지 정지, 소리 없음 (`wiki_core/facilitation.py`) |
+| **실시간 관련 노트** | 발화별로 내 노트 폴더를 찾아 `[[제목]]` 칩과 근거(섹션·점수)를 조용히 표시. 내부자료 우선, 못 찾은 구간만 웹 보완 (`wiki_core/realtime_search.py`) |
+| **중간 정리 보존** | 회의 중 만든 자동 요약을 종료 후 회의 상세 **[중간 정리]** 탭에 남긴다(회의록과 별도 문서) |
+| **지출 통제** | 월 지출 한도(서버 강제) · 업로드 전 예상 비용 확인 · 회의당 비용 캡 · 자동 실행 일시정지 (`common/spend_guard.py`) |
+| **휴지통·완전 삭제** | 삭제는 2단계(휴지통 → 완전 삭제). 완전 삭제는 폴더를 OS 휴지통으로 옮기고 관찰 로그의 발화 인용까지 지운다 |
 | **긴 스크립트 자동 분할** | `MAX_LLM_CHARS` 초과 시 타임스탬프 기준 청크 분할 + 오버랩 처리 후 통합 |
 | **날짜 자동 추출** | 파일명의 `YYMMDD`, `YYYYMMDD`, `YYYY-MM-DD HH.MM` 패턴을 회의 날짜로 자동 기재 |
 | **Obsidian yymmdd 파일명** | 회의록/전사 노트를 `260627 제목.md`처럼 회의 날짜 prefix로 저장 |
@@ -700,621 +705,24 @@ export OPENAI_API_KEY="sk-proj-..."
 
 ---
 
-## 사용법 (`run_meeting.py batch`)
+## CLI 명령 (요약)
 
-### 기본
+CLI 옵션·인자·예시의 **정본은 [`docs/CLI_레퍼런스.md`](docs/CLI_레퍼런스.md)** 다
+(아래 표는 어디를 볼지 고르기 위한 지도다).
 
-```bash
-python run_meeting.py batch meeting.mp4
-```
-
-### 제목 지정
-
-```bash
-python run_meeting.py batch meeting.mp4 --title "2025 Q1 정기회의"
-```
-
-### 문서 타입
-
-```bash
-python run_meeting.py batch seminar.webm --type seminar     # 세미나
-python run_meeting.py batch lecture.mp4  --type lecture     # 강의
-```
-
-### 다중 파일
-
-```bash
-python run_meeting.py batch file1.mp4 file2.webm file3.mp3
-python run_meeting.py batch *.webm --type seminar
-python run_meeting.py batch *.mp4 --title "시리즈강의"       # → 시리즈강의_01_xxx, ...
-```
-
-### 영어 → 한국어
-
-```bash
-python run_meeting.py batch talk_en.mp4 --translate
-python run_meeting.py batch talk_en.mp4 --translate --translate-script   # 스크립트도
-```
-
-### 프로필 적용
-
-```bash
-python run_meeting.py batch meeting.mp4 --profile meeting_ko      # 한국어 회의
-python run_meeting.py batch seminar.webm --profile seminar         # 세미나 (영→한)
-python run_meeting.py batch lecture.mp4  --profile lecture         # 강의 (영→한)
-python run_meeting.py profiles list                                          # 프로필 목록
-```
-
-### 화자 수정 (캐시 연동)
-
-```bash
-# 1차 실행 후 화자명 변경 → 자동 저장
-python run_meeting.py batch meeting.mp4 --edit-speakers
-# 동일 회의 재실행 시 저장된 매핑 자동 재사용
-python run_meeting.py batch meeting.mp4 --reuse-speakers
-```
-
-### 메모 반영
-
-```bash
-python run_meeting.py batch meeting.mp4 --memo notes.txt
-```
-
-### LLM에 추가 지시
-
-```bash
-python run_meeting.py batch seminar.webm --type seminar --custom-prompt "NVIDIA GPU 기술 중심으로 정리"
-```
-
-### 완료 알림
-
-```bash
-python run_meeting.py batch meeting.mp4 --notify email    # 이메일
-python run_meeting.py batch meeting.mp4 --notify slack    # Slack
-python run_meeting.py batch meeting.mp4 --notify teams    # Teams
-```
-
-### 비용 추정 (실행 안 함)
-
-```bash
-python run_meeting.py batch big_file.mp4 --estimate-cost
-```
-
-### 이어서 처리 (STT 건너뜀)
-
-```bash
-# STT는 완료됐는데 LLM 단계에서 실패한 경우
-python run_meeting.py batch meeting.mp4 --resume
-```
-
-`--resume`은 기존 출력 폴더에서 `segments.json` 또는 `transcript.md`를 찾은 경우에만 STT를 건너뜁니다.
-기존 STT가 없으면 새 STT를 몰래 실행하지 않고 중단합니다. 새 전사가 필요하면 명시적으로 실행합니다.
-
-```bash
-python run_meeting.py batch meeting.mp4 --force-stt
-```
-
-### SSL 문제 (회사/학교)
-
-```bash
-python run_meeting.py batch meeting.mp4 --ssl-no-verify
-# 또는 config.json: "ssl": { "verify": false }
-```
-
-### 디버그 (콘솔 상세 출력)
-
-```bash
-python run_meeting.py batch meeting.mp4 --debug
-# --debug 시 output/debug.log 생성 (상세 로그 + 중간 파일 저장)
-```
-
----
-
-## 전체 옵션 (meeting_minutes.py)
-
-| 옵션 | 설명 | 기본값 |
+| 명령 | 하는 일 | 상세 |
 | --- | --- | --- |
-| `input` | 파일 경로 (여러 개, glob 가능) | - |
-| `--title` | 제목 (출력 폴더명·문서 제목) | 원본 파일명 |
-| `--type` | meeting / seminar / lecture | meeting |
-| `--profile` | 저장된 프로필 이름 적용 | - |
-| `--model` | STT 모델 | config `models.stt` 값 (코드 fallback: gpt-4o-mini-transcribe) |
-| `--llm` | gpt / claude | gpt |
-| `--language` | STT 언어 (ko, en) | ko |
-| `--translate` | 영→한 번역 | OFF |
-| `--translate-script` | 스크립트 번역본도 생성 | OFF |
-| `--memo` | 메모 파일 | - |
-| `--topic` | 회의 주제/맥락. 관련 노트 검색과 회의록 생성에 반영 | - |
-| `--speakers` | 화자 이름 (쉼표구분) | 자동 |
-| `--custom-prompt` | LLM 추가 지시 | - |
-| `--resume` | 기존 `segments.json`/`transcript.md`가 있을 때만 STT 재사용 | OFF |
-| `--force-stt` | 기존 STT/전사 결과가 있어도 새 STT 수행 | OFF |
-| `--edit-speakers` | 화자 수정 모드 (캐시 저장) | OFF |
-| `--reuse-speakers` | 화자 캐시 자동 적용 | OFF |
-| `--estimate-cost` | 비용 추정만 | OFF |
-| `--notify` | email / slack / teams 완료 알림 | - |
-| `--no-notify` | config 자동 알림까지 포함해 이번 실행 알림 생략 | OFF |
-| `--output-dir` | 출력 디렉토리 | ./output |
-| `--ssl-no-verify` | SSL 우회 | OFF |
-| `--debug` | 콘솔 상세 출력 | OFF |
+| `run_meeting.py realtime` / `record` | 실시간 마이크 녹취 → 전사·번역·회의록 | [실시간 녹취](docs/CLI_레퍼런스.md#실시간-녹취-realtime_transcriptionpy) |
+| `run_meeting.py batch` | 폴더의 음성·영상 파일 일괄 처리 | [사용법](docs/CLI_레퍼런스.md#사용법-run_meetingpy-batch) · [전체 옵션](docs/CLI_레퍼런스.md#전체-옵션-meeting_minutespy) |
+| `run_meeting.py audio-watcher` | 지정 폴더 자동 감시 처리 | [폴더 자동 감시](docs/CLI_레퍼런스.md#폴더-자동-감시-watcherpy) |
+| `run_meeting.py vault-indexer` / `reindex` | 노트 폴더 인덱싱·재빌드 | [사용법](docs/CLI_레퍼런스.md#사용법-run_meetingpy-batch) |
+| `run_meeting.py wiki-ask` / `prep-brief` | 위키 Q&A · 회의 준비 브리핑 | [아키텍처](#아키텍처) |
+| `run_meeting.py facilitation-report` | 회의 진행 페르소나 관찰 로그 집계 | [PRD §19](docs/prd/PRD_회의진행_페르소나에이전트_20260803.md) |
+| `run_meeting.py web` / `ui` | 웹 UI 서버 | [웹 UI](#웹-ui-run_meetingbat) |
+| 부가 설정 | 명명 프로필 · 화자 캐시 · 알림(메일) | [프로필](docs/CLI_레퍼런스.md#명명-프로필-profilespy) · [화자 캐시](docs/CLI_레퍼런스.md#화자-캐시-speaker_cachepy) · [알림](docs/CLI_레퍼런스.md#알림-설정-notifierpy) |
+| Windows 배치 파일 | `scripts/windows/run_batch.bat` · `run_realtime.bat` | [batch](docs/CLI_레퍼런스.md#scriptswindowsrun_batchbat-windows-전용) · [realtime](docs/CLI_레퍼런스.md#scriptswindowsrun_realtimebat-windows-전용) |
 
 ---
-
-## 명명 프로필 (profiles.py)
-
-자주 쓰는 옵션 조합을 이름으로 저장해 재사용합니다.
-
-**내장 프로필:**
-
-| 프로필 | STT 모델 | 설명 |
-| --- | --- | --- |
-| `meeting_ko` | `gpt-4o-transcribe-diarize` | 한국어 회의 → 한국어 회의록 (배치 화자 분리) |
-| `meeting_en2ko` | `gpt-4o-transcribe-diarize` | 영어 회의 → 한국어 번역 회의록 (배치 화자 분리) |
-| `seminar` | `gpt-4o-transcribe-diarize` | 영어 세미나 → 한국어 세미나 기록 (배치 화자 분리) |
-| `lecture` | `gpt-4o-transcribe` | 영어 강의 → 한국어 강의 노트 |
-
-> `meeting_ko` / `meeting_en2ko` / `seminar` 프로필은 배치 파일 전사에서 `gpt-4o-transcribe-diarize` 모델을 사용하여 화자 분리 품질을 높입니다. Realtime 모드는 기본 화자분리 없음입니다.
-
-```bash
-python run_meeting.py profiles list                    # 전체 프로필 목록
-python run_meeting.py profiles show meeting_ko         # 프로필 상세
-python run_meeting.py profiles create my_profile      # 대화형 생성
-python run_meeting.py profiles delete my_profile      # 삭제
-```
-
-커스텀 프로필은 `profiles.json`에 저장됩니다.
-CLI 옵션이 프로필보다 항상 우선합니다.
-
----
-
-## 화자 캐시 (speaker_cache.py)
-
-`--edit-speakers` 로 입력한 화자 이름 매핑을 자동 저장하고,
-같은 회의 재실행 시 제목 기반 퍼지 매칭으로 불러옵니다.
-
-```bash
-python run_meeting.py speaker-cache list               # 저장된 매핑 목록
-python run_meeting.py speaker-cache delete "주간회의"   # 특정 매핑 삭제
-```
-
-매핑 파일 위치: `output/speaker_map.json`
-
-**동작 순서:**
-
-1. `--edit-speakers` 실행 → 화자명 입력
-2. 매핑이 회의 제목 키로 `speaker_map.json`에 저장
-3. 같은 제목의 회의 재실행 시 `--reuse-speakers` 로 자동 적용
-
-**화자 이름 자동 추론 (`infer_speaker_names`):**
-
-`gpt-4o-transcribe-diarize` 모델로 전사 시 화자가 "Speaker A", "Speaker B" 등으로 표기되는 경우,
-LLM이 발화 내용·맥락을 분석해 실명 또는 역할명으로 자동 변환합니다.
-명확하게 추론 불가능한 화자는 "화자 A" 등 한국어 임시명을 유지합니다.
-
----
-
-## 알림 설정 (notifier.py)
-
-회의록 생성 완료 후 Email / Slack / Teams 로 자동 공유합니다.
-
-### 이메일
-
-`config.json`에 설정:
-
-```json
-"email": {
-  "sender":    "sender@naver.com",
-  "password":  "앱 비밀번호",
-  "recipient": "recipient@company.com"
-}
-```
-
-또는 환경변수:
-
-```bash
-EMAIL_SENDER     = sender@naver.com
-EMAIL_PASSWORD   = 앱비밀번호
-EMAIL_RECIPIENTS = recipient@company.com   # 쉼표로 여러 명 가능
-```
-
-### Slack / Teams
-
-```bash
-SLACK_WEBHOOK_URL = https://hooks.slack.com/services/...
-TEAMS_WEBHOOK_URL = https://...webhook.office.com/...
-```
-
-또는 `config.json`:
-
-```json
-"notify": {
-  "slack": { "webhook_url": "https://hooks.slack.com/..." },
-  "teams": { "webhook_url": "https://...webhook.office.com/..." }
-}
-```
-
-```bash
-# 단독 테스트
-python run_meeting.py notifier
-```
-
----
-
-## 폴더 자동 감시 (watcher.py)
-
-지정 폴더에 음성/영상 파일이 들어오면 자동으로 `meeting_minutes.py`를 실행합니다.
-
-```bash
-pip install watchdog        # 최초 1회
-
-python run_meeting.py legacy-watcher ./recordings                           # 기본 감시
-python run_meeting.py legacy-watcher ./recordings --profile seminar         # 프로필 적용
-python run_meeting.py legacy-watcher ./recordings --notify slack            # 완료 시 Slack 알림
-python run_meeting.py legacy-watcher ./recordings --no-move                 # 처리 후 파일 이동 안 함
-python run_meeting.py legacy-watcher ./recordings --type seminar            # 문서 타입 지정
-python run_meeting.py legacy-watcher ./recordings --translate               # 영→한 번역 활성화
-python run_meeting.py legacy-watcher ./recordings --ssl-no-verify           # SSL 우회
-```
-
-**전체 옵션:**
-
-| 옵션 | 설명 | 기본값 |
-| --- | --- | --- |
-| `folder` | 감시할 폴더 경로 | - |
-| `--profile` | 저장된 프로필 이름 적용 | - |
-| `--notify` | email / slack / teams 완료 알림 | - |
-| `--no-move` | 처리 후 파일 이동 안 함 | OFF |
-| `--type` | meeting / seminar / lecture | meeting |
-| `--translate` | 영→한 번역 | OFF |
-| `--ssl-no-verify` | SSL 우회 | OFF |
-| `--script` | 내부 배치 처리 스크립트 경로 | 자동 탐색 |
-
-**동작:**
-
-- 새 파일 감지 → 5초 안정화 대기 (대용량 복사 완료 대기) → `meeting_minutes.py` 실행
-- 처리 완료 파일은 `_processed/` 하위 폴더로 이동
-- 실패 시 `파일명.error.txt` 생성
-- 시작 시 기존 미처리 파일도 일괄 처리 여부 선택 가능
-
----
-
-## 실시간 녹취 (realtime_transcription.py)
-
-마이크 입력을 실시간으로 전사하고 완료 후 자동으로 회의록을 생성합니다.
-
-### 터미널 UI 레이아웃
-
-녹음 중 화면은 3개 영역으로 고정 배치됩니다:
-
-```text
-┌─────────────────────────────────────────────────────────────────┐  ← Row 1 [고정]
-│  🤝 실시간 회의록 녹취   ⬤ 03:21  │  ~$0.032  │  gpt-4o-transcribe  │
-├─────────────────────────────────────────────────────────────────┤  ← Row 2 [고정]
-│                                                                 │
-│  [00:04] Good morning everyone, let's get started.             │
-│  [00:04] 안녕하세요, 시작하겠습니다.                              │
-│  [00:18] Today we'll review Q1 results and discuss strategy.   │  ← 중간 [스크롤]
-│  [00:18] 오늘은 Q1 실적을 검토하고 전략을 논의하겠습니다.           │
-│  ...                                                           │
-│                                                                 │
-├─────────────────────────────────────────────────────────────────┤  ← Row N [고정]
-│  ⠋ 녹음 중...  ▐████░░░░▌  q→종료   p→일시정지   s→스크롤잠금  │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-| 영역 | 내용 | 갱신 주기 |
-| --- | --- | --- |
-| **Row 1** | 제목 · 이모지 · 경과시간 · 예상비용 · STT 모델명 · 발화건수 | ~0.6초 |
-| **Row 2** | 구분선 | 고정 |
-| **Row 3~N-1** | 실시간 전사 텍스트 (스크롤 가능) | 발화 즉시 |
-| **Row N** | 녹음 상태 · 오디오 레벨 바 · 명령어 안내 | ~0.12초 |
-
-### 키보드 명령어
-
-| 입력 | 동작 |
-| --- | --- |
-| `q` + Enter | 녹음 종료 → 회의록 생성 시작 |
-| `p` + Enter | 녹음 일시정지 |
-| `r` + Enter | 일시정지 해제 (재개) |
-| `s` + Enter | **스크롤 잠금 토글** (아래 참고) |
-| Ctrl+C | 강제 종료 (회의록 생성 시작) |
-
-#### 스크롤 잠금 (`s` 명령어)
-
-녹음 중 이전 대화를 확인하고 싶을 때 사용합니다.
-
-1. `s` + Enter → 🔒 스크롤 잠금 활성화
-   - 새 전사 텍스트가 화면에 출력되지 않고 내부 버퍼에 저장됩니다
-   - 터미널 마우스 휠 또는 스크롤바로 위쪽 대화를 자유롭게 확인할 수 있습니다
-   - 하단 인디케이터에 버퍼된 발화 건수가 표시됩니다
-2. `s` + Enter → 🔓 스크롤 잠금 해제
-   - 버퍼에 쌓인 텍스트가 한 번에 출력됩니다
-   - 실시간 출력이 재개됩니다
-
-### 클래스 구조
-
-**공통 클래스** (`realtime_transcription.py`):
-
-| 클래스 | 역할 |
-| --- | --- |
-| `AudioBackup` | 전체 세션 오디오를 PCM 파일로 연속 백업 (HTTP: 16kHz, WS: 24kHz) |
-| `SessionLogger` | 세그먼트를 JSONL + os.fsync로 즉시 디스크 기록 |
-| `RecordingIndicator` | 고정 헤더(2줄) + 스크롤 영역 + 하단 인디케이터 관리. 스크롤 잠금 지원 |
-| `RealtimeSession` | 전체 흐름 조율 — HTTP/WS 모드 자동 분기 → 종료 시 STT 교정 → 회의록·요약본 생성 |
-
-**HTTP 모드 전용** (`realtime_transcription.py`):
-
-| 클래스 | 역할 |
-| --- | --- |
-| `AudioRecorder` | sounddevice로 마이크 캡처 → N초 단위 청크로 큐에 적재 |
-| `VADAudioRecorder` | AudioRecorder + webrtcvad — 침묵 감지 즉시 전송 |
-| `RealtimeTranscriber` | 청크 → STT API (HTTP POST) → 타임스탬프 출력 → 번역(선택). 스크롤 잠금 중 버퍼링 처리 |
-
-**WebSocket 모드 전용** (`ws_transcriber.py`):
-
-| 클래스 | 역할 |
-| --- | --- |
-| `WebSocketAudioStreamer` | 마이크 24kHz 캡처 → base64 → queue → sender 스레드 → WebSocket 전송 |
-| `WebSocketTranscriber` | 서버 이벤트 루프 — 서버 VAD 기반 전사 delta/completed 처리 + 번역 |
-
-### 사용법
-
-```bash
-pip install sounddevice numpy websockets    # 최초 1회
-
-# 기본 실행 — HTTP 모드 (영어 → 영어 회의록)
-python run_meeting.py realtime-raw
-
-# 한국어 회의
-python run_meeting.py realtime-raw --language ko
-
-# 영어 → 한국어 실시간 번역 + 한국어 회의록
-python run_meeting.py realtime-raw --translate
-
-# ★ WebSocket 모드 — ~1초 지연 실시간 전사
-python run_meeting.py realtime-raw --mode ws --translate
-
-# WebSocket + 세미나 모드
-python run_meeting.py realtime-raw --mode ws --type seminar --translate
-
-# HTTP 모드 — 청크 5초 (API 호출 횟수 줄여 비용 절감)
-python run_meeting.py realtime-raw --chunk-duration 5
-
-# 이전 세션 이어서 (타임스탬프 자동 연속)
-python run_meeting.py realtime-raw --prev-session output/session_20250220_143022.jsonl
-
-# 이전 세션 로그로 회의록 재생성 (재녹음 없이)
-python run_meeting.py realtime-raw --recover output/session_20250220_143022.jsonl
-
-# 완료 후 이메일 발송
-python run_meeting.py realtime-raw --email
-```
-
-### 실행 흐름 — HTTP 모드 (기본)
-
-1. 마이크에서 N초(기본 3초) 단위로 오디오 캡처 (16kHz)
-2. 동시에 세션 오디오 전체를 `session_TS_audio.pcm`으로 백업 (크래시 대비)
-3. 각 청크를 STT API로 HTTP POST 전송 → 전사 텍스트 수신 (3회 재시도)
-4. 스크롤 잠금 해제 상태면 즉시 출력, 잠금 상태면 버퍼에 저장
-5. `--translate` 시: 즉시 한국어로 번역하여 아래 줄에 출력
-6. 세그먼트마다 JSONL + os.fsync로 즉시 디스크 기록
-7. q+Enter 또는 Ctrl+C → 녹음 종료
-8. PCM 파일을 WAV로 변환 후 삭제
-9. **환각·반복 정화** — `text_filters.sanitize_transcript()`: 되풀이 축약·중복 제거 +
-   이질 문자(중국어·일본어·키릴 등) `[불명]` 표시. 모든 경로가 거치는
-   `finalize.run_post_session()` 진입부에서 1회 적용
-10. **화자 이름 추론** — diarize 모델 사용 시 `infer_speaker_names()` 로 "Speaker A/B" → 실명/역할명 변환
-11. **`refine_script()`** 로 전체 맥락·주제 기반 교정 스크립트 생성 (교정본이 회의록 입력으로 사용됨)
-12. `generate_minutes()` / `generate_summary()` 로 회의록 + 요약 생성 (요약은 `.md` + `.txt` 이중 저장)
-13. `build_script_md()` 로 화자 구분 정리 스크립트 생성 (`*_script.md`, 번역 시 `*_script_ko.md` 추가)
-
-### 실행 흐름 — WebSocket 모드 (`--mode ws`)
-
-1. OpenAI Realtime Transcription API에 WebSocket 연결
-2. `transcription_session.update()`로 모델/언어/VAD/노이즈 리덕션 설정
-3. 마이크에서 24kHz 오디오 연속 캡처 → base64 인코딩 → WebSocket으로 스트리밍
-4. 동시에 `session_TS_audio.pcm`으로 백업
-5. 서버 VAD가 발화를 감지하면 전사 이벤트 수신:
-   - `speech_started` → 발화 시작 시간 기록
-   - `transcription.delta` → 실시간 부분 텍스트를 즉시 화면에 스트리밍 출력
-   - `transcription.completed` → 최종 텍스트 확정, 세그먼트 생성 (환각·반복 자동 필터)
-6. `--translate` 시: 확정된 영어 텍스트를 즉시 한국어로 번역하여 아래 줄에 출력
-7. 세그먼트마다 JSONL + os.fsync로 즉시 디스크 기록
-8. q+Enter 또는 Ctrl+C → 녹음 종료 → WebSocket 연결 종료
-9. PCM 파일을 WAV로 변환 후 삭제
-10. **화자 이름 추론** — diarize 모델 사용 시 `infer_speaker_names()` 실행
-11. **`refine_script()`** 로 전체 맥락·주제 기반 교정 스크립트 생성 (교정본이 회의록 입력으로 사용됨)
-12. `generate_minutes()` / `generate_summary()` 로 회의록 + 요약 생성 (요약은 `.md` + `.txt` 이중 저장)
-13. `build_script_md()` 로 화자 구분 정리 스크립트 생성
-
-> WebSocket 연결 실패 시 자동으로 HTTP 모드로 전환합니다.
-
-### 출력 파일 (실시간)
-
-세션마다 타임스탬프 서브폴더에 저장됩니다.
-
-```text
-output/
-├── .active_session                         # 크래시 감지 마커 (bat 전용)
-└── realtime_20250220_143022/               # 세션 서브폴더
-    ├── session_20250220_143022.jsonl               # 세션 로그 (크래시 복구용)
-    ├── realtime_20250220_143022_minutes.md         # 회의록
-    ├── realtime_20250220_143022_summary.md         # 요약본 (마크다운)
-    ├── realtime_20250220_143022_summary.txt        # 요약본 (텍스트 — 이메일 첨부용)
-    ├── realtime_20250220_143022_script.md          # 화자 구분 정리 스크립트
-    ├── realtime_20250220_143022_script_ko.md       # 번역 스크립트 (--translate 시)
-    ├── realtime_20250220_143022_transcript.txt     # 화자 포함 타임스탬프 전사 원문
-    ├── realtime_20250220_143022_refined_script.txt # 맥락 기반 교정 스크립트
-    ├── realtime_20250220_143022_meta.json          # 세션 메타데이터 + 비용 추정
-    └── session_20250220_143022_audio.wav           # 오디오 백업 (정상 종료 시)
-```
-
-> **응답 지연 (HTTP 모드)**: 청크 길이(기본 3초) + STT API 처리 시간(~2-3초) = 약 5-6초.
-> `--chunk-duration 5` 로 늘리면 API 호출 횟수가 줄어들지만 응답이 느려집니다.
->
-> **응답 지연 (WebSocket 모드)**: 서버 VAD가 발화 종료를 감지하면 즉시 전사 → ~1초 이내 텍스트 표시.
-> delta 이벤트로 발화 중에도 부분 텍스트가 실시간 스트리밍됩니다.
-
-### 전체 옵션
-
-| 옵션 | 설명 | 기본값 |
-| --- | --- | --- |
-| `--language` | ko / en / auto | 설정 `realtime.language`(기본 ko) |
-| `--type` | meeting / seminar / lecture | meeting |
-| `--topic` | 회의 주제 (번역·회의록·요약 프롬프트에 맥락으로 반영) | - |
-| `--model` | STT 모델 (아래 표 참고) | config `models.stt` 값 |
-| `--llm` | gpt / claude | gpt |
-| `--translate` | 실시간 영→한 번역 | OFF |
-| `--translate-model` | 번역 모델 (gpt-4o-mini / gpt-4o) | gpt-4o-mini |
-| `--mode` | 전송 모드 (http / ws / auto) | config.json (기본: http) |
-| `--chunk-duration` | 청크 길이, 초 — HTTP 모드 전용 | config.json (기본: 3.0) |
-| `--vad` | VAD 동적 청크 — HTTP 모드 전용 (webrtcvad 필요) | OFF |
-| `--memo` | 메모/노트 파일 (txt, md). 회의록·요약 생성 시 LLM에 반영 | - |
-| `--email` | 완료 후 이메일 발송 | OFF |
-| `--output-dir` | 출력 디렉토리 | ./output |
-| `--recover` | JSONL로 회의록 재생성 | - |
-| `--prev-session` | 이전 세션 이어붙이기 | - |
-| `--ssl-no-verify` | SSL 우회 | OFF |
-
-### 크래시 복구 (3중 보호)
-
-| 보호 계층 | 저장 내용 | 복구 방법 |
-| --- | --- | --- |
-| **JSONL + fsync** | 전사 텍스트 (세그먼트 단위) | `--recover session_*.jsonl` |
-| **`.active_session`** | 크래시 감지 마커 | bat 파일이 자동 감지 → 복구 메뉴 |
-| **PCM 오디오 백업** | 전체 세션 원본 오디오 | ffmpeg 변환 → 재전사 가능 |
-
-PCM 수동 변환:
-
-```bash
-# HTTP 모드 (16kHz)
-ffmpeg -f s16le -ar 16000 -ac 1 -i output/session_TS_audio.pcm output/session_TS_audio.wav
-# WebSocket 모드 (24kHz)
-ffmpeg -f s16le -ar 24000 -ac 1 -i output/session_TS_audio.pcm output/session_TS_audio.wav
-```
-
----
-
-## scripts/windows/run_batch.bat (Windows 전용)
-
-더블클릭 또는 파일 드래그앤드롭으로 실행합니다. 인자가 있으면 `run_meeting.py batch %*`를 통해
-`meeting_minutes.py`에 바로 위임하고, 인자 없이 실행하면 기존 `run_batch.py` 인터랙티브 메뉴를 엽니다.
-따라서 `--resume`, `--force-stt`, `--topic`, `--no-notify` 같은 batch 옵션을 그대로 사용할 수 있습니다.
-
-### 실행 방법
-
-| 방법 | 설명 |
-| --- | --- |
-| 더블클릭 | 인터랙티브 메인 메뉴 → 파일 경로 직접 입력 |
-| 파일 드래그앤드롭 | bat 파일 위에 미디어 파일을 끌어놓으면 자동 감지 |
-| 커맨드라인 | `scripts/windows/run_batch.bat file1.mp4 file2.webm` |
-
-### 배치 메인 메뉴
-
-```text
-F  파일 경로 입력
-     (또는 bat 위에 파일을 드래그)
-
-D  폴더 선택  →  모든 미디어 파일 일괄 처리
-
-W  감시 모드  →  폴더 모니터링 (자동 처리)
-
-H  도움말
-O  출력 폴더 열기
-0  종료
-```
-
-### 처리 모드 선택 (파일/폴더 입력 후 표시)
-
-```text
-1  한국어 회의  →  한국어 회의록
-2  영어 회의  →  한국어 회의록  (번역)  ★ 추천
-3  영어 회의  →  영어 회의록
-4  세미나  (영어 → 한국어 번역)
-5  강의  (영어 → 한국어 번역)
-6  한국어 세미나  →  한국어 기록
-7  한국어 강의  →  한국어 강의 노트
-0  취소
-```
-
-### 지원 파일 형식
-
-음성: `.mp3` `.wav` `.m4a` `.ogg` `.flac` `.aac` `.wma`
-영상: `.mp4` `.webm` `.mkv` `.avi` `.mov`
-
-> 영상 파일은 오디오 트랙만 추출하여 처리합니다.
-
----
-
-## scripts/windows/run_realtime.bat (Windows 전용)
-
-더블클릭으로 실행. 시작 시 크래시 상태를 자동 감지합니다.
-
-### 시작 시 자동 감지
-
-| 감지 항목 | 설명 |
-| --- | --- |
-| `.active_session` | 이전 세션이 비정상 종료됨 → 복구 메뉴 표시 |
-| `session_*_audio.pcm` | 오디오 백업이 변환되지 않고 남아있음 → PCM 복구 메뉴 표시 |
-
-### 크래시 복구 메뉴
-
-```text
-1  이어서 녹취 후 하나의 회의록으로 합치기  ← 권장
-2  이전 세션만으로 회의록 생성 (복구)
-3  이전 세션 무시하고 새로 시작
-```
-
-### PCM 오디오 복구 메뉴
-
-```text
-1  ffmpeg으로 자동 변환 (전체)
-2  output 폴더 열기
-3  건너뛰고 계속 (나중에 수동 변환)
-```
-
-### 메인 메뉴
-
-```text
-1  한국어 회의  →  한국어 회의록                    $0.43/hr
-2  영어 회의    →  한국어 회의록  (실시간 번역)     $0.44/hr  ★ 권장
-3  영어 회의    →  영어 회의록                      $0.43/hr
-4  세미나 / 발표  (영어 → 한국어, 실시간 번역)      $0.44/hr
-5  강의  (영어 → 한국어, 실시간 번역)               $0.44/hr
-6  한국어 세미나 / 발표  →  한국어 기록             $0.43/hr
-7  한국어 강의  →  한국어 강의 노트                 $0.43/hr
-H  도움말 / 설치 가이드
-R  이전 세션 복구
-O  출력 폴더 열기
-0  종료
-```
-
-### 녹음 방식 선택 (모드 선택 후 표시)
-
-```text
-1  Standard   —  3초 고정 청크 (안정적)
-     지연: 영어 4~6초  |  한국어 5~7초
-2  VAD        —  침묵 감지 즉시 전송 (빠름)
-     지연: 짧은 응답 2~3초  |  긴 문장 4~5초
-3  WebSocket  —  실시간 스트리밍 (가장 빠름)
-     지연: ~1초  |  서버 VAD + 노이즈 리덕션 내장
-     비용: STT ~$0.01/min (Standard의 ~3배)
-```
-
-### 회의 주제 입력 (녹음 방식 선택 후 표시)
-
-```text
-  주제를 입력하면 번역·회의록·요약 품질이 향상됩니다.
-  Enter만 누르면 건너뜁니다.
-
-  주제 >>
-```
-
-입력한 주제는 실시간 번역 시스템 프롬프트, 회의록 생성, 요약본 생성 모두에 맥락으로 자동 반영됩니다.
-CLI에서 직접 실행 시에는 `--topic "주제"` 옵션으로 지정할 수 있습니다.
-
----
-
 ## STT 모델 비교
 
 | 모델 | 화자 분리 | 타임스탬프 | 비용/분 | 배치 HTTP | Realtime | 참고 |
@@ -1349,6 +757,10 @@ CLI에서 직접 실행 시에는 `--topic "주제"` 옵션으로 지정할 수 
 
 ## API 비용
 
+**금액의 정본은 코드다** — 아래 표는 위 STT 단가표와 같은 규약으로, `pricing.py` 의 계산을
+사람이 읽게 옮긴 사본이다(2026-08-05 `estimate_session_cost()` 실행값). 화면에서는 업로드 전
+예상 비용 모달·녹음 중 러닝 미터·[설정]의 월 지출 한도가 같은 함수를 쓴다.
+
 ### 배치 처리 (meeting_minutes.py)
 
 파일 길이와 LLM 사용량에 따라 다릅니다.
@@ -1356,47 +768,65 @@ CLI에서 직접 실행 시에는 `--topic "주제"` 옵션으로 지정할 수 
 
 ### 실시간 녹취 (1시간 기준)
 
-**HTTP 모드** (기본):
+**HTTP 모드** (기본). 회의록 생성은 `models.llm` 기본값 기준 $0.08:
 
-| 시나리오 | STT | 실시간 번역 | 회의록 생성 | 합계 |
+| 시나리오 | STT 1차 | 2단계 보정 | 실시간 번역 | 회의록 | 합계 |
+| --- | --- | --- | :---: | :---: | --- |
+| gpt-4o-transcribe | $0.36 | $0.36 | - | $0.08 | **$0.80** |
+| gpt-4o-transcribe + 번역 mini | $0.36 | $0.36 | $0.012 | $0.08 | **$0.81** |
+| gpt-4o-mini-transcribe | $0.18 | $0.36 | - | $0.08 | **$0.62** |
+| gpt-4o-mini-transcribe + 번역 mini | $0.18 | $0.36 | $0.012 | $0.08 | **$0.63** |
+
+> **2단계 보정(`realtime.two_pass`)이 기본 켜짐이라 STT 요금이 두 번 발생한다.** 위 표는 그것을
+> 포함한 값이다(끄면 각각 $0.44 / $0.45 / $0.26 / $0.27). 예전 이 표는 보정분을 빼고 `~$0.42`
+> 로 적어 **실제의 절반**이었다.
+>
+> **보정 모델은 1차 모델과 별개다.** `realtime.revise_model` 기본값이 `gpt-4o-transcribe`
+> ($0.006/분)라, 1차를 mini 로 내려도 보정분은 그대로다 — 그래서 mini 선택의 절감은 절반이
+> 아니라 $0.80 → $0.62(약 23%)다. 더 줄이려면 `realtime.two_pass` 를 끄거나
+> `revise_model` 도 mini 로 내린다(실시간 전사가 조각난 문장으로 돌아간다).
+
+**WebSocket 모드** (`--mode ws`, `realtime.mode="ws"`):
+
+| 시나리오 | STT | 실시간 번역 | 회의록 | 합계 |
 | --- | --- | :---: | :---: | --- |
-| gpt-4o-transcribe (STT만) | $0.36 | - | $0.06 | **~$0.42** |
-| + 번역 gpt-4o-mini (권장) | $0.36 | ~$0.01 | $0.06 | **~$0.43** |
-| gpt-4o-mini-transcribe (STT만) | $0.18 | - | $0.06 | **~$0.24** |
-| gpt-4o-mini + 번역 gpt-4o-mini | $0.18 | ~$0.01 | $0.06 | **~$0.25** |
+| gpt-4o-transcribe | $0.60 | - | $0.08 | **~$0.68** |
+| gpt-4o-transcribe + 번역 mini | $0.60 | $0.012 | $0.08 | **~$0.69** |
+| gpt-4o-mini-transcribe | $0.60 | - | $0.08 | **~$0.68** |
 
-**WebSocket 모드** (`--mode ws`):
-
-| 시나리오 | STT | 실시간 번역 | 회의록 생성 | 합계 |
-| --- | --- | :---: | :---: | --- |
-| gpt-4o-transcribe (STT만) | $0.60 | - | $0.06 | **~$0.66** |
-| + 번역 gpt-4o-mini (권장) | $0.60 | ~$0.01 | $0.06 | **~$0.67** |
-| gpt-4o-mini-transcribe (STT만) | $0.60 | - | $0.06 | **~$0.66** |
-
-> WebSocket 모드는 gpt-4o-transcribe와 gpt-4o-mini-transcribe의 비용이 동일합니다 ($0.01/min).
-> HTTP 모드 실시간 번역에 gpt-4o-mini를 쓰면 시간당 $0.01 추가. 사실상 무료이므로 켜두는 것을 권장합니다.
+> WebSocket 모드는 두 모델의 요금이 같습니다($0.01/분) — 그래서 mini 를 골라도 싸지지 않습니다.
+> 2단계 보정은 HTTP 청크 경로에만 있어 WS 모드에는 붙지 않습니다.
+>
+> ⚠️ **이 WS 요금($0.01/분)은 `pricing.py` 에 없다** — 단가표가 모델별 값 하나뿐이라, WS 세션의
+> 예상 금액·러닝 미터는 HTTP 기준으로 계산돼 **실제보다 작게 보일 수 있다**. 기본 모드는
+> HTTP(`realtime.mode="http"`)이므로 상시 경로는 아니지만, WS 를 쓰는 동안은 이 표를 기준으로
+> 판단한다. `[미검증 — pricing.py 에 WS 단가를 넣을지는 실사용 usage 확인 후 결정]`
 
 ---
 
-## 회의록 품질 개선 사항 (v2.1)
+## 회의록 생성 파이프라인 특성
 
-v2.1에서는 회의록·요약본 품질을 대폭 개선하였습니다.
+아래는 **현재 동작**이다(각 항목 옆이 코드 위치). 버전 딱지를 붙이지 않는 이유는 코드의
+버전 정본이 `meeting_minutes_app.__version__` 하나뿐이고, 문서에 다른 숫자를 박으면 갈라지기
+때문이다.
 
-### 1. STT 교정 파이프라인 재배치
+### 1. STT 교정을 회의록 생성 **이전**에 한다
 
-기존에는 회의록 생성 **이후**에 교정 스크립트를 생성했으나,
-v2.1부터 **회의록 생성 이전**에 `refine_script()`를 실행하고 교정본을 회의록 입력으로 사용합니다.
+`refine_script()`(`meeting_pipeline/finalize.py`)를 먼저 실행하고 교정본을 회의록 입력으로 쓴다.
+교정본은 별도 산출물(`refined_script`)로도 남는다.
 
 ```text
-[기존] STT → 회의록 생성 → STT 교정 (별도 저장만)
-[v2.1] STT → STT 교정 → 회의록 생성 (교정본 사용) → 요약
+STT → STT 교정 → 회의록 생성 (교정본 사용) → 요약
 ```
 
 ### 2. 상세 회의록 프롬프트
 
-- **분량 기준 명시**: 스크립트 1분 분량 → 회의록 200~400자 이상 (15분 회의 = 3,000자 이상)
-- **맥락 제거 금지**: "발언 과정 생략"이 허용된 이전 프롬프트를 폐기. 수치·근거·반론을 반드시 포함
+- **맥락 제거 금지**: "발언 과정 생략"을 허용했던 프롬프트를 폐기. 수치·근거·반론을 포함한다
 - **구조화된 출력**: 이슈별 `→ 반론:`, Q/A 형식, 미결 사항 `(미결)` 태그
+
+> **분량을 강제하는 지시는 없다.** "스크립트 1분 → 회의록 200~400자 이상" 같은 하한을 두었던
+> 적이 있으나 **제거했다**(내용 없이 분량을 채우는 회의록이 나왔다). 코드에 그 지시는 남아
+> 있지 않다(`minutes_generation.py` 의 `200~400자`는 **요약** 압축 지시다).
 
 ### 3. 화자 이름 자동 추론 (`infer_speaker_names`)
 

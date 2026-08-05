@@ -348,12 +348,17 @@ if FRONTEND_DIST.exists():
             return FileResponse(str(file_path))
         return FileResponse(str(FRONTEND_DIST / "index.html"))
 else:
-    # 프런트 번들이 없다 = 소스에서 실행하는데 `npm run build` 를 안 한 상태다.
-    # `web/frontend/dist` 는 `.gitignore` 의 `dist/` 에 걸려 **커밋되지 않으므로**,
-    # 새로 클론한 PC 에서 이 경우가 정상적으로 발생한다. 종전엔 라우트가 아예 mount
-    # 되지 않아 브라우저가 빈 404 를 봤고(런처는 `/api/health` 만 보고 성공 판정해
-    # 브라우저를 연다) 어디에도 안내가 없었다 — 원인을 알 수 있게 화면과 콘솔이
-    # 같은 말을 한다. 포터블 배포본에는 번들이 포함되므로 이 경로를 타지 않는다.
+    # 프런트 번들이 없는 상태로 서버가 떴다.
+    #
+    # **정본 런처로는 여기 오지 않는다** — `run_meeting.py web`(=`webUI_실행.bat`)은
+    # 기동 전에 `build_frontend()` 로 `npm install`+`npm run build` 를 돌리고 실패하면
+    # 예외로 멈춘다. 포터블 배포본에는 번들이 포함돼 있다.
+    # 그래도 이 분기가 필요한 실제 경로가 있다:
+    #   · `uvicorn web.backend.app:app` 을 직접 띄우는 개발·디버깅
+    #   · 빌드가 실패했는데(Node 없음·의존성 오류) 서버만 따로 다시 띄운 경우
+    #   · 번들을 지우고 서버를 재시작한 경우(`dist/` 는 gitignore 라 클론에 없다)
+    # 종전엔 이때 라우트를 mount 하지 않아 브라우저가 사유 없는 404 를 봤다 —
+    # 화면과 콘솔이 같은 말로 원인을 알려 준다.
     _BUILD_HINT = (
         "웹 화면(프런트엔드) 번들이 없습니다.\n\n"
         "  cd web/frontend\n  npm ci\n  npm run build\n\n"

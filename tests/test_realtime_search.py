@@ -680,3 +680,55 @@ class TestSearchNow:
             t.join()
         assert all(x is real for x in seen), "초기화 도중 통과한 스레드가 있다"
         s.shutdown()
+
+
+class TestMuteStopsSearching:
+    """[이번 회의 끔] — 표시만이 아니라 **검색과 과금까지** 멈추는가.
+
+    페르소나 카드에서 이미 한 번 고친 결함이다: 프런트에서 목록만 숨기면 서버는 회의
+    끝까지 쿼리 임베딩을 태우고, 내부에서 못 찾은 구간마다 유료 웹 검색이 나간다.
+    """
+
+    def test_offer_segment_becomes_a_noop(self, monkeypatch):
+        s = make_searcher(monkeypatch, interval=1)
+        submitted = []
+        s._pool = type("P", (), {
+            "submit": lambda self, fn, *a: submitted.append(a),
+            "shutdown": lambda self, wait=True: None,
+        })()
+        s.offer_segment("첫 발화")
+        s.mute()
+        s.offer_segment("끈 뒤 발화")
+        assert len(submitted) == 1
+
+    def test_search_now_also_stops(self, monkeypatch):
+        """개입 근거 검색도 함께 멈춘다 — 한쪽만 막으면 과금이 남는다."""
+        s = make_searcher(monkeypatch)
+        idx = inject_indexer(s, [INDEX_HIT], {})
+        s.mute()
+        assert s.search_now("수율이 90%") == []
+        assert idx.queries == []
+        s.shutdown()
+
+    def test_status_says_it_was_muted_not_broken(self, monkeypatch):
+        """'꺼짐' 사유가 설정·고장과 구분돼야 한다 — 사용자가 끈 것이다."""
+        seen = []
+        s = make_searcher(monkeypatch, on_status=seen.append)
+        inject_indexer(s, [INDEX_HIT], {})
+        s.mute()
+        st = s.status()
+        assert st["enabled"] is False and st["reason"] == "muted"
+        assert "이번 회의" in st["reasonText"]
+        assert seen and seen[-1]["reason"] == "muted"   # 화면에도 알린다
+        s.shutdown()
+
+    def test_already_collected_notes_survive(self, monkeypatch):
+        """끄기 전에 찾은 노트는 남는다 — 이미 지불한 것을 지우면 잃기만 한다."""
+        s = make_searcher(monkeypatch, interval=1)
+        inject_indexer(s, [INDEX_HIT], {})
+        s._search("양자컴퓨팅 이야기")
+        assert len(s.collected_notes()) == 1
+        s.mute()
+        assert len(s.collected_notes()) == 1
+        assert s.collected_titles() == ["양자컴퓨팅"]
+        s.shutdown()

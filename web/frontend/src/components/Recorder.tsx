@@ -129,6 +129,11 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
   // 관련 노트 근거(점수·섹션경로·snippet·발화) 펼침 — 사용자가 눌렀을 때만 펼친다
   // (자동 갱신으로는 절대 레이아웃이 움직이지 않게 하기 위함, FR-10)
   const [wikiExpanded, setWikiExpanded] = useState(false);
+  // 관련 노트 '이번 회의 끔' — 페르소나 mute 와 같은 계약(서버 검색·과금까지 정지).
+  // ref 를 함께 두는 이유도 같다: WS onmessage 는 렌더와 무관한 클로저라 state 만으로는
+  // 끈 직후 도착한 결과를 목록에 다시 넣는다.
+  const [wikiMuted, setWikiMuted] = useState(false);
+  const wikiMutedRef = useRef(false);
   // 서버 경유 녹음인지 (관련 노트 바 표시 조건 — 단독 OpenAI 경로는 vault 검색 없음)
   const [backendMode, setBackendMode] = useState(false);
   // 회의 진행 페르소나(facilitation) — 기본 꺼짐이라 서버가 보내지 않으면 레인 자체가
@@ -331,6 +336,23 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
     const ws = wsRef.current;
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
     try { ws.send(JSON.stringify({ type: "facilitation_mute" })); } catch (e) {}
+  };
+
+  /**
+   * 관련 노트 [이번 회의 끔] — 페르소나 끄기와 **같은 계약**이다.
+   *
+   * 서버가 검색을 멈추는 것이 본체다. 목록만 숨기면 볼트 검색(쿼리 임베딩)과 웹 보완
+   * (검색 1,000회당 $10)이 회의 끝까지 계속 나간다 — 아무도 안 보는 결과에 돈을 쓴다.
+   * 이미 찾은 노트는 회의록에 남는다(이미 지불한 것을 지우면 잃기만 한다).
+   */
+  const wikiMute = () => {
+    wikiMutedRef.current = true;
+    setWikiMuted(true);
+    setRelatedNotes([]);
+    setWikiExpanded(false);
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    try { ws.send(JSON.stringify({ type: "related_notes_mute" })); } catch (e) {}
   };
 
   /**
@@ -667,6 +689,9 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
           // 실시간 관련 노트 — 내부(vault) 검색 결과 + (게이트 시) 웹 보완.
           // status 만 실려 오는 이벤트는 배지 갱신용(notes 는 비어 있음).
           if (msg.status) setWikiStatus(msg.status as WikiSearchStatus);
+          // 껐으면 늦게 도착한 결과도 넣지 않는다 — 서버가 멈추기 전에 이미 나간
+          // 검색이 있을 수 있다(끄자마자 칩이 하나 더 뜨면 "안 꺼졌다"로 읽힌다).
+          if (wikiMutedRef.current) break;
           if ((msg.notes || []).length > 0) {
             setRelatedNotes(prev => {
               const merged = [...(msg.notes || []).map((n: any) => ({
@@ -846,6 +871,9 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
       setRelatedNotes([]);
       setWikiStatus(null);
       setWikiExpanded(false);
+      // 끄기는 **그 회의에서만** 유효하다 — 새 녹음에서는 다시 켜진다(페르소나와 동일).
+      wikiMutedRef.current = false;
+      setWikiMuted(false);
       resetFacilitation();
       setBackendMode(false);
       setDuration(0);
@@ -1456,15 +1484,23 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
             · 내부(📄 노트 / 🎓 논문)를 웹(🌐)보다 앞줄에 둔다(sortRelated).
             · 백엔드 미연결/비활성 사유도 같은 바에 조용히 배지로 표시(FR-1). */}
         {((isRecording && backendMode) || relatedNotes.length > 0
-          || (wikiStatus && !wikiStatus.enabled)) && (
+          || (wikiStatus && !wikiStatus.enabled) || wikiMuted) && (
           <div className="bg-emerald-50/70 border-b border-emerald-100 shrink-0">
             <div className="px-4 md:px-8 h-9 flex items-center gap-2 overflow-x-auto overflow-y-hidden">
               <span className="flex items-center gap-1.5 text-[11px] font-black uppercase tracking-widest text-emerald-600 shrink-0">
                 <BookOpen className="w-3.5 h-3.5" /> 관련 노트
               </span>
 
+              {/* 사용자가 이번 회의만 끈 상태 — 설정(검색 꺼짐)과 구분해서 적는다.
+                  서버 검색·웹 보완까지 멈춘 상태라는 것을 문구가 말해야 한다. */}
+              {wikiMuted && (
+                <span className="shrink-0 text-[11px] bg-white border border-zinc-200 text-zinc-500 px-2 py-0.5 rounded-full whitespace-nowrap">
+                  이번 회의 끔 — 검색·웹 보완을 멈췄습니다(새 녹음에서 다시 켜집니다)
+                </span>
+              )}
+
               {/* 상태 배지 — 꺼짐/미연결 사유 (전사를 방해하지 않는 회색 톤) */}
-              {wikiStatus && !wikiStatus.enabled && (
+              {!wikiMuted && wikiStatus && !wikiStatus.enabled && (
                 <span
                   title={wikiStatus.reasonText}
                   className="shrink-0 text-[11px] bg-white border border-zinc-200 text-zinc-500 px-2 py-0.5 rounded-full whitespace-nowrap max-w-[60vw] truncate"
@@ -1490,22 +1526,37 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
                   +{relatedNotes.length - 8}
                 </span>
               )}
-              {relatedNotes.length === 0 && (!wikiStatus || wikiStatus.enabled) && (
+              {relatedNotes.length === 0 && !wikiMuted
+                && (!wikiStatus || wikiStatus.enabled) && (
                 <span className="shrink-0 text-[11px] text-emerald-700">
                   {wikiStatus?.enabled ? "발화와 관련된 내부 노트를 찾는 중…" : "대기 중…"}
                 </span>
               )}
-              {relatedNotes.length > 0 && (
-                <button
-                  type="button"
-                  onClick={() => setWikiExpanded((v) => !v)}
-                  aria-expanded={wikiExpanded}
-                  className="ml-auto shrink-0 flex items-center gap-1 text-[11px] font-bold text-emerald-600 hover:text-emerald-800"
-                >
-                  <ChevronDown className={`w-3.5 h-3.5 transition-transform ${wikiExpanded ? "" : "-rotate-90"}`} />
-                  {wikiExpanded ? "근거 접기" : "근거 보기"}
-                </button>
-              )}
+              <div className="ml-auto shrink-0 flex items-center gap-2">
+                {relatedNotes.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setWikiExpanded((v) => !v)}
+                    aria-expanded={wikiExpanded}
+                    className="flex items-center gap-1 text-[11px] font-bold text-emerald-600 hover:text-emerald-800"
+                  >
+                    <ChevronDown className={`w-3.5 h-3.5 transition-transform ${wikiExpanded ? "" : "-rotate-90"}`} />
+                    {wikiExpanded ? "근거 접기" : "근거 보기"}
+                  </button>
+                )}
+                {/* 페르소나 레인의 [이번 회의 끔] 과 같은 자리·같은 말. 표시만이
+                    아니라 서버 검색과 웹 보완 과금까지 멈춘다. */}
+                {isRecording && backendMode && !wikiMuted && (
+                  <button
+                    type="button"
+                    onClick={wikiMute}
+                    title="이번 회의에서만 끕니다 — 서버 검색과 웹 보완도 함께 멈춥니다"
+                    className="text-[11px] font-medium text-emerald-600 hover:text-emerald-900 underline decoration-dotted"
+                  >
+                    이번 회의 끔
+                  </button>
+                )}
+              </div>
             </div>
 
             {/* 근거 상세 — 사용자가 펼쳤을 때만. 자체 스크롤이라 전사 영역을 잠식하지 않는다. */}

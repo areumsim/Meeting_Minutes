@@ -250,6 +250,47 @@ export default function Help({ onNavigate }: { onNavigate?: (v: NavTarget) => vo
         </ul>
       </Card>
 
+      {/* 6.5 녹음 중 화면에 뜨는 것 — "이건 뭐고 어떻게 끄나"에 한 곳에서 답한다.
+          소리 문의가 반복되는데 이 앱은 소리를 낼 수단 자체가 없다(참견도 4·5 미구현). */}
+      <Card icon={<Mic size={16} />} title="녹음 중 화면에 뜨는 것 · 끄는 법">
+        <p><b>어떤 것도 소리를 내지 않습니다.</b> 알림음·음성 읽기는 아직 만들지 않았습니다 —
+          모든 안내는 화면에 조용히 나타났다 사라집니다. 팝업도, 포커스 이동도 없습니다.</p>
+        <div className="space-y-2 mt-1">
+          <Detail summary={<span className="flex items-center gap-1.5"><Search size={14} /> 초록 줄 — 관련 노트</span>} defaultOpen>
+            <p>말한 내용과 관련된 <b>내 노트 폴더의 문서</b>를 찾아 <b>[[제목]]</b> 칩으로 보여줍니다
+              (📄 노트 · 🎓 논문 · 🌐 웹 보완). <b>근거 보기</b>를 누르면 어느 대목이 걸렸는지 펼쳐집니다.</p>
+            <ul className="list-disc ml-4 space-y-1">
+              <li><b>끄기</b> — 그 줄 오른쪽 <Tag>이번 회의 끔</Tag>. 표시만이 아니라 <b>서버 검색과
+                웹 보완 요금까지</b> 멈춥니다. 이미 찾은 노트는 회의록에 남습니다.</li>
+              <li><b>아예 안 쓰기</b> — <Tag>설정</Tag> → <b>실시간 노트 검색</b>을 끄면 다음 회의부터 계속 꺼집니다.</li>
+            </ul>
+          </Detail>
+          <Detail summary={<span className="flex items-center gap-1.5"><MessageCircleQuestion size={14} /> 회색 줄 — 페르소나 카드(검증·의견·질문)</span>}>
+            <p>회의 내용을 계속 읽으면서 <b>확인이 필요한 대목</b>을 카드로 올립니다 —
+              사실 대조(🔍), 지난 회의 결정과 어긋남(🧐), 빠진 담당자·기한(📝),
+              물어볼 만한 질문(🧨🐣), 반대 시나리오(😈), 중간 정리(🧾).
+              카드는 언제나 <b>초안</b>이고 판정이 아닙니다.</p>
+            <ul className="list-disc ml-4 space-y-1">
+              <li><b>근거</b> — 카드를 누르면 무엇과 대조했는지(노트·논문·웹·지난 결정) 함께 보입니다.
+                🔍·🎓 카드에 <b>⚠ 미검증</b>이 붙으면 웹 검색 없이 사내 자료만 본 것입니다.</li>
+              <li><b>확인 / 닫기</b> — 도움이 됐는지 눌러 주세요. 이 기록이 정확도를 재는 데 쓰입니다.</li>
+              <li><b>끄기</b> — 그 줄의 <Tag>이번 회의 끔</Tag>. 카드 생성이 멈춰 추가 비용이 들지 않습니다
+                (판정 기록만 남습니다). 다음 녹음에서는 다시 켜집니다.</li>
+              <li><b>덜 뜨게 하기</b> — <Tag>설정</Tag> → <b>페르소나별 참견도</b>에서 역할마다
+                0(금지)~3(옆 카드)을 고릅니다. 기본은 조용한 쪽입니다.</li>
+            </ul>
+          </Detail>
+          <Detail summary={<span className="flex items-center gap-1.5"><FileText size={14} /> 회의가 끝난 뒤에는</span>}>
+            <ul className="list-disc ml-4 space-y-1">
+              <li>회의 중 뜬 <b>중간 정리</b>는 회의 상세의 <Tag>중간 정리</Tag> 탭에 남습니다.</li>
+              <li>회의록에는 <b>🔗 관련 노트</b>가 함께 붙고, 확인이 필요한 주장은
+                <Tag>사실확인</Tag> 탭으로 정리됩니다(노트 → 논문 → 웹 순서로 대조).</li>
+              <li>메일 발송을 켜 두었다면 이 결과가 함께 전달됩니다.</li>
+            </ul>
+          </Detail>
+        </div>
+      </Card>
+
       {/* 7. 노트 폴더가 있을 때의 기능들 (선택) */}
       <Card icon={<Sparkles size={16} />} title="노트 폴더를 연결하면 쓸 수 있는 기능" badge={<Badge kind="optional" />}>
         <p>아래는 <b>없어도 회의록 생성에는 지장 없는</b> 부가 기능입니다. .md 노트 폴더를 연결하면 회의 기록이 쌓여 검색·질문·자동화가 가능해집니다.</p>

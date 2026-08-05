@@ -206,3 +206,20 @@ describe("[지금 정리] 버튼", () => {
     expect(screen.queryByRole("button", { name: /지금 정리/ })).toBeNull();
   });
 });
+
+describe("PersonaLane — 소리", () => {
+  it("이 기능이 소리를 내지 않는다는 사실을 레인이 말한다", () => {
+    // "소리 어떻게 끄냐"는 실제로 나온 질문이다. 끌 소리가 없다는 게 답이라면
+    // 화면이 그걸 말해야 한다 — 참견도 4·5(알림음·음성)는 미구현이고 리포에
+    // 소리 재생 코드가 0건이다.
+    render(<PersonaLane items={[item()]} onMute={vi.fn()} />);
+    const chip = screen.getByText("소리 없음");
+    expect(chip).toBeInTheDocument();
+    expect(chip.getAttribute("title")).toMatch(/구현되지 않았습니다/);
+  });
+
+  it("끈 회의에서도 그 사실은 그대로 보인다", () => {
+    render(<PersonaLane items={[]} muted onMute={vi.fn()} />);
+    expect(screen.getByText("소리 없음")).toBeInTheDocument();
+  });
+});

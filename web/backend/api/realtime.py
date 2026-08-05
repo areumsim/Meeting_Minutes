@@ -471,6 +471,8 @@ class BrowserRealtimeSession:
                                 self._facilitation_brief_now()
                             elif msg.get("type") == "facilitation_mute":
                                 self._facilitation_mute()
+                            elif msg.get("type") == "related_notes_mute":
+                                self._related_notes_mute()
                             elif msg.get("type") == "audio":
                                 # base64 인코딩된 오디오
                                 if self._diarize_pp:
@@ -924,6 +926,20 @@ class BrowserRealtimeSession:
         except Exception:
             pass
 
+    def _related_notes_mute(self) -> None:
+        """관련 노트 바의 [이번 회의 끔] — **서버 검색과 과금까지 멈춘다**.
+
+        페르소나 mute 와 같은 계약이다(`_facilitation_mute` 참조). 프런트에서 목록만
+        숨기면 서버는 회의 끝까지 볼트 검색(쿼리 임베딩)과 웹 보완(검색 1,000회당
+        $10)을 계속한다 — 아무도 볼 수 없는 결과에 돈을 쓴다. 이미 모인 결과는
+        남는다(회의록의 관련 노트) — 이미 지불한 것이고 지우면 잃기만 한다."""
+        if self._searcher is None:
+            return
+        try:
+            self._searcher.mute()
+        except Exception:
+            pass
+
     def _facilitation_feedback(self, msg: dict) -> None:
         """카드의 [✓ 확인]/[✕ 닫기] — 사람 라벨을 관찰 로그에 남긴다(PRD §19.4).
 
@@ -1006,6 +1022,11 @@ class BrowserRealtimeSession:
         내부(vault) 후보가 새로 잡힌 구간에서는 웹을 건너뛴다. 항상 웹도 함께 보려면
         wiki.realtime_web_only_if_no_vault_hit=false.
         """
+        # 사용자가 이번 회의의 관련 노트를 껐다 = 이 결과를 볼 사람이 없다.
+        # 볼트 검색만 멈추고 웹을 계속 부르면, **끈 뒤에 오히려 비싼 쪽만 남는다**
+        # (웹은 검색 1,000회당 $10 이고 볼트 검색은 임베딩 1회다).
+        if self._searcher is not None and getattr(self._searcher, "muted", False):
+            return
         try:
             from meeting_minutes_app.common import config_loader as _rc
             online_search_on = bool(_rc.get("wiki.online_search_enabled", False))
@@ -1711,6 +1732,8 @@ class BrowserRealtimeSession:
                         self._facilitation_brief_now()
                     elif msg.get("type") == "facilitation_mute":
                         self._facilitation_mute()
+                    elif msg.get("type") == "related_notes_mute":
+                        self._related_notes_mute()
                     elif msg.get("type") == "audio":
                         _b = base64.b64decode(msg["data"])
 

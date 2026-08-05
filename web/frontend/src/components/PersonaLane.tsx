@@ -45,6 +45,15 @@ export default function PersonaLane({
         <span className="flex items-center gap-1.5 text-[11px] font-black uppercase tracking-widest text-slate-500 shrink-0 mt-1">
           <Users className="w-3.5 h-3.5" /> 페르소나
         </span>
+        {/* 소리를 낼 수 있는데 안 내는 게 아니라, **낼 수단이 없다**. 참견도 4·5
+            (알림음·음성)는 미구현이고 리포에 소리 재생 코드가 0건이다. 사용자가
+            "소리 어떻게 끄냐"를 찾아 헤매지 않도록 화면이 먼저 말한다. */}
+        <span
+          className="shrink-0 mt-1 text-[11px] text-slate-400 whitespace-nowrap"
+          title="이 기능은 소리를 내지 않습니다 — 알림음·음성(참견도 4·5)은 아직 구현되지 않았습니다. 카드는 조용히 나타납니다."
+        >
+          소리 없음
+        </span>
 
         {muted ? (
           /* 서버가 개입·중간 요약 생성을 멈춘 상태다(표시만 끄는 것이 아니다) —

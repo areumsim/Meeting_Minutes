@@ -69,6 +69,7 @@ REASON_TEXT: Dict[str, str] = {
     "index_missing": "검색 인덱스가 없습니다 — [설정]의 '인덱스 재빌드'를 실행하세요.",
     "obsidian_unreachable": "Obsidian REST에 연결할 수 없습니다.",
     "no_backend": "검색 인덱스도 Obsidian도 사용할 수 없습니다 — 인덱스를 재빌드하세요.",
+    "muted": "이번 회의는 관련 노트를 껐습니다 — 새 녹음에서 다시 켜집니다.",
 }
 
 #: 출처유형 → 표시 아이콘. 이 모듈이 `source_type` 을 만드는 곳이므로 규약도 여기 둔다
@@ -190,12 +191,37 @@ class RealtimeVaultSearcher:
         self._init_lock = threading.Lock()
         self._reason = "" if self._gate else "off"
         self._status_sent = False
+        #: 사용자가 이번 회의만 끈 상태(mute). 게이트(설정)와 구분한다 — 설정은
+        #: 다음 회의에도 유지되지만 이건 이 세션에서만이다.
+        self._muted = False
 
     # ── 상태 ──────────────────────────────────────────────
 
     @property
     def enabled(self) -> bool:
-        return self._gate and not self._disabled
+        return self._gate and not self._disabled and not self._muted
+
+    @property
+    def muted(self) -> bool:
+        return self._muted
+
+    def mute(self) -> None:
+        """[이번 회의 끔] — **검색 자체를 멈춘다**(표시만 끄지 않는다).
+
+        페르소나의 `mute()` 와 같은 계약이다: 프런트에서 목록만 숨기면 서버는 회의
+        끝까지 계속 검색해 **쿼리 임베딩 비용**을 쓰고, 내부에서 못 찾은 구간마다
+        **유료 웹 검색**까지 나간다(검색 1,000회당 $10). 아무도 볼 수 없는 결과에
+        돈을 쓰는 것이고, 이 리포는 같은 결함을 개입 카드에서 이미 한 번 고쳤다.
+
+        멈추는 것: 볼트 검색·웹 보완·화면 표시. 유지되는 것: 이미 모인 결과
+        (`collected_*`) — 끄기 전까지 찾은 관련 노트는 회의록에 남는다. 이건 이미
+        지불한 것이고, 지우면 사용자가 잃기만 한다.
+
+        되돌리는 함수는 두지 않는다 — 페르소나 mute 와 같은 이유(세션 중 토글은
+        "껐는데 왜 또 뜨냐"를 만든다). 새 녹음에서 다시 켜진다."""
+        self._muted = True
+        self._reason = "muted"
+        self._report_status()
 
     @property
     def backend(self) -> str:

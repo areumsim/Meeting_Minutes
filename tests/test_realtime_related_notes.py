@@ -313,3 +313,71 @@ class TestWebResearchIsMetered:
         note = sent[0]["notes"][0]
         assert note["sourceType"] == "web"
         assert note["snippet"] == "외부 자료 요약"
+
+
+class TestCancelMakesNoNewCharge:
+    """'저장하지 않고 취소' 가 **실제로** 아무것도 만들지 않는가(동작 확인).
+
+    배선만 보는 소스 스캔과 달리 여기서는 `_cancel_session()` 을 돌려 결과를 본다.
+    이 경로가 WS 수신 루프에 없던 동안, 실시간 모드의 [취소]는 '연결 끊김'으로 보여
+    **정상 종료** 경로로 갔다 — 마지막 정리(LLM 1회)와 회의록 생성이 그대로 돌았다.
+    """
+
+    def _session(self, monkeypatch, tmp_path):
+        s, sent = make_session(monkeypatch)
+        s.session_id = "cx1"
+        s.ws.send_json = _AsyncNoop()
+        deleted = []
+        monkeypatch.setattr(rt.db, "delete_session", lambda sid: deleted.append(sid))
+        monkeypatch.setattr(rt.db, "DB_PATH", tmp_path / "web.db")
+        return s, sent, deleted
+
+    def test_no_final_brief_and_no_minutes(self, monkeypatch, tmp_path):
+        """마지막 정리(LLM)·회의록 생성을 부르지 않고, 세션은 버린다."""
+        import asyncio
+        s, _sent, deleted = self._session(monkeypatch, tmp_path)
+        calls = []
+        fac = MagicMock()
+        fac.finalize_brief.side_effect = lambda *a, **k: calls.append("brief") or ""
+        s._facilitator = fac
+        monkeypatch.setattr(s, "_finalize",
+                            lambda *a, **k: calls.append("finalize"))
+
+        asyncio.run(s._cancel_session())
+
+        assert calls == []                 # 새 과금이 될 호출이 하나도 없다
+        assert deleted == ["cx1"]          # 세션은 버려진다
+        assert s.session_id is None
+        fac.shutdown.assert_called_once_with(wait=False)   # 기다리지 않는다(즉시 종료)
+
+    def test_observations_are_deleted(self, monkeypatch, tmp_path):
+        """관찰 로그(발화 인용 ≤500자)도 지운다 — 저장하지 않기로 한 회의다."""
+        import asyncio
+        from meeting_minutes_app.wiki_core import facilitation
+        db_path = tmp_path / "web.db"
+        facilitation.record_observation(
+            "cx1", "critic", trigger_type="fact", confidence=0.9,
+            span="회의에서 실제로 나온 발화 인용", level=1, db_path=db_path)
+        assert len(facilitation.observations("cx1", db_path=db_path)) == 1
+
+        s, _sent, _deleted = self._session(monkeypatch, tmp_path)
+        asyncio.run(s._cancel_session())
+
+        assert facilitation.observations("cx1", db_path=db_path) == []
+
+    def test_tells_the_browser_it_was_cancelled(self, monkeypatch, tmp_path):
+        """조용히 끝내지 않는다 — 화면이 '저장하지 않고 종료'를 알아야 한다."""
+        import asyncio
+        s, _sent, _deleted = self._session(monkeypatch, tmp_path)
+        asyncio.run(s._cancel_session())
+        assert s.ws.send_json.payloads[-1]["type"] == "cancelled"
+
+
+class _AsyncNoop:
+    """await 가능한 더미 — MagicMock 은 코루틴이 아니라 await 에서 터진다."""
+
+    def __init__(self):
+        self.payloads = []
+
+    async def __call__(self, payload):
+        self.payloads.append(payload)

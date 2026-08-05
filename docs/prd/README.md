@@ -105,8 +105,8 @@
 
 | 문서 주장 | 확인 명령 | 결과 |
 |---|---|---|
-| 테스트 수 | `python -m pytest -q` 마지막 줄 | **1050 passed, 1 skipped** — `CLAUDE.md` 와 일치 |
-| 프런트엔드 테스트 수 | `cd web/frontend && npm test` 마지막 줄 | **93** (2026-07-31 의 62 에서 증가) |
+| 테스트 수 | `python -m pytest -q` 마지막 줄 | **1092 passed, 1 skipped** (2026-08-05 재실행) — `CLAUDE.md` 와 일치 |
+| 프런트엔드 테스트 수 | `cd web/frontend && npx vitest run` 마지막 줄 | **102** (2026-08-05 재실행, 2026-08-04 의 93 에서 증가) |
 | 배포 의존성 고정(파이썬) | `grep -c '==' scripts/build/constraints-web.txt` | **52** |
 | 페르소나 화면 개입이 실제로 나가는가 | `grep -n 'on_intervention' meeting_minutes_app/wiki_core/facilitation.py` | 존재·호출됨 → "M0 관찰모드(화면 없음)" 표기는 폐기됐다 |
 | 실시간 세션 two_pass 판정 | `grep -n 'resolve_two_pass' meeting_minutes_app/common/pricing.py web/backend/api/sessions.py` | 존재 → `sessions.source` 기반 판정은 폐기(웹 실시간·업로드가 같은 `"web"`) |

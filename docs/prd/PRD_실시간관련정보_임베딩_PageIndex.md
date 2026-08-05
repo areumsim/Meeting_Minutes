@@ -105,6 +105,8 @@
 | 세션 내 누적 | 프론트 `Recorder.tsx`가 `related_notes`를 이전 결과와 **머지·dedup**(filename/title 기준)해 세션 동안 축적, 상위 8개 + `+N` 표시 |
 | 종료 후 병합 훅 | `collected_titles()` — 세션 종료 후 회의록 memo에 관련 노트 제목 병합용 API 존재 (Phase 0에서 근거까지 넘기는 `collected_evidence()` 추가) |
 | 스팸 억제 | 상위 3개, 직전과 동일 노트 세트면 표시 생략(`_last_shown_titles`) |
+| 개입 근거용 동기 검색 | `search_now(text, limit)`(2026-08-05) — 페르소나 개입 카드가 **지금 판정 중인 발화**로 1회 검색한다. `_search_index`/`_search_rest` 를 그대로 재사용하므로 랭킹 규칙은 offer_segment 와 동일(§6-4). 스로틀·내용 게이트·표시 콜백·누적은 지나지 않고, **트리아지(상시 경로)에는 붙이지 않는다** |
+| 이번 회의 끄기 | `mute()`(2026-08-05) — 볼트 검색·`search_now`·웹 보완을 함께 멈춘다. 표시만 끄면 비싼 쪽(웹, 검색 1,000회당 $10)만 남는다. 이미 모인 결과는 유지 |
 | **섹션(heading) 인덱스 이미 존재** | `vault_indexer.py` `wiki_knowledge.section_index_enabled`(**default True**) → 노트를 `#` 헤딩 단위 섹션으로 인덱싱, `search_sections()`로 heading 단위 검색. 인용 정확도용. **PageIndex 트리의 얕은 버전이 이미 있음** |
 | **내부자료 우선 검증 이미 존재** | `meeting_workflow.claim_verify()` — 주 도메인 주장은 **vault 우선**(`_gather_claim_vault_context` "오프라인 우선", 섹션 인덱스 우선), vault로 불확실할 때만 논문(`_paper_verify_claim`, arXiv 우선)·웹으로. 도메인 외 웹검증 결과는 참고노트로 **축적**(다음 회의부터 로컬 검증) |
 | 실시간 웹검색(웹 전용) | `realtime.py`의 `_maybe_web_research()` — `wiki.online_search_enabled`+`wiki.realtime_web_search_interval`>0일 때만 발화별 `web_research`. **CLI 실시간엔 없음**(FR-12에서 이 동작을 정본으로 확정) |

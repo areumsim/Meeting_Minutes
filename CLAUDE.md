@@ -25,7 +25,8 @@ Obsidian 기반 **회의록 자동화 + LLM Wiki 지식순환** 시스템. 오�
 pip install -e .                       # 개발 설치
 python run_meeting.py <cmd> [args]     # CLI (run_meeting.bat 도 동일)
 webUI_실행.bat                          # 웹 UI 로컬 실행 (데이터 = 리포 루트)
-python -m pytest                       # 테스트 (2026-08-04: 1050 passed, 1 skipped) ← 수치 정본
+python -m pytest                       # 테스트 (2026-08-05: 1092 passed, 1 skipped) ← 수치 정본
+cd web/frontend && npx vitest run      # 프런트 컴포넌트 테스트 (102 passed)
 cd web/frontend && npm test            # 프런트 테스트 (2026-08-04: 93 passed)
 python run_meeting.py reindex          # 위키/그래프 인덱스 재빌드
 ```
@@ -145,3 +146,21 @@ python run_meeting.py reindex          # 위키/그래프 인덱스 재빌드
     듣지 않는다 — 재스캔이 없으면 녹음기가 폴더에 직접 쓰는 파일을 영영 놓친다.
     재스캔은 `_scan_once()`가 풀을 `with`로 열어 블로킹하므로 **별도 스레드**에서 돈다
     (대기 루프에서 직접 부르면 처리 중에 `stop()`이 먹지 않는다).
+- **화면 표시를 끄는 조작은 서버 생성·검색·과금까지 멈춘다.** 페르소나 카드
+  (`facilitation.mute()`)와 관련 노트(`realtime_search.mute()`)가 같은 계약을 쓴다.
+  프런트에서 목록만 숨기면 서버는 회의 끝까지 만들고 검색한다 — 아무도 볼 수 없는
+  산출물에 돈을 쓰는 것이고, 게다가 화면의 러닝 미터는 버려진 카드 금액을 더하지 않아
+  **표시 금액이 실제 과금보다 작아진다**(이 리포가 금지하는 갈라짐). 관련 노트 쪽은
+  볼트 검색만 막으면 **웹 보완(검색 1,000회당 $10)만 남아 더 나빠진다** — `mute` 는
+  `_maybe_web_research()` guard 까지 세트다. 새 "끄기"를 만들 땐 이 셋(생성·검색·웹)을
+  전부 지나는지 확인한다. 이미 모인 결과는 지우지 않는다(이미 지불했다).
+  WS 메시지는 **두 수신 루프 모두**에 배선한다(WS 경로 + HTTP 폴백 경로) — 한쪽만
+  넣으면 폴백 세션에서 조용히 안 먹는다.
+- **실시간 개입의 재료는 종료 후 경로와 같은 소스를 쓴다.** 지난 결정·미완료 액션은
+  `wiki_knowledge.recent_decisions_for()` / `open_actions_for()` 하나만 부른다
+  (회의 준비 브리핑·회의록 맥락 조립도 같은 함수다). registry 로딩·주제 필터를
+  `facilitation` 안에 복제하면 "회의 후에는 잡히는데 회의 중에는 안 잡히는" 갈라짐이
+  생긴다 — 실제로 실시간 경로의 registry 참조가 **0건**이라 "이전 회의와 다르다"를
+  판정할 입력 자체가 없었다. 볼트 검색도 같다: 개입 근거는 `RealtimeVaultSearcher`
+  의 `search_now()` 를 쓴다(랭킹 함수를 새로 만들지 않는다 —
+  docs/검색랭킹_이론과근거.md 의 실측으로 고른 규칙이다).

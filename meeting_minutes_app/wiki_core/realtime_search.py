@@ -184,6 +184,10 @@ class RealtimeVaultSearcher:
         self._obs = None
         self._init_done = False
         self._disabled = False   # lazy init 실패 후 no-op 전환
+        # lazy init 은 원래 단일 워커 풀에서만 돌았는데, `search_now()` 가 개입 생성
+        # 스레드에서 같은 초기화를 부른다. 락이 없으면 뒤에 온 쪽이 `_init_done=True`
+        # 만 보고 **인덱스가 아직 안 붙은 상태로** 통과해 조용히 0건을 돌려준다.
+        self._init_lock = threading.Lock()
         self._reason = "" if self._gate else "off"
         self._status_sent = False
 
@@ -291,6 +295,37 @@ class RealtimeVaultSearcher:
         except Exception:
             pass
 
+    def search_now(self, text: str, limit: int = 3) -> List[Dict[str, Any]]:
+        """**이 발화 하나에 대한** 근거를 동기로 찾아 돌려준다(호출 스레드에서 블록).
+
+        `offer_segment()` 와 목적이 다르다. 저쪽은 STT 핫패스용이라 논블로킹·스로틀·
+        내용 게이트를 지나 **화면 표시와 누적**을 위해 검색하고, 이쪽은 개입 카드를
+        만들기 직전 "지금 판정 중인 이 발화와 대조할 근거"가 필요할 때 쓴다. 그래서
+        스로틀·게이트·`on_notes`·`_notes` 누적을 전부 지나가지 않는다 — 판정 대상은
+        이미 정해져 있고, 누적에 섞으면 개입 때문에 화면의 관련 노트 바가 흔들린다.
+
+        랭킹은 `_search_index`/`_search_rest` 를 **그대로 재사용**한다. 같은 발화가
+        카드와 노트 바에서 다른 순서로 보이면 안 되고, 랭킹 규칙은 실측으로 고른
+        것이라 복제하면 갈라진다(docs/검색랭킹_이론과근거.md · PRD §6-4).
+
+        STT 핫패스에서 부르면 안 된다 — 임베딩 API 왕복 때문에 0.3~0.5초 걸린다.
+        호출자는 개입 생성 풀 스레드다(전사 스트림과 별개).
+        """
+        try:
+            if not self.enabled or not text or not text.strip():
+                return []
+            self._lazy_init()
+            if self._disabled:
+                return []
+            query = self._build_query(text)
+            if self._indexer is not None:
+                hits = self._search_index(query, text)
+            else:
+                hits = self._search_rest(query, text)
+            return dedupe_by_title(hits)[:max(1, limit)]
+        except Exception:
+            return []
+
     # ── 결과 스냅샷 ───────────────────────────────────────
 
     def collected_notes(self) -> List[Dict[str, Any]]:
@@ -359,43 +394,55 @@ class RealtimeVaultSearcher:
     def _lazy_init(self) -> None:
         if self._init_done:
             return
-        self._init_done = True
+        with self._init_lock:
+            if self._init_done:      # 락 대기 중에 다른 스레드가 끝냈다
+                return
+            self._init_backends()
 
+    def _init_backends(self) -> None:
+        """실제 초기화 — `_lazy_init` 이 락을 잡은 상태에서만 부른다.
+
+        `_init_done` 은 **끝에서** 세운다. 앞에서 세우면 락 밖의 빠른 경로가 초기화
+        도중에 통과해 백엔드가 아직 안 붙은 상태로 검색해 0건을 돌려준다(락을 넣은
+        이유 자체다). 실패해도 재시도하지 않는 종전 계약은 finally 로 지킨다."""
         reason = ""
-        if self._backend_pref in ("auto", "index"):
-            try:
-                from meeting_minutes_app.wiki_core.vault_indexer import VaultIndexer
-                idx = VaultIndexer.from_config()
-                if idx is None:
-                    reason = "no_vault"
-                elif idx.load():
-                    self._indexer = idx
-                else:
-                    reason = "index_missing"
-            except Exception:
-                self._indexer = None
-                reason = reason or "index_missing"
-
-        if self._indexer is None and self._backend_pref in ("auto", "rest"):
-            try:
-                from meeting_minutes_app.wiki_core.obsidian import ObsidianClient
-                obs = ObsidianClient.from_config()
-                if obs:
-                    if not obs.ping() and self.allow_launch:
-                        obs.ensure_running()
-                    if obs.ping():
-                        self._obs = obs
+        try:
+            if self._backend_pref in ("auto", "index"):
+                try:
+                    from meeting_minutes_app.wiki_core.vault_indexer import VaultIndexer
+                    idx = VaultIndexer.from_config()
+                    if idx is None:
+                        reason = "no_vault"
+                    elif idx.load():
+                        self._indexer = idx
                     else:
-                        reason = "obsidian_unreachable"
-            except Exception:
-                self._obs = None
-                reason = reason or "obsidian_unreachable"
+                        reason = "index_missing"
+                except Exception:
+                    self._indexer = None
+                    reason = reason or "index_missing"
 
-        if self._indexer is None and self._obs is None:
-            self._disabled = True  # 이후 offer_segment는 전부 no-op
-            self._reason = reason or "no_backend"
-        else:
-            self._reason = ""
+            if self._indexer is None and self._backend_pref in ("auto", "rest"):
+                try:
+                    from meeting_minutes_app.wiki_core.obsidian import ObsidianClient
+                    obs = ObsidianClient.from_config()
+                    if obs:
+                        if not obs.ping() and self.allow_launch:
+                            obs.ensure_running()
+                        if obs.ping():
+                            self._obs = obs
+                        else:
+                            reason = "obsidian_unreachable"
+                except Exception:
+                    self._obs = None
+                    reason = reason or "obsidian_unreachable"
+
+            if self._indexer is None and self._obs is None:
+                self._disabled = True  # 이후 offer_segment는 전부 no-op
+                self._reason = reason or "no_backend"
+            else:
+                self._reason = ""
+        finally:
+            self._init_done = True
 
     def _search(self, text: str) -> None:
         """단일 세그먼트 검색 — 실패는 전부 무시 (실시간 스트림 보호)."""

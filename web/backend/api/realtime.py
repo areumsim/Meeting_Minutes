@@ -778,19 +778,32 @@ class BrowserRealtimeSession:
                 attendees=attendees,
                 on_intervention=self._emit_facilitation,
                 on_status=self._emit_facilitation_status,
-                evidence_provider=self._facilitation_evidence)
+                evidence_provider=self._facilitation_evidence,
+                search_provider=self._facilitation_search)
         except Exception:
             return None
 
     def _facilitation_evidence(self):
-        """페르소나가 쓸 볼트 근거 — 이미 상시 수집 중인 결과를 넘긴다(추가 검색 0회).
+        """페르소나가 쓸 볼트 근거의 **폴백** — 상시 수집 누적분(추가 검색 0회).
 
+        후보 발화에 맞춘 검색(`_facilitation_search`)이 안 되는 경우에만 쓰인다.
         새 검색기를 만들지 않는 것이 규칙이다(PRD §6·§7) — 여기서 직접 검색하면
         같은 랭킹 로직이 두 벌이 된다."""
         if self._searcher is None:
             return []
         try:
             return self._searcher.collected_evidence(limit=5)
+        except Exception:
+            return []
+
+    def _facilitation_search(self, text: str, limit: int = 3):
+        """지금 판정 중인 발화로 볼트를 1회 검색 — **같은 검색기**를 그대로 쓴다.
+
+        개입 생성 스레드에서 동기로 돌지만 전사 스트림과는 별개 스레드다."""
+        if self._searcher is None:
+            return []
+        try:
+            return self._searcher.search_now(text, limit=limit)
         except Exception:
             return []
 

@@ -183,6 +183,20 @@ export default function FacilitationSettings() {
                   <AlertTriangle className="w-3 h-3" /> 적용값 {p.level}
                 </span>
               )}
+
+              {/* 고위험 페르소나를 화면에 여는 선택은 사용자 몫이지만, 무엇을 고른
+                  것인지는 알려 준다. 오탐률은 아직 실측 전(PRD §15)이고, 카드의
+                  ✓확인/✕닫기가 그 실측 데이터가 된다. */}
+              {p.risk === "high" && cur >= data.displayLevel && (
+                <span
+                  role="note"
+                  className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-2 py-1 flex items-start gap-1"
+                >
+                  <AlertTriangle className="w-3 h-3 mt-px shrink-0" />
+                  오탐률 실측 전입니다 — 잘못된 대조가 회의 중에 뜰 수 있습니다.
+                  카드의 ✓확인 / ✕닫기가 그 실측 데이터가 됩니다.
+                </span>
+              )}
             </div>
           );
         })}

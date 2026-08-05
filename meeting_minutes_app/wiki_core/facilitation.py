@@ -845,6 +845,8 @@ class FacilitationOrchestrator:
                  note: str = "", enabled_override: Optional[bool] = None,
                  db_path: Optional[Union[str, Path]] = None,
                  evidence_provider: Optional[Callable[[], List[Dict[str, Any]]]] = None,
+                 search_provider: Optional[
+                     Callable[[str, int], List[Dict[str, Any]]]] = None,
                  on_status: Optional[Callable[[Dict[str, Any]], None]] = None):
         """clock/note/enabled_override 는 **리플레이 전용 주입점**이다(replay_session).
 
@@ -864,6 +866,11 @@ class FacilitationOrchestrator:
         #: 주입받는다(새 검색기를 만들지 않는다, PRD §6·§7 "절대 새로 만들지 말 것").
         #: wiki_core 가 realtime 세션을 모르게 하려고 호출부에서 넣는다.
         self.evidence_provider = evidence_provider
+        #: 후보 발화 1건에 **맞춘** 근거 검색 — `RealtimeVaultSearcher.search_now`.
+        #: evidence_provider(세션 전체 누적 상위 N)와 목적이 다르다. 팩트체커에게
+        #: "이 수치와 대조할 근거"가 아니라 "요즘 자주 뜬 노트"를 주면 근거처럼
+        #: 보이는 무관한 문단으로 검증을 흉내내게 된다. 없으면 누적분으로 폴백.
+        self.search_provider = search_provider
         #: 상태 변화(건너뜀 사유·예산 소진)를 화면에 알리는 콜백. 조용히 꺼지면
         #: 기능이 없는 것처럼 보인다(이 리포 반복 규칙).
         self.on_status = on_status
@@ -1532,22 +1539,46 @@ class FacilitationOrchestrator:
         except Exception:
             pass
 
-    def _persona_evidence(self, p: Persona) -> List[Dict[str, Any]]:
-        """볼트 근거 — 이미 상시 수집 중인 결과를 가져다 쓴다(추가 검색 0회, PRD §6).
+    def _persona_evidence(self, p: Persona,
+                          cand: Optional[Dict[str, Any]] = None
+                          ) -> List[Dict[str, Any]]:
+        """이 개입에 쓸 볼트 근거 — **지금 판정 중인 발화**로 검색한 결과를 우선한다.
 
-        근거 소스에 "vault" 가 없는 페르소나(촉진자·서기·주니어·비판자)는 대화만 본다."""
-        if EV_VAULT not in (p.evidence or ()) or self.evidence_provider is None:
+        예전에는 `collected_evidence()`(세션 전체 누적 상위 5)만 썼다. 그건 "요즘 자주
+        뜬 노트"이지 "이 주장과 대조할 근거"가 아니다 — 팩트체커가 30분 전 발화에서
+        올라온 노트를 근거로 방금 나온 수치를 검증하는 모양이 된다. 그래서 후보의
+        `span`(그 발화 원문)으로 한 번 더 검색한다.
+
+        검색 1회 = 쿼리 임베딩 1회(약 $0.0000018) + 0.3~0.5초. 개입은 회의당 예산
+        상한(기본 12건)이 있고 이미 LLM 생성으로 수 초를 쓰므로 상대적으로 작다.
+        **트리아지(상시 경로)에는 넣지 않는다** — 그쪽은 25초마다 무조건 돈다.
+        전사 스트림은 무영향(개입 생성은 별도 풀 스레드).
+
+        검색기가 없거나(터미널·리플레이) 0건이면 누적분으로 폴백한다 — 근거 필수
+        페르소나가 검색 실패만으로 침묵하면 기능이 조용히 사라진 것처럼 보인다.
+        근거 소스에 "vault" 가 없는 페르소나(촉진자·서기·주니어)는 대화만 본다."""
+        if EV_VAULT not in (p.evidence or ()):
             return []
-        try:
-            ev = self.evidence_provider() or []
-        except Exception:
-            return []
+        notes: List[Dict[str, Any]] = []
+        span = str((cand or {}).get("span") or "").strip()
+        if span and self.search_provider is not None:
+            try:
+                notes = list(self.search_provider(span, 3) or [])
+            except Exception:
+                notes = []
+        if not notes and self.evidence_provider is not None:
+            try:
+                notes = list(self.evidence_provider() or [])
+            except Exception:
+                notes = []
         out: List[Dict[str, Any]] = []
-        for n in ev[:3]:
+        for n in notes[:3]:
             if not isinstance(n, dict):
                 continue
             out.append({
-                "source": "note",
+                # source_type 은 검색기가 note/paper 로 구분해 준다 — 카드가 "논문에
+                # 따르면"과 "지난 회의록에 따르면"을 구분해 보여줄 수 있어야 한다.
+                "source": str(n.get("source_type") or "note"),
                 "title": str(n.get("title") or n.get("filename") or "")[:120],
                 "url": str(n.get("filename") or ""),
                 "score": float(n.get("rank_score") or n.get("score") or 0.0),
@@ -1566,7 +1597,7 @@ class FacilitationOrchestrator:
         p = get_persona(cand["persona"])
         if p is None:
             return None
-        evidence = self._persona_evidence(p)
+        evidence = self._persona_evidence(p, cand)
         # 근거가 필수인 페르소나(도메인·팩트체커)는 근거 없이 개입하지 않는다
         # ("추측 금지" — system_prompt 와 PRD §6 의 게이트를 코드로도 막는다).
         if p.key in ("domain_expert", "fact_checker") and not evidence:

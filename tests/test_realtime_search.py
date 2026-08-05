@@ -587,3 +587,96 @@ class TestShutdown:
         s._init_done = True
         s.shutdown()
         assert obs.closed
+
+
+class TestSearchNow:
+    """개입 카드용 동기 검색 — offer_segment 와 **다른 계약**을 지키는지.
+
+    같은 랭킹 함수를 쓰되(중복 금지), 스로틀·내용 게이트·표시 콜백·누적은 지나지
+    않는다. 누적에 섞이면 개입이 화면의 관련 노트 바를 흔든다.
+    """
+
+    def test_returns_hits_without_accumulating_or_displaying(self, monkeypatch):
+        shown = []
+        s = make_searcher(monkeypatch, interval=5, on_notes=shown.append)
+        inject_indexer(s, [INDEX_HIT], {})
+        hits = s.search_now("큐비트 결맞음 시간이 100마이크로초라고 했는데요")
+        assert [h["title"] for h in hits] == ["양자컴퓨팅"]
+        assert s.collected_notes() == []      # 누적 오염 없음
+        assert shown == []                    # 화면 콜백도 안 부른다
+        s.shutdown()
+
+    def test_ignores_throttle_and_content_gate(self, monkeypatch):
+        """스로틀 5 여도 매번 검색하고, min_terms 게이트도 지나가지 않는다."""
+        s = make_searcher(monkeypatch, interval=5,
+                          extra_cfg={"wiki.realtime_min_terms": 99})
+        idx = inject_indexer(s, [INDEX_HIT], {})
+        idx.known_term_count = lambda t: 0        # 게이트라면 전부 막힐 값
+        for _ in range(3):
+            assert s.search_now("발화") != []
+        note_arm = [q for q in idx.queries if not q[1]]   # 논문 arm 은 별도 호출이다
+        assert len(note_arm) == 3
+        s.shutdown()
+
+    def test_uses_same_ranking_path_as_offer_segment(self, monkeypatch):
+        """논문 보강 arm·섹션 특정까지 동일 — 규칙을 복제하지 않았다는 확인."""
+        s = make_searcher(monkeypatch, extra_cfg={
+            "wiki.realtime_paper_dirs": ["02_이론_학습"]})
+        paper = dict(INDEX_HIT, path="Archive/x/02_이론_학습/논문.md",
+                     title="논문", wikilink_title="논문")
+        idx = inject_indexer(s, [NOTE_HIT_MEETING, paper],
+                             {"00_Meetings/주간회의.md": SECTION_OF_MEETING})
+        hits = s.search_now("큐비트 로드맵")
+        assert [h["source_type"] for h in hits] == ["note", "paper"]
+        assert hits[0]["heading"] == "큐비트 로드맵"     # 섹션 특정도 그대로
+        assert any(q[1] for q in idx.queries)            # 논문 arm 이 실제로 돌았다
+        s.shutdown()
+
+    def test_disabled_or_empty_returns_empty(self, monkeypatch):
+        s = make_searcher(monkeypatch, gate=False)
+        assert s.search_now("아무 발화") == []
+        s2 = make_searcher(monkeypatch)
+        inject_indexer(s2, [INDEX_HIT], {})
+        assert s2.search_now("   ") == []
+        s2.shutdown()
+
+    def test_backend_failure_is_swallowed(self, monkeypatch):
+        """검색 실패가 개입 생성 스레드로 예외를 던지면 안 된다."""
+        s = make_searcher(monkeypatch)
+        idx = inject_indexer(s, [], {})
+        def boom(*a, **k):
+            raise RuntimeError("index broken")
+        idx.search = boom
+        assert s.search_now("발화") == []
+        s.shutdown()
+
+    def test_lazy_init_is_serialized(self, monkeypatch):
+        """두 스레드가 동시에 들어와도 '아직 안 붙은 백엔드'로 통과하지 않는다.
+
+        `_init_done` 을 초기화 **앞에서** 세우면 뒤에 온 스레드가 인덱서 없이
+        빠져나가 조용히 0건을 돌려준다 — 락을 넣은 이유 자체다."""
+        s = make_searcher(monkeypatch)
+        seen = []
+        real = FakeIndexer([INDEX_HIT], {})
+
+        class SlowIndexer:
+            @staticmethod
+            def from_config():
+                time.sleep(0.05)
+                return real
+
+        real.load = lambda: True
+        monkeypatch.setattr(
+            "meeting_minutes_app.wiki_core.vault_indexer.VaultIndexer", SlowIndexer)
+
+        def worker():
+            s._lazy_init()
+            seen.append(s._indexer)
+
+        ts = [threading.Thread(target=worker) for _ in range(4)]
+        for t in ts:
+            t.start()
+        for t in ts:
+            t.join()
+        assert all(x is real for x in seen), "초기화 도중 통과한 스레드가 있다"
+        s.shutdown()

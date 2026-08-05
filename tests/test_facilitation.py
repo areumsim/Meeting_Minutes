@@ -18,8 +18,12 @@ TestReplayPastMeetings 가 그 네 게이트를 각각 고정한다.
 
 import json
 import time
+from pathlib import Path
 
 import pytest
+
+#: 리포 루트 — 배포 시드(config.example.json)를 테스트가 직접 읽어 기본값을 확인한다.
+ROOT = Path(__file__).resolve().parents[1]
 
 from meeting_minutes_app.common import spend_guard, usage_log
 from meeting_minutes_app.wiki_core import facilitation, personas
@@ -125,15 +129,18 @@ class TestLevelZeroExcluded:
         assert llm_calls == []
 
     def test_hard_cap_clamps_risky_personas(self, cfg, fac_db):
-        """위험 페르소나(팩트체커·비판자)는 설정만으로 hard_cap(2)을 못 넘는다."""
+        """위험 페르소나(팩트체커·비판자)는 설정만으로 hard_cap(3)을 못 넘는다.
+
+        3(옆 카드)까지는 사용자가 고를 수 있게 열었지만 4·5(알림음·음성)는 미구현이라
+        아무에게도 열려 있지 않다 — 5 를 적어도 3 이다."""
         cfg(self._values(**{
             "facilitation.personas.fact_checker.level": 5,
             "facilitation.personas.critic.level": 5,
             "facilitation.max_level": 5,
         }))
         orch = FacilitationOrchestrator(session_id="s2")
-        assert orch.persona_level("fact_checker") == 2
-        assert orch.persona_level("critic") == 2
+        assert orch.persona_level("fact_checker") == 3
+        assert orch.persona_level("critic") == 3
         # 전역 상한도 함께 동작한다.
         cfg(self._values(**{"facilitation.personas.scribe.level": 5}))
         orch = FacilitationOrchestrator(session_id="s2")
@@ -556,7 +563,10 @@ class TestDisplayChannelM1:
 
     def test_evidence_provider_output_is_reused_not_researched(
             self, cfg, fac_db, monkeypatch):
-        """근거는 이미 상시 수집 중인 결과를 가져다 쓴다(추가 검색 0회, §6·§7)."""
+        """검색기가 없을 때의 폴백 — 상시 수집 누적분을 가져다 쓴다(추가 검색 0회).
+
+        검색기가 있으면 후보 발화에 맞춘 검색이 우선한다(TestCandidateScopedEvidence).
+        어느 쪽이든 **새 검색기를 만들지 않는다**는 §6·§7 규칙은 같다."""
         cfg(self._values(**{"facilitation.personas.domain_expert.level": 3}))
         calls = self._llm(monkeypatch, [self._cand(persona="domain_expert",
                                                    span="TSMC 3nm 수율")])
@@ -1647,9 +1657,9 @@ class TestPersonaMatrixApi:
         try:
             row = {p["key"]: p for p in
                    client.get("/api/facilitation/personas").json()["personas"]}
-            assert row["fact_checker"]["hardCap"] == 2
+            assert row["fact_checker"]["hardCap"] == 3
             assert row["fact_checker"]["configuredLevel"] == 5
-            assert row["fact_checker"]["level"] == 2       # 코어 클램프와 같은 값
+            assert row["fact_checker"]["level"] == 3       # 코어 클램프와 같은 값
             assert row["scribe"]["hardCap"] is None
         finally:
             from meeting_minutes_app.common import config_loader
@@ -1951,9 +1961,22 @@ class TestRegistryData:
         assert all(not p.periodic for p in personas.triage_personas())
 
     def test_risky_personas_have_hard_cap(self):
-        assert personas.get_persona("fact_checker").hard_cap == 2
-        assert personas.get_persona("critic").hard_cap == 2
+        """고위험 2종은 3(옆 카드)까지 — 4·5 는 미구현이라 여전히 막혀 있다."""
+        assert personas.get_persona("fact_checker").hard_cap == 3
+        assert personas.get_persona("critic").hard_cap == 3
         assert personas.get_persona("scribe").hard_cap is None
+
+    def test_risky_personas_still_default_to_observe(self):
+        """상한만 풀었지 **기본값은 그대로**다 — 업데이트만으로 회의가 시끄러워지면 안 된다.
+
+        기본 시드는 config.example.json 이고, 키가 없을 때의 폴백은 OBSERVE_LEVEL 이다.
+        어느 경로로도 고위험이 저절로 화면에 열리지 않는지 함께 본다."""
+        import json as _json
+        seed = _json.loads((ROOT / "config.example.json").read_text(encoding="utf-8"))
+        seeded = seed.get("facilitation", {}).get("personas", {})
+        for key in ("fact_checker", "critic"):
+            assert seeded.get(key, {}).get("level", 1) <= 1
+        assert facilitation.OBSERVE_LEVEL == 1
 
     def test_prompts_carry_common_rules(self):
         """화자 비귀속·판정 문구 금지는 전 페르소나 공통 제약이다(§8)."""
@@ -2159,3 +2182,151 @@ class TestPriorMeetingContext:
         for k in ("critic", "fact_checker", "scribe", "domain_expert"):
             assert k not in prompt, f"금지된 {k} 가 프롬프트에 들어갔다"
         assert "이전 회의에서 정해진 것" not in prompt   # 쓸 사람이 없으면 재료도 없다
+
+
+class TestCandidateScopedEvidence:
+    """근거가 **지금 판정 중인 발화**를 따라가는가.
+
+    누적 상위 N(`collected_evidence`)만 쓰던 동안, 팩트체커는 30분 전 발화에서 올라온
+    노트를 근거로 방금 나온 수치를 "검증"했다 — 근거처럼 보이는 무관한 문단이다.
+    """
+
+    TEXT = "지난 회의 기록과 다릅니다. 확인이 필요합니다."
+
+    def _values(self, persona="fact_checker", level=3, **over):
+        values = {"facilitation.enabled": True,
+                  "facilitation.triage_period_sec": 600,
+                  "facilitation.max_cost_usd_per_meeting": 0.0,
+                  "facilitation.min_confidence": 0.6,
+                  "facilitation.max_interventions_per_session": 12}
+        for k in personas.PERSONAS:
+            values[f"facilitation.personas.{k}.level"] = 1
+        values[f"facilitation.personas.{persona}.level"] = level
+        values.update(over)
+        return values
+
+    def _llm(self, monkeypatch, cands, text=None):
+        calls = []
+
+        def _fake(model, system, user, max_tokens=None):
+            triage = "트리아지" in system
+            calls.append({"user": user, "triage": triage})
+            if triage:
+                return json.dumps(cands, ensure_ascii=False)
+            return text or self.TEXT
+
+        monkeypatch.setattr(facilitation, "_call_llm", _fake)
+        return calls
+
+    def _cand(self, persona="fact_checker", span="수율이 90%라고 하셨죠"):
+        return {"persona": persona, "trigger_type": "fact",
+                "confidence": 0.9, "span": span, "need_search": False}
+
+    def test_search_uses_the_candidate_span_not_the_window(
+            self, cfg, fac_db, monkeypatch):
+        """검색 쿼리는 후보의 span(그 주장 원문)이어야 한다 — 창 전체가 아니라."""
+        cfg(self._values())
+        calls = self._llm(monkeypatch, [self._cand()])
+        queried = []
+
+        def _search(text, limit=3):
+            queried.append((text, limit))
+            return [{"title": "수율 리포트", "filename": "notes/yield.md",
+                     "snippet": "3분기 수율 82%", "rank_score": 0.9,
+                     "source_type": "note"}]
+
+        shown = []
+        orch = FacilitationOrchestrator(session_id="cs1",
+                                        on_intervention=shown.append,
+                                        search_provider=_search)
+        _offer_and_drain(orch, ["아무튼 그래서 수율이 90%라고 하셨죠. 맞나요?"])
+
+        assert queried == [("수율이 90%라고 하셨죠", 3)]
+        assert shown[0]["evidence"][0]["title"] == "수율 리포트"
+        gen = [c for c in calls if not c["triage"]][0]
+        assert "3분기 수율 82%" in gen["user"]      # 대조할 재료가 프롬프트에 있다
+
+    def test_search_result_beats_the_accumulated_pool(
+            self, cfg, fac_db, monkeypatch):
+        """둘 다 있으면 후보에 맞춘 검색이 이긴다(누적은 폴백)."""
+        cfg(self._values())
+        self._llm(monkeypatch, [self._cand()])
+        shown = []
+        orch = FacilitationOrchestrator(
+            session_id="cs2", on_intervention=shown.append,
+            evidence_provider=lambda: [{"title": "30분 전 노트",
+                                        "filename": "old.md", "snippet": "…"}],
+            search_provider=lambda t, limit=3: [
+                {"title": "지금 노트", "filename": "now.md", "snippet": "…",
+                 "source_type": "note"}])
+        _offer_and_drain(orch, ["수율이 90%라고 하셨죠"])
+        assert [e["title"] for e in shown[0]["evidence"]] == ["지금 노트"]
+
+    def test_empty_search_falls_back_to_the_pool(self, cfg, fac_db, monkeypatch):
+        """검색 0건이 곧 침묵이 되면 안 된다 — 근거 필수 페르소나가 조용히 사라진다."""
+        cfg(self._values())
+        self._llm(monkeypatch, [self._cand()])
+        shown = []
+        orch = FacilitationOrchestrator(
+            session_id="cs3", on_intervention=shown.append,
+            evidence_provider=lambda: [{"title": "누적 노트", "filename": "p.md",
+                                        "snippet": "…"}],
+            search_provider=lambda t, limit=3: [])
+        _offer_and_drain(orch, ["수율이 90%라고 하셨죠"])
+        assert [e["title"] for e in shown[0]["evidence"]] == ["누적 노트"]
+
+    def test_broken_search_falls_back_and_keeps_the_stream(
+            self, cfg, fac_db, monkeypatch):
+        cfg(self._values())
+        self._llm(monkeypatch, [self._cand()])
+
+        def _boom(text, limit=3):
+            raise RuntimeError("인덱스 깨짐")
+
+        shown = []
+        orch = FacilitationOrchestrator(
+            session_id="cs4", on_intervention=shown.append,
+            evidence_provider=lambda: [{"title": "누적 노트", "filename": "p.md",
+                                        "snippet": "…"}],
+            search_provider=_boom)
+        _offer_and_drain(orch, ["수율이 90%라고 하셨죠"])
+        assert [e["title"] for e in shown[0]["evidence"]] == ["누적 노트"]
+
+    def test_paper_source_is_carried_into_the_card(self, cfg, fac_db, monkeypatch):
+        """논문 근거는 카드에서도 논문으로 보여야 한다 — 출처가 뭉개지면 §6-5 위반."""
+        cfg(self._values())
+        calls = self._llm(monkeypatch, [self._cand()])
+        shown = []
+        orch = FacilitationOrchestrator(
+            session_id="cs5", on_intervention=shown.append,
+            search_provider=lambda t, limit=3: [
+                {"title": "Nature 2024", "filename": "02_이론_학습/n.md",
+                 "snippet": "coherence 100us", "source_type": "paper"}])
+        _offer_and_drain(orch, ["수율이 90%라고 하셨죠"])
+        assert shown[0]["evidence"][0]["source"] == "paper"
+        gen = [c for c in calls if not c["triage"]][0]
+        assert "[paper] Nature 2024" in gen["user"]
+
+    def test_dialog_only_persona_never_searches(self, cfg, fac_db, monkeypatch):
+        """근거 소스에 vault 가 없는 페르소나는 검색을 부르지 않는다(돈·지연 0)."""
+        cfg(self._values(persona="facilitator"))
+        self._llm(monkeypatch, [self._cand(persona="facilitator")])
+        queried = []
+        shown = []
+        orch = FacilitationOrchestrator(
+            session_id="cs6", on_intervention=shown.append,
+            search_provider=lambda t, limit=3: queried.append(t) or [])
+        _offer_and_drain(orch, ["수율이 90%라고 하셨죠"])
+        assert len(shown) == 1 and shown[0]["evidence"] == []
+        assert queried == []
+
+    def test_triage_path_does_not_search(self, cfg, fac_db, monkeypatch):
+        """상시 경로(트리아지)에는 검색을 붙이지 않는다 — 25초마다 도는 자리다."""
+        cfg(self._values())
+        self._llm(monkeypatch, [])          # 후보 0건 → 생성 없음
+        queried = []
+        orch = FacilitationOrchestrator(
+            session_id="cs7", on_intervention=lambda i: None,
+            search_provider=lambda t, limit=3: queried.append(t) or [])
+        _offer_and_drain(orch, ["수율이 90%라고 하셨죠"])
+        assert queried == []

@@ -298,6 +298,11 @@ def stop_other_instances(data_dir, log=print, wait_sec: float = 12.0) -> dict:
         if verdict == "busy":
             log(f"  [실행 중] 진행 중인 회의가 있어 종료하지 않았습니다 — "
                 f"http://localhost:{port} (데이터 폴더: {where})")
+            # 탈출구를 함께 적는다. 살아 있지만 먹통인 서버에 오래된 `processing` 행이
+            # 남아 있으면 이 판정이 계속 참이 되어 새 인스턴스가 영구히 못 뜬다 —
+            # 그때는 화면의 [앱 종료] 가 409 를 받고 사용자 확인 후 force 로 내려간다.
+            log("             회의가 끝나기를 기다리거나, 그 창의 [설정] → [앱 종료] 로 "
+                "종료하세요.")
             busy = dict(row)
             survivors.append(row)
             continue

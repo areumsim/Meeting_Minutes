@@ -9,7 +9,7 @@ import {
   getCostRates, getConfig, type CostRates,
 } from "../lib/api";
 import { MODE_PRESETS, type Facilitation, type FacilitationStatus, type RealtimeSegment } from "../lib/types";
-import ModeSelector from "./ModeSelector";
+import ModePanel from "../screens/create/ModePanel";
 import PersonaPanel from "../ui/PersonaPanel";
 import { KeepAwake } from '@capacitor-community/keep-awake';
 import { Haptics, ImpactStyle, NotificationType } from '@capacitor/haptics';
@@ -1757,7 +1757,7 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
                     </div>
                   </div>
 
-                  <ModeSelector
+                  <ModePanel
                     modeNum={modeNum}
                     onChange={setModeNum}
                     disabled={isRecording}

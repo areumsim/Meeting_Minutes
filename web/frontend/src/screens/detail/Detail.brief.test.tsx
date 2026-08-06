@@ -26,14 +26,14 @@ const api = vi.hoisted(() => ({
   getSessionRelatedNotes: vi.fn(),
 }));
 
-vi.mock("../lib/api", () => api);
+vi.mock("../../lib/api", () => api);
 vi.mock("@capacitor/share", () => ({ Share: { share: vi.fn() } }));
-vi.mock("../ui/GraphView", () => ({ default: () => null }));
+vi.mock("../../ui/GraphView", () => ({ default: () => null, GraphNodeList: () => null }));
 vi.mock("motion/react", () => ({
   motion: new Proxy({}, { get: () => (p: any) => <div {...p} /> }),
 }));
 
-import SessionDetail from "./SessionDetail";
+import Detail from "./Detail";
 
 const BRIEF_MD = "# 중간 정리 (회의 중 자동 요약)\n\n## 1. 자동 정리 · 10:00\n**결정**\n- 9월 1일 확정\n";
 
@@ -54,15 +54,15 @@ function mockSession(documents: any[]) {
 const doc = (type: string, content = "본문") =>
   ({ id: type, session_id: "s1", type, content, format: "markdown" });
 
-describe("SessionDetail — 중간 정리 탭", () => {
+describe("회의 상세 — 중간 정리 탭", () => {
   beforeEach(() => vi.clearAllMocks());
 
   it("brief 문서가 있으면 탭이 뜨고 내용을 보여준다", async () => {
     const user = userEvent.setup();
     mockSession([doc("minutes"), doc("brief", BRIEF_MD)]);
-    render(<SessionDetail id="s1" onBack={vi.fn()} />);
+    render(<Detail id="s1" onBack={vi.fn()} />);
 
-    const tab = await screen.findByRole("button", { name: /중간 정리/ });
+    const tab = await screen.findByRole("tab", { name: /중간 정리/ });
     await user.click(tab);
     await waitFor(() =>
       expect(screen.getByText(/9월 1일 확정/)).toBeInTheDocument());
@@ -70,8 +70,8 @@ describe("SessionDetail — 중간 정리 탭", () => {
 
   it("brief 문서가 없으면 탭 자체가 생기지 않는다", async () => {
     mockSession([doc("minutes")]);
-    render(<SessionDetail id="s1" onBack={vi.fn()} />);
-    await screen.findByRole("button", { name: /회의록/ });
-    expect(screen.queryByRole("button", { name: /중간 정리/ })).toBeNull();
+    render(<Detail id="s1" onBack={vi.fn()} />);
+    await screen.findByRole("tab", { name: /회의록/ });
+    expect(screen.queryByRole("tab", { name: /중간 정리/ })).toBeNull();
   });
 });

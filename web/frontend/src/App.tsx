@@ -18,9 +18,9 @@ import { getApiKey, getConfig, isPackagedMode } from "./lib/api";
 
 // 초기 로딩 번들을 줄이기 위해 라이브러리(기본 화면)·온보딩 외 뷰는 지연 로드.
 const Recorder = lazy(() => import("./components/Recorder"));
-const SessionDetail = lazy(() => import("./components/SessionDetail"));
-const FileUpload = lazy(() => import("./components/FileUpload"));
-const TextInput = lazy(() => import("./components/TextInput"));
+const Detail = lazy(() => import("./screens/detail/Detail"));
+const UploadForm = lazy(() => import("./screens/create/UploadForm"));
+const TextForm = lazy(() => import("./screens/create/TextForm"));
 const WikiAsk = lazy(() => import("./components/WikiAsk"));
 const PrepBrief = lazy(() => import("./components/PrepBrief"));
 const Help = lazy(() => import("./components/Help"));
@@ -241,8 +241,8 @@ export default function App() {
               {createTab === "record" && (
                 <Recorder onComplete={openDetail} onExit={() => go({ view: "library" })} />
               )}
-              {createTab === "upload" && <FileUpload onComplete={openDetail} />}
-              {createTab === "text" && <TextInput onComplete={openDetail} />}
+              {createTab === "upload" && <UploadForm onComplete={openDetail} />}
+              {createTab === "text" && <TextForm onComplete={openDetail} />}
             </>
           )}
 
@@ -269,7 +269,7 @@ export default function App() {
             <Help onNavigate={(t) => go(LEGACY_TARGET[t] || { view: "library" })} />
           )}
           {view === "detail" && selectedSessionId && (
-            <SessionDetail id={selectedSessionId} onBack={() => go({ view: "library" })}
+            <Detail id={selectedSessionId} onBack={() => go({ view: "library" })}
               onOpenGraph={openGraph} />
           )}
         </Suspense>

@@ -171,21 +171,36 @@ def main():
         # 0.0.0.0 바인딩이 남의 127.0.0.1 바인딩과 공존해 버려서, 브라우저(localhost)는
         # 남의 앱을 보고 이 서버는 요청을 못 받는 상태가 된다 — 데이터 폴더가 다른 두
         # 인스턴스일 때 "내 설정이 사라졌다"로 오해하게 만든 원인이다(server_launch 참고).
-        # 같은 데이터 폴더에 두 번째 서버를 띄우지 않는다(포터블 런처와 같은 함수).
-        # 포트 검사로는 부족하다 — 아래 find_free_port 가 점유 시 다른 포트로 옮기므로
-        # 첫 인스턴스가 이미 랜덤 포트에 있을 수 있다. 겹치면 안 되는 자원은 포트가 아니라
-        # 데이터 폴더(SQLite·config·워처 상태)다.
+        # 이제 그 폴백은 **남의 프로그램**이 8501 을 쥔 경우에만 발동한다 — 우리 인스턴스는
+        # 아래에서 먼저 내리기 때문이다.
         _data_base = app_paths.get_base_dir()
+        # 이 런처를 눌렀다 = "지금 이걸 쓰겠다". 앞서 떠 있던 인스턴스(포터블이든 소스든)를
+        # 끄고 자리를 넘겨받는다 — 그래야 주소가 8501 하나로 고정된다. 창을 닫아도 서버가
+        # 남는 일이 있어(콘솔 종료가 손자 프로세스까지 못 죽인다) 어제 띄운 서버가 오늘
+        # 8501 을 쥐고 있는 상황이 실제로 반복됐다. 유일한 예외는 진행 중 회의다.
+        _takeover = server_launch.stop_other_instances(_data_base)
+        if _takeover.get("busy"):
+            _busy_port = _takeover["busy"].get("port")
+            print(f"\n  [알림] 진행 중인 회의가 있는 인스턴스가 떠 있어 그대로 두었습니다.")
+            if _busy_port:
+                print(f"         기존 창을 엽니다 — http://localhost:{_busy_port}")
+                webbrowser.open(f"http://localhost:{_busy_port}")
+            sys.exit(0)
+
         running = server_launch.acquire_instance_lock(_data_base)
         if running is not None:
+            # 자동 종료가 실패했을 때의 마지막 방어선(두 서버가 같은 폴더에 뜨면 워처가
+            # 중복 과금하고 진행 중 세션이 error 로 표시된다).
             other_port = running.get("port")
-            print(f"\n  [오류] 같은 데이터 폴더로 이미 실행 중입니다: {_data_base}")
+            print(f"\n  [오류] 같은 데이터 폴더로 이미 실행 중이고 자동 종료도 실패했습니다: {_data_base}")
             if other_port:
                 print(f"         기존 인스턴스: http://localhost:{other_port}")
-            print("         두 개가 함께 돌면 워처가 같은 파일을 중복 처리하고 "
-                  "진행 중 세션이 error 로 표시됩니다.")
+            print("         작업관리자에서 python/pythonw 를 종료한 뒤 다시 실행하세요.")
             sys.exit(1)
 
+        # 방금 내린 인스턴스가 쥐고 있던 포트가 닫히기를 기다린다 — 안 기다리면
+        # find_free_port 가 '점유'로 보고 또 랜덤 포트로 옮겨 앉는다.
+        server_launch.wait_port_free(args.port)
         port = server_launch.find_free_port(args.port)
         server_launch.publish_instance_port(_data_base, port)
         if port != args.port:

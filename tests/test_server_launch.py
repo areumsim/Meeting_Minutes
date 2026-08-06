@@ -419,3 +419,116 @@ class TestInstanceLock:
             first.close()
         finally:
             sl._LOCK_FH = None
+
+
+# ━━━━━━━━ 이전 인스턴스 자동 종료(한 번에 하나만) ━━━━━━━━
+
+class TestTakeover:
+    """런처를 누르면 앞서 떠 있던 인스턴스를 끄고 자리를 넘겨받는다.
+
+    왜 필요했나(2026-08-06 실사용): 창을 X 로 닫아도 서버가 남아(콘솔 종료가 손자
+    프로세스까지 죽이지 못한다) **어제 띄운 서버가 다음 날까지 8501 을 쥐고 있었다**.
+    락은 데이터 폴더 단위라 포터블(자기 폴더)과 소스(리포 루트)는 서로를 중복으로 보지
+    못하고, 뒤에 뜬 쪽은 `find_free_port` 로 랜덤 포트(실측 2810)에 앉아 주소가 매번
+    바뀌었다. 그래서 머신 단위 목록으로 서로를 찾아 끈다.
+
+    끄지 않는 경우는 하나뿐이다 — **진행 중인 회의**(`/api/shutdown` 이 409 로 알린다).
+    자동으로 죽이면 그 회의의 회의록이 만들어지지 않는다.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _registry_in_tmp(self, tmp_path, monkeypatch):
+        """레지스트리를 임시 폴더로 — **사용자의 실제 목록을 건드리지 않는다**
+        (지금 돌고 있는 앱을 테스트가 종료시키면 안 된다)."""
+        monkeypatch.setattr(sl, "_registry_path",
+                            lambda: tmp_path / "instances.json")
+
+    def test_register_then_stop_kills_previous(self, monkeypatch):
+        """등록된 이전 인스턴스에 정상 종료를 요청하고, 죽은 것을 확인한다."""
+        sl._write_registry([{"pid": 4242, "port": 8501, "data_dir": "C:/old"}])
+        asked = []
+        monkeypatch.setattr(sl, "pid_alive", lambda pid: pid == 4242 and not asked)
+        monkeypatch.setattr(sl, "_request_shutdown",
+                            lambda port, timeout=3.0: asked.append(port) or "ok")
+
+        report = sl.stop_other_instances("C:/new", log=lambda *_: None)
+
+        assert asked == [8501]                      # 정상 종료를 먼저 요청했다
+        assert [r["pid"] for r in report["stopped"]] == [4242]
+        assert report["busy"] is None
+        assert sl._read_registry() == []            # 목록에서 정리됐다
+
+    def test_busy_instance_is_left_alone(self, monkeypatch):
+        """진행 중 회의(409)면 끄지 않고 busy 로 알린다 — 호출부가 기존 창을 연다."""
+        sl._write_registry([{"pid": 77, "port": 9000, "data_dir": "C:/rec"}])
+        monkeypatch.setattr(sl, "pid_alive", lambda pid: True)
+        monkeypatch.setattr(sl, "_request_shutdown", lambda *a, **k: "busy")
+        killed = []
+        monkeypatch.setattr(sl, "_terminate", lambda pid: killed.append(pid) or True)
+
+        report = sl.stop_other_instances("C:/new", log=lambda *_: None)
+
+        assert killed == []                         # 강제 종료도 하지 않는다
+        assert report["stopped"] == []
+        assert report["busy"]["port"] == 9000
+        assert sl._read_registry()[0]["pid"] == 77  # 목록에 남는다
+
+    def test_unresponsive_instance_is_force_killed(self, monkeypatch):
+        """응답이 없으면(포트가 바뀌었거나 매달림) pid 로 강제 종료한다."""
+        sl._write_registry([{"pid": 99, "port": 8501, "data_dir": "C:/zombie"}])
+        killed = []
+        monkeypatch.setattr(sl, "_request_shutdown", lambda *a, **k: "fail")
+        monkeypatch.setattr(sl, "pid_alive", lambda pid: not killed)
+        monkeypatch.setattr(sl, "_terminate", lambda pid: killed.append(pid) or True)
+
+        report = sl.stop_other_instances("C:/new", log=lambda *_: None)
+
+        assert killed == [99]
+        assert [r["pid"] for r in report["stopped"]] == [99]
+
+    def test_dead_entries_are_ignored(self, monkeypatch):
+        """이미 죽은 항목에는 종료 요청을 보내지 않는다(엉뚱한 pid 를 죽이면 안 된다)."""
+        sl._write_registry([{"pid": 123456789, "port": 8501, "data_dir": "C:/gone"}])
+        monkeypatch.setattr(sl, "pid_alive", lambda pid: False)
+        asked = []
+        monkeypatch.setattr(sl, "_request_shutdown",
+                            lambda *a, **k: asked.append(1) or "ok")
+
+        report = sl.stop_other_instances("C:/new", log=lambda *_: None)
+
+        assert asked == []
+        assert report == {"stopped": [], "busy": None}
+
+    def test_never_targets_self(self, monkeypatch):
+        """자기 pid 는 절대 대상이 아니다 — 런처가 자신을 끄면 앱이 안 뜬다."""
+        import os
+        sl._write_registry([{"pid": os.getpid(), "port": 8501, "data_dir": "C:/me"}])
+        asked = []
+        monkeypatch.setattr(sl, "_request_shutdown",
+                            lambda *a, **k: asked.append(1) or "ok")
+
+        report = sl.stop_other_instances("C:/me", log=lambda *_: None)
+
+        assert asked == []
+        assert report["busy"] is None
+        assert sl.pid_alive(os.getpid()) is False   # 같은 이유로 pid_alive 도 자기를 뺀다
+
+    def test_publish_port_registers_for_cross_folder_discovery(self, tmp_path):
+        """포터블·소스가 서로를 찾을 수 있게, 포트 공개가 머신 목록에도 남긴다."""
+        import os
+        sl.publish_instance_port(tmp_path, 8501)
+        rows = sl._read_registry()
+        assert [(r["pid"], r["port"]) for r in rows] == [(os.getpid(), 8501)]
+        assert rows[0]["data_dir"] == str(tmp_path)
+
+    def test_registry_holds_no_secrets(self, tmp_path):
+        """목록에 담기는 것은 좌표뿐이다(비밀·설정 내용은 넣지 않는다)."""
+        sl.publish_instance_port(tmp_path, 8501)
+        assert set(sl._read_registry()[0]) == {"pid", "port", "data_dir"}
+
+    def test_corrupt_registry_does_not_block_launch(self, tmp_path):
+        """목록이 깨져 있어도 앱은 떠야 한다 — 자동 종료만 못 하게 될 뿐."""
+        (tmp_path / "instances.json").write_text("{not json", encoding="utf-8")
+        assert sl._read_registry() == []
+        assert sl.stop_other_instances("C:/new", log=lambda *_: None) == {
+            "stopped": [], "busy": None}

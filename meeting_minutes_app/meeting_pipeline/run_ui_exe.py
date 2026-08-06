@@ -108,15 +108,27 @@ def main():
     # 과거엔 이 파일에만 있어 소스 런처가 8501 고정 + 바인딩 전 브라우저 열기로 갈라졌다.
     from meeting_minutes_app.common import server_launch
 
-    # 같은 데이터 폴더에 두 번째 서버를 띄우지 않는다. find_free_port 가 점유 시 조용히
-    # 다른 포트로 옮기기 때문에, 예전에는 런처를 두 번 실행하면 서버가 둘 다 떴다:
+    # 서버가 둘 뜨면 안 되는 이유(락과 자동 종료가 함께 막는 것):
     #   ① 워처가 둘이 되어 같은 파일을 중복 처리(중복 과금) + 상태 파일 lost update
     #   ② 두 번째 인스턴스의 init_db() 가 첫 인스턴스의 진행 중 세션을 error 로 표시
-    # 사용자는 앱을 열려고 두 번 누른 것이므로 **원래 창을 열어 주고** 조용히 끝낸다.
+    # 이 런처를 눌렀다 = "지금 이걸 쓰겠다". 앞서 떠 있던 인스턴스(소스 실행이든 다른
+    # 포터블이든)를 끄고 자리를 넘겨받아 주소를 8501 하나로 고정한다. 소스 런처와 **같은
+    # 함수**를 쓴다 — 이 판정이 두 곳에 복사되면 한쪽만 고쳐져 갈라진다.
+    takeover = server_launch.stop_other_instances(data_base)
+    if takeover.get("busy"):
+        busy_port = takeover["busy"].get("port")
+        print("  진행 중인 회의가 있는 인스턴스가 떠 있어 그대로 두었습니다.")
+        if busy_port and not args.no_browser:
+            print(f"  기존 창을 엽니다 — http://localhost:{busy_port}")
+            import webbrowser
+            webbrowser.open(f"http://localhost:{busy_port}")
+        return
+
     running = server_launch.acquire_instance_lock(data_base)
     if running is not None:
+        # 자동 종료가 실패했을 때의 마지막 방어선(위 ①②).
         other_port = running.get("port")
-        print(f"  이미 실행 중입니다 (데이터 폴더: {data_base}).")
+        print(f"  이미 실행 중이고 자동 종료도 실패했습니다 (데이터 폴더: {data_base}).")
         if other_port and not args.no_browser:
             print(f"  기존 창을 엽니다 — http://localhost:{other_port}")
             import webbrowser
@@ -126,6 +138,7 @@ def main():
                   "MeetingMinutes 를 종료한 뒤 다시 실행하세요.")
         return
 
+    server_launch.wait_port_free(args.port)   # 방금 내린 포트가 닫히기를 기다린다
     port = server_launch.find_free_port(args.port)
     server_launch.publish_instance_port(data_base, port)
 

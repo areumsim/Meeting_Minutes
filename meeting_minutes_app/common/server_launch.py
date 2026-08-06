@@ -28,6 +28,7 @@ from __future__ import annotations
 import socket
 import threading
 import time
+import urllib.error
 import urllib.request
 import webbrowser
 from typing import Optional
@@ -129,6 +130,9 @@ def publish_instance_port(data_dir, port: int) -> None:
 
     두 번째 인스턴스가 "이미 실행 중"을 알리는 것만으로는 부족하다 — 사용자는 앱을 열려고
     두 번 누른 것이므로, **원래 창을 열어 주는 것**이 기대에 맞다. 그 주소가 여기서 온다.
+
+    같은 값을 머신 단위 목록에도 남긴다(`_register_instance`) — 데이터 폴더가 다른
+    인스턴스는 이 파일로 서로를 찾을 수 없기 때문이다(`stop_other_instances` 참고).
     """
     import json
     import os
@@ -140,6 +144,202 @@ def publish_instance_port(data_dir, port: int) -> None:
             encoding="utf-8")
     except OSError:
         pass
+    _register_instance(data_dir, port)
+
+
+# ── 이전 인스턴스 자동 종료(한 번에 하나만) ──────────
+#
+# 정책: **어느 런처를 눌러도 앞서 떠 있던 인스턴스를 끄고 새로 뜬다.** 그래서 주소가
+# 항상 8501 하나로 고정된다(`find_free_port` 의 랜덤 폴백은 남의 프로그램이 8501 을
+# 쥐고 있는 경우에만 발동한다).
+#
+# 왜 데이터 폴더 락만으로는 안 되는가 — 락은 **폴더 단위**라 포터블(자기 폴더의
+# MeetingMinutesData)과 소스(리포 루트)는 서로를 중복으로 보지 않는다. 포트로 찾는 것도
+# 안 된다: 8501 이 점유돼 있으면 첫 인스턴스가 **랜덤 포트**로 옮겨 앉기 때문이다
+# (실제로 포터블이 2810 에 떠 있었다). 그래서 머신 단위 목록을 따로 둔다.
+#
+# 이 목록에는 **비밀을 넣지 않는다** — pid·port·데이터 폴더 경로뿐이다. 포터블이 자기
+# 폴더만 쓴다는 격리 원칙은 '개인 키가 배포본에 섞이지 않게'가 목적이므로, 프로세스
+# 좌표를 사용자 프로필에 두는 것과 상충하지 않는다.
+_REGISTRY_DIRNAME = "MeetingMinutes"
+_REGISTRY_NAME = "instances.json"
+
+
+def _registry_path():
+    """머신(사용자) 단위 인스턴스 목록. LOCALAPPDATA 가 없으면 TEMP."""
+    import os
+    import tempfile
+    from pathlib import Path
+
+    base = os.environ.get("LOCALAPPDATA") or tempfile.gettempdir()
+    return Path(base) / _REGISTRY_DIRNAME / _REGISTRY_NAME
+
+
+def _read_registry() -> list:
+    import json
+
+    try:
+        raw = _registry_path().read_text(encoding="utf-8")
+        rows = json.loads(raw)
+    except (OSError, ValueError):
+        return []
+    return [r for r in rows if isinstance(r, dict)] if isinstance(rows, list) else []
+
+
+def _write_registry(rows: list) -> None:
+    import json
+
+    path = _registry_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(rows, ensure_ascii=False), encoding="utf-8")
+    except OSError:
+        pass          # 목록을 못 써도 앱은 떠야 한다(자동 종료만 못 하게 될 뿐)
+
+
+def _register_instance(data_dir, port: int) -> None:
+    """이 프로세스를 목록에 올린다. 죽은 항목은 이때 함께 청소한다."""
+    import os
+
+    me = os.getpid()
+    rows = [r for r in _read_registry()
+            if r.get("pid") != me and pid_alive(r.get("pid"))]
+    rows.append({"pid": me, "port": int(port), "data_dir": str(data_dir)})
+    _write_registry(rows)
+
+
+def pid_alive(pid) -> bool:
+    """그 pid 가 아직 살아 있나. 신호 0 은 존재 확인만 하고 아무 것도 보내지 않는다."""
+    import os
+
+    try:
+        pid = int(pid)
+    except (TypeError, ValueError):
+        return False
+    if pid <= 0 or pid == os.getpid():
+        return False
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True            # 있지만 우리 권한으로는 못 건드린다
+    except OSError:
+        # Windows 는 좀비/종료 중인 핸들에도 OSError 를 낼 수 있다 — 없는 것으로 본다.
+        return False
+
+
+def _request_shutdown(port: int, timeout: float = 3.0) -> str:
+    """그 인스턴스에 정상 종료를 요청한다. 'ok' | 'busy' | 'fail'.
+
+    **강제 종료보다 이 경로를 먼저 쓴다.** `/api/shutdown` 은 두 가지를 해 준다:
+      ① 진행 중 회의가 있으면 409 로 거절한다(우리는 그걸 'busy' 로 받아 종료를 포기한다).
+      ② uvicorn lifespan 을 태워 실시간 세션 정리(스레드풀·tmpdir)와 DB 커밋을 끝낸다.
+    강제 종료는 ②를 건너뛰므로 진행 중이던 세션이 `processing` 으로 영구 고착된다.
+    """
+    import json
+
+    url = f"http://{LOOPBACK}:{int(port)}/api/shutdown"
+    req = urllib.request.Request(url, data=b"", method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return "ok" if resp.status == 200 else "fail"
+    except urllib.error.HTTPError as e:
+        if e.code == 409:
+            return "busy"
+        return "fail"
+    except Exception:
+        return "fail"
+
+
+def _terminate(pid) -> bool:
+    """마지막 수단. Windows 에서 SIGTERM 은 강제 종료라 정리 훅이 돌지 않는다."""
+    import os
+    import signal
+
+    try:
+        os.kill(int(pid), getattr(signal, "SIGTERM", 15))
+        return True
+    except Exception:
+        return False
+
+
+def stop_other_instances(data_dir, log=print, wait_sec: float = 12.0) -> dict:
+    """앞서 떠 있던 이 앱의 인스턴스를 모두 끈다. 락을 잡기 **전에** 부른다.
+
+    반환: `{"stopped": [...], "busy": {...}|None}`
+      · `stopped` — 실제로 내린 인스턴스들(안내용).
+      · `busy`    — **진행 중 회의가 있어 끄지 않은** 인스턴스. 있으면 호출부는 새로
+        띄우지 말고 그 창을 열어 준다. "새로 켜면 이전 것을 끈다"의 **유일한 예외**다 —
+        녹음·처리 중인 회의를 자동으로 죽이면 사용자가 그 회의를 잃는다(회의록 생성이
+        돌지 않고, 그 판정은 이미 `/api/shutdown` 안에 있다).
+
+    같은 데이터 폴더의 중복도 이 경로로 처리된다 — 종전엔 "이미 실행 중"이라며 새 실행을
+    거절했는데(락), 사용자가 런처를 다시 누른 의도는 '지금 것을 쓰겠다'이므로 새 쪽을
+    살린다. 락은 그대로 남겨 둔다: 이 함수가 실패했을 때 두 서버가 같은 폴더에 뜨는 것을
+    막는 마지막 방어선이다(워처 중복 과금·진행 중 세션 error 표시).
+    """
+    import os
+
+    me = os.getpid()
+    rows = _read_registry()
+    stopped: list = []
+    busy = None
+    survivors: list = []
+
+    for row in rows:
+        pid = row.get("pid")
+        if pid == me or not pid_alive(pid):
+            continue                      # 이미 죽은 항목은 목록에서 흘려보낸다
+        port = row.get("port")
+        where = row.get("data_dir") or "?"
+        verdict = _request_shutdown(port) if port else "fail"
+        if verdict == "busy":
+            log(f"  [실행 중] 진행 중인 회의가 있어 종료하지 않았습니다 — "
+                f"http://localhost:{port} (데이터 폴더: {where})")
+            busy = dict(row)
+            survivors.append(row)
+            continue
+        if verdict == "ok":
+            log(f"  [정리] 이전 인스턴스를 종료했습니다 — "
+                f"http://localhost:{port} (데이터 폴더: {where})")
+        else:
+            # 응답이 없다(다른 포트로 옮겼거나 이미 응답 불가). 좌표는 남아 있으니 강제로.
+            log(f"  [정리] 응답하지 않는 이전 인스턴스를 강제 종료합니다 — pid {pid}")
+            _terminate(pid)
+        if _wait_pid_gone(pid, wait_sec):
+            stopped.append(row)
+        else:
+            log(f"  [경고] pid {pid} 가 아직 살아 있습니다 — 작업관리자에서 종료하세요.")
+            survivors.append(row)
+
+    if stopped:
+        _write_registry([r for r in survivors if pid_alive(r.get("pid"))])
+    return {"stopped": stopped, "busy": busy}
+
+
+def _wait_pid_gone(pid, timeout: float) -> bool:
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if not pid_alive(pid):
+            return True
+        time.sleep(0.2)
+    return not pid_alive(pid)
+
+
+def wait_port_free(port: int, timeout: float = 5.0) -> bool:
+    """그 포트가 비워질 때까지 기다린다 — 방금 내린 인스턴스가 쥐고 있던 포트다.
+
+    이게 없으면 종료 직후 `find_free_port` 가 아직 닫히는 중인 8501 을 '점유'로 보고
+    랜덤 포트로 옮겨 앉는다. 그러면 이전 것을 끈 보람 없이 주소가 또 바뀐다.
+    """
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if is_port_free(port):
+            return True
+        time.sleep(0.2)
+    return is_port_free(port)
 
 
 def lan_access_enabled() -> bool:

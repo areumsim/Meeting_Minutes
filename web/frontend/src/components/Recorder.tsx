@@ -1,9 +1,5 @@
 ﻿import React, { useState, useEffect, useRef, useCallback } from "react";
-import {
-  Mic, Square, Play, Pause, Loader2, Volume2,
-  Activity, Settings2, User, ChevronDown, Info, BookOpen,
-} from "lucide-react";
-import { motion, AnimatePresence } from "motion/react";
+import { Mic, Square, Play, Pause, ChevronDown } from "lucide-react";
 import {
   createRealtimeWS, backendAvailable, createBackendRealtimeWS, mirrorServerSession,
   getCostRates, getConfig, type CostRates,
@@ -11,6 +7,14 @@ import {
 import { MODE_PRESETS, type Facilitation, type FacilitationStatus, type RealtimeSegment } from "../lib/types";
 import ModePanel from "../screens/create/ModePanel";
 import PersonaPanel from "../ui/PersonaPanel";
+import Inspector from "../ui/Inspector";
+import { Button } from "../ui/Button";
+import { Banner } from "../ui/Banner";
+import { StatusPill } from "../ui/StatusPill";
+import { Field, Select, Textarea, TextField } from "../ui/Field";
+import RecordingHeader from "../screens/recording/RecordingHeader";
+import TranscriptPanel, { type ViewMode } from "../screens/recording/TranscriptPanel";
+import RelatedNotesTab from "../screens/recording/RelatedNotesTab";
 import { KeepAwake } from '@capacitor-community/keep-awake';
 import { Haptics, ImpactStyle, NotificationType } from '@capacitor/haptics';
 
@@ -50,11 +54,13 @@ function sortRelated(notes: RelatedNote[]): RelatedNote[] {
 
 // 음성 인식(STT) 모델 선택지 — config_schema의 models.stt 옵션과 동일하게 유지.
 // 녹음 화면에서 '이번 녹음만' 임시로 바꿀 수 있게 노출한다(설정 기본값은 그대로).
+// 라벨은 **평문**이다 — 모델 ID 는 화면에 노출하지 않는다(PRD §10 부록 A). 값은 그대로라
+// 서버 계약(config.models.stt)은 바뀌지 않는다.
 const STT_OPTIONS: { value: string; label: string }[] = [
-  { value: "gpt-4o-mini-transcribe", label: "gpt-4o-mini-transcribe — 저렴·빠름" },
-  { value: "gpt-4o-transcribe", label: "gpt-4o-transcribe — 고정확" },
-  { value: "gpt-4o-transcribe-diarize", label: "gpt-4o-transcribe-diarize — 화자분리(실시간은 자동 전환)" },
-  { value: "whisper-1", label: "whisper-1 — 구형·안정" },
+  { value: "gpt-4o-mini-transcribe", label: "저렴·빠름 (기본)" },
+  { value: "gpt-4o-transcribe", label: "고정확" },
+  { value: "gpt-4o-transcribe-diarize", label: "화자 구분 (실시간에서는 자동 전환)" },
+  { value: "whisper-1", label: "구형·안정" },
 ];
 
 // ── 소리를 어떻게 잡을지 ─────────────────────────────────────────────
@@ -121,7 +127,10 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
   const [volume, setVolume] = useState(0);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [wsStatus, setWsStatus] = useState<string>("");
-  const [costOpen, setCostOpen] = useState(false);   // 러닝 미터 내역 펼침(터치·키보드 대응)
+  // 전사 표시 토글(FR-REC-4) — 서버 동작과 무관한 화면 상태다.
+  const [viewMode, setViewMode] = useState<ViewMode>("both");
+  // 인스펙터 탭(FR-REC-6) — 관련 노트 / 진행 도우미. 한 번에 하나만 본다.
+  const [inspectorTab, setInspectorTab] = useState<"notes" | "personas">("notes");
   // WebSocket 실시간 전사가 안 돼 HTTP 청크 방식으로 자동 전환됐는지 여부.
   // (에러가 아니라 정상 폴백이므로 사용자에게 안내로만 노출한다.)
   const [httpFallback, setHttpFallback] = useState(false);
@@ -1307,7 +1316,8 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
        setWsStatus("세션 저장에 실패했습니다.");
     });
   };
-  stopRecordingRef.current = stopRecording;
+  // 렌더 중 ref 대입은 부수효과다 — 효과로 옮긴다(동작 동일, StrictMode 안전).
+  useEffect(() => { stopRecordingRef.current = stopRecording; });
 
   // 저장하지 않고 취소 — 서버에 cancel을 보내 세션을 삭제시키고 즉시 새 녹음 가능 상태로.
   const cancelRecording = () => {
@@ -1360,694 +1370,235 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
     setStatus("idle");
   };
 
-  const formatDuration = (s: number) => {
-    const hrs = Math.floor(s / 3600);
-    const mins = Math.floor((s % 3600) / 60);
-    const secs = s % 60;
-    return `${hrs > 0 ? hrs.toString().padStart(2, "0") + ":" : ""}${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
-  };
-
-  const formatTimestamp = (s: number) => {
-    if (s < 0) return "Live";
-    const mins = Math.floor(s / 60);
-    const secs = Math.floor(s % 60);
-    return `${mins.toString().padStart(2, "0")}:${secs.toString().padStart(2, "0")}`;
-  };
+  // 시계 표기는 lib/format.formatClock 하나를 쓴다 — 여기 있던 지역 formatDuration 은
+  // lib 의 같은 이름 함수와 결과가 달랐고(HH:MM:SS vs "3m 20s"), formatTimestamp 는
+  // 호출부가 0건인 죽은 코드였다.
 
   const preset = MODE_PRESETS[modeNum] || MODE_PRESETS[2];
 
   const soundDetected = isRecording && !isPaused && soundActive;
 
+  // 인스펙터 탭 개수 — 접었을 때도 숫자가 남아야 미확인 항목이 조용히 사라지지 않는다.
+  const inspectorTabs = [
+    { key: "notes" as const, label: "관련 노트", count: relatedNotes.length },
+    { key: "personas" as const, label: "진행 도우미", count: interventions.length },
+  ];
+  const pinnedCount = interventions.filter((i) => i.persona === "fact_checker").length;
+
+  // 평문 연결 상태 한 줄(FR-REC-3) — WS/HTTP·제공자 폴백 같은 구현 용어는 여기 오지 않는다.
+  // wsStatus 는 내부 진행 문구라 그대로 노출하지 않고, 사용자가 알아야 할 것만 옮겨 적는다.
+  const connectionNote = !isRecording ? ""
+    : httpFallback
+      ? "표시가 몇 초 늦을 수 있어요 · 말한 내용은 자동으로 저장됩니다"
+      : "말한 내용은 자동으로 저장됩니다";
+
+  const captureLabel = CAPTURE_MODES.find((m) => m.value === captureMode)?.label || "내 마이크만";
+
   return (
-      <div className="w-full max-w-4xl mx-auto bg-white border md:border-zinc-200 md:rounded-3xl md:shadow-xl overflow-hidden min-h-[calc(100dvh-5rem)] md:min-h-0 flex flex-col">
-        {/* Status Header (컴팩트) */}
-        <div className="bg-zinc-900 text-white px-4 py-3 md:px-5 md:py-4 shrink-0">
-          <div className="flex flex-row items-center justify-between gap-3">
-            <div className="flex items-center gap-2.5 md:gap-3 min-w-0">
-              <div className="relative shrink-0">
-                <div className={`w-9 h-9 md:w-10 md:h-10 rounded-lg md:rounded-xl flex items-center justify-center transition-all duration-500 ${
-                  isRecording ? (isPaused ? "bg-amber-500" : "bg-red-500 animate-pulse motion-reduce:animate-none") : "bg-zinc-800"
-                }`}>
-                  <Mic className="w-5 h-5 text-white" />
-                </div>
-              </div>
-              {/* aria-live: 녹음→생성→완료 전이와 진행 문구(wsStatus)가 시각으로만
-                  바뀌었다 — 실시간 피드백 루프 전체가 스크린리더에 무음이었다.
-                  polite: 전사 스트림이 아니라 상태 전이만 이 블록에 있다. */}
-              <div className="min-w-0" aria-live="polite">
-                <h3 className="text-base md:text-lg font-bold tracking-tight leading-tight">
-                  {status === "generating" ? "문서 생성 중..." :
-                   status === "completed" ? "세션 완료" :
-                   status === "connecting" ? "연결 중..." :
-                   isRecording ? (isPaused ? "녹음 일시정지" : "녹음 중") : "녹음 준비 완료"}
-                </h3>
-                <div className="flex items-center gap-1.5 text-zinc-400 text-xs mt-0.5 truncate">
-                  <Activity className="w-3.5 h-3.5 shrink-0" />
-                  <span className="truncate">{wsStatus || (isRecording ? "스트리밍 중..." : "마이크 준비됨")}</span>
-                </div>
-              </div>
-            </div>
+    <div className="flex min-h-0 flex-1 flex-col">
+      <RecordingHeader
+        status={status}
+        isPaused={isPaused}
+        duration={duration}
+        volume={volume}
+        soundDetected={soundDetected}
+        rates={costRates}
+        translate={preset.translate}
+        facilitationUsd={facCostUsd}
+        facilitationCount={facSeenIdsRef.current.size}
+        modeLabel={preset.label}
+        captureLabel={captureLabel}
+        connectionNote={connectionNote}
+      />
 
-            <div className="flex flex-col items-end shrink-0">
-              <div className="text-xl md:text-2xl font-mono font-black tracking-tighter text-white tabular-nums leading-none">
-                {formatDuration(duration)}
-              </div>
-              <div className="flex items-center gap-2 mt-1.5">
-                <div className="w-16 md:w-24 h-1 bg-zinc-800 rounded-full overflow-hidden">
-                  <motion.div
-                    animate={{ width: `${Math.min(volume * 2, 100)}%` }}
-                    className={`h-full transition-colors ${
-                      volume > 40 ? "bg-red-500" : soundDetected ? "bg-emerald-500" : "bg-zinc-600"
-                    }`}
-                  />
-                </div>
-              </div>
-              {costRates && (isRecording || status === "generating" || status === "completed") && (
-                // 내역이 title 툴팁에만 있으면 터치(iOS)·키보드에서는 금액의 구성을
-                // 확인할 수 없다 — 버튼으로 만들어 누르면 헤더 아래 한 줄로 펼친다.
-                <button
-                  type="button"
-                  onClick={() => setCostOpen((v) => !v)}
-                  aria-expanded={costOpen}
-                  aria-label="비용 내역 보기"
-                  className="text-[11px] text-zinc-400 hover:text-zinc-200 mt-1 font-mono tabular-nums underline decoration-dotted decoration-zinc-600 underline-offset-2 transition-colors"
-                  title="누르면 항목별 내역이 열립니다"
-                >
-                  💵 ~${(
-                    (duration / 60) * (
-                      // 구버전 백엔드(필드 없음)에서는 1차 단가로 폴백한다.
-                      (costRates.stt_effective_per_min ?? costRates.stt_per_min)
-                      + (preset.translate ? costRates.translate_per_min : 0)
-                      + (costRates.facilitation_per_min ?? 0)
-                    )
-                    + ((status === "generating" || status === "completed") ? costRates.minutes_flat : 0)
-                    + facCostUsd
-                  ).toFixed(3)}
-                  {costRates.two_pass && <span className="text-zinc-500"> (2패스)</span>}
-                </button>
-              )}
-            </div>
-          </div>
+      {/* 이 PC 소리 캡처가 기대와 다르게 끝났을 때 — 조용히 마이크만 녹음되면 나중에야
+          상대 발언이 통째로 빈 걸 알게 된다. */}
+      {captureNote && (
+        <div className="mb-2">
+          <Banner title="이 PC 소리" onDismiss={() => setCaptureNote("")}>{captureNote}</Banner>
         </div>
+      )}
 
-        {/* 비용 내역 — title 툴팁의 내용을 터치·키보드에서도 볼 수 있는 자리.
-            헤더와 같은 어두운 톤의 얇은 줄로 붙인다(전사 본문을 밀지 않는 규격).
-            2단계 보정이 켜져 있으면 STT 과금이 두 번 난다 — 빼고 적으면 항목 합이
-            금액과 안 맞아 "계산이 틀렸다"로 읽힌다. */}
-        {costOpen && costRates && (isRecording || status === "generating" || status === "completed") && (
-          <div className="bg-zinc-800 text-zinc-300 text-[11px] px-4 md:px-5 py-1.5 shrink-0 flex flex-wrap items-center gap-x-4 gap-y-0.5 font-mono tabular-nums">
-            <span>1차 인식 ${costRates.stt_per_min}/분</span>
-            {costRates.two_pass && <span>+ 문장 보정 ${costRates.revise_per_min}/분</span>}
-            {preset.translate && <span>+ 번역 ${costRates.translate_per_min}/분</span>}
-            {!!costRates.facilitation_per_min && (
-              <span>+ 회의 진행 페르소나 ${costRates.facilitation_per_min}/분</span>
-            )}
-            {/* 개입(옆 카드)은 시간 비례가 아니라 건수 기반 — 실제로 뜬 카드의
-                금액만 더한다(서버 계산값). */}
-            {!!facCostUsd && (
-              <span>+ 개입 {facSeenIdsRef.current.size}건 ${facCostUsd.toFixed(4)}</span>
-            )}
-            <span>+ 완료 시 회의록 생성 ${Number(costRates.minutes_flat ?? 0).toFixed(3)}</span>
-            <span className="text-zinc-500">· 대략치</span>
-          </div>
-        )}
+      {/* 인-세션 설정 패널(FR-REC-2) — 녹음 중에는 읽기 전용이다. 시작과 함께 접히지만
+          "지금 어떤 설정으로 녹음 중인지" 확인할 자리는 남아 있어야 한다. */}
+      <div className="mb-2">
+        <button type="button" onClick={() => setIsSettingsCollapsed((v) => !v)}
+          aria-expanded={!isSettingsCollapsed}
+          className="inline-flex items-center gap-1 rounded-ctl px-1.5 py-0.5 text-sm font-semibold text-ink-2 hover:bg-hover">
+          <ChevronDown size={13} aria-hidden="true"
+            className={`transition-transform ${isSettingsCollapsed ? "-rotate-90" : ""}`} />
+          {isSettingsCollapsed ? "설정 보기" : "설정 숨기기"}
+        </button>
 
-        {/* HTTP 청크 모드 안내 — 얇은 한 줄(설정상 기본값이거나 WS 폴백 모두 포함). 과거엔
-            헤더에 큰 배너로 떠서 제일 먼저 화면을 채웠다. */}
-        {httpFallback && isRecording && (
-          <div className="bg-amber-50 border-b border-amber-100 text-amber-700 text-[11px] px-4 md:px-5 py-1.5 shrink-0">
-            안정·저비용 <b>HTTP 청크 방식</b>으로 전사 중 — 말한 내용이 몇 초 뒤에 표시될 수 있어요.
-          </div>
-        )}
+        {!isSettingsCollapsed && (
+          <div className="mt-1.5 grid gap-3 rounded-card border border-line bg-surface p-3 shadow-card lg:grid-cols-2">
+            <div className="space-y-2.5">
+              <TextField label="세션 제목" id="rec-title" value={title} disabled={isRecording}
+                placeholder="예: 주간 제품 회의" onChange={(e) => setTitle(e.target.value)} />
+              <TextField label="참석자" id="rec-speakers" value={speakers} disabled={isRecording}
+                placeholder="예: 홍길동, 김영희, 이철수" onChange={(e) => setSpeakers(e.target.value)} />
+              <Field label="주제 / 맥락" htmlFor="rec-topic"
+                description="회의 배경을 적으면 용어 인식과 회의록 품질이 올라갑니다.">
+                <Textarea id="rec-topic" value={topic} disabled={isRecording} rows={2}
+                  onChange={(e) => setTopic(e.target.value)} />
+              </Field>
 
-        {/* 이 PC 소리 캡처가 기대와 다르게 끝났을 때 — 같은 얇은 한 줄 규격 */}
-        {captureNote && (
-          <div className="bg-amber-50 border-b border-amber-100 text-amber-700 text-[11px] px-4 md:px-5 py-1.5 shrink-0 flex items-start gap-2">
-            <span className="flex-1">{captureNote}</span>
-            <button type="button" onClick={() => setCaptureNote("")}
-              className="shrink-0 font-bold text-amber-600 hover:text-amber-800">닫기</button>
-          </div>
-        )}
+              <Field label="음성 인식 (이번 녹음만)" htmlFor="rec-stt"
+                description="설정 기본값이 자동 선택됩니다. 여기서 바꿔도 설정은 그대로입니다.">
+                <Select id="rec-stt" value={sttModel} disabled={isRecording}
+                  onChange={(e) => setSttModel(e.target.value)}>
+                  {/* 저장된 기본값이 목록에 없더라도 항상 선택돼 보이도록 보강 */}
+                  {sttModel && !STT_OPTIONS.some((o) => o.value === sttModel) && (
+                    <option value={sttModel}>설정 기본값</option>
+                  )}
+                  {STT_OPTIONS.map((o) => (
+                    <option key={o.value} value={o.value}>{o.label}</option>
+                  ))}
+                </Select>
+              </Field>
 
-        {/* 관련 노트 바 (wiki.realtime_vault_search) — 비방해 표시 규칙(FR-10):
-            · 녹음 중에는 높이가 고정된 얇은 바를 항상 띄워 둔다 → 검색 결과가 새로
-              들어와도 전사 본문이 밀리지 않는다(자동 리플로우 0).
-            · 팝업·토스트·소리·포커스 이동 없음. 근거 펼치기는 사용자가 눌렀을 때만.
-            · 내부(📄 노트 / 🎓 논문)를 웹(🌐)보다 앞줄에 둔다(sortRelated).
-            · 백엔드 미연결/비활성 사유도 같은 바에 조용히 배지로 표시(FR-1). */}
-        {((isRecording && backendMode) || relatedNotes.length > 0
-          || (wikiStatus && !wikiStatus.enabled) || wikiMuted) && (
-          <div className="bg-emerald-50/70 border-b border-emerald-100 shrink-0">
-            <div className="px-4 md:px-8 h-9 flex items-center gap-2 overflow-x-auto overflow-y-hidden">
-              <span className="flex items-center gap-1.5 text-[11px] font-black uppercase tracking-widest text-emerald-600 shrink-0">
-                <BookOpen className="w-3.5 h-3.5" /> 관련 노트
-              </span>
-
-              {/* 사용자가 이번 회의만 끈 상태 — 설정(검색 꺼짐)과 구분해서 적는다.
-                  서버 검색·웹 보완까지 멈춘 상태라는 것을 문구가 말해야 한다. */}
-              {wikiMuted && (
-                <span className="shrink-0 text-[11px] bg-white border border-zinc-200 text-zinc-500 px-2 py-0.5 rounded-full whitespace-nowrap">
-                  이번 회의 끔 — 검색·웹 보완을 멈췄습니다(새 녹음에서 다시 켜집니다)
-                </span>
-              )}
-
-              {/* 상태 배지 — 꺼짐/미연결 사유 (전사를 방해하지 않는 회색 톤) */}
-              {!wikiMuted && wikiStatus && !wikiStatus.enabled && (
-                <span
-                  title={wikiStatus.reasonText}
-                  className="shrink-0 text-[11px] bg-white border border-zinc-200 text-zinc-500 px-2 py-0.5 rounded-full whitespace-nowrap max-w-[60vw] truncate"
-                >
-                  검색 꺼짐 — {wikiStatus.reasonText}
-                </span>
-              )}
-
-              {relatedNotes.slice(0, 8).map((n) => (
-                <button
-                  key={n.filename || n.title}
-                  type="button"
-                  onClick={() => setWikiExpanded(true)}
-                  title={`${n.sectionPath || n.title}\n${n.snippet || n.filename}`}
-                  className="shrink-0 text-xs font-medium bg-white border border-emerald-200 text-emerald-800 px-2.5 py-1 rounded-full whitespace-nowrap hover:border-emerald-400 transition-colors"
-                >
-                  {SOURCE_ICON[n.sourceType || "note"] || "📄"} [[{n.title}
-                  {n.heading ? `#${n.heading}` : ""}]]
-                </button>
-              ))}
-              {relatedNotes.length > 8 && (
-                <span className="shrink-0 text-[11px] text-emerald-500 font-bold">
-                  +{relatedNotes.length - 8}
-                </span>
-              )}
-              {relatedNotes.length === 0 && !wikiMuted
-                && (!wikiStatus || wikiStatus.enabled) && (
-                <span className="shrink-0 text-[11px] text-emerald-700">
-                  {wikiStatus?.enabled ? "발화와 관련된 내부 노트를 찾는 중…" : "대기 중…"}
-                </span>
-              )}
-              <div className="ml-auto shrink-0 flex items-center gap-2">
-                {relatedNotes.length > 0 && (
-                  <button
-                    type="button"
-                    onClick={() => setWikiExpanded((v) => !v)}
-                    aria-expanded={wikiExpanded}
-                    className="flex items-center gap-1 text-[11px] font-bold text-emerald-600 hover:text-emerald-800"
-                  >
-                    <ChevronDown className={`w-3.5 h-3.5 transition-transform ${wikiExpanded ? "" : "-rotate-90"}`} />
-                    {wikiExpanded ? "근거 접기" : "근거 보기"}
-                  </button>
-                )}
-                {/* 페르소나 레인의 [이번 회의 끔] 과 같은 자리·같은 말. 표시만이
-                    아니라 서버 검색과 웹 보완 과금까지 멈춘다. */}
-                {isRecording && backendMode && !wikiMuted && (
-                  <button
-                    type="button"
-                    onClick={wikiMute}
-                    title="이번 회의에서만 끕니다 — 서버 검색과 웹 보완도 함께 멈춥니다"
-                    className="text-[11px] font-medium text-emerald-600 hover:text-emerald-900 underline decoration-dotted"
-                  >
-                    이번 회의 끔
-                  </button>
-                )}
-              </div>
-            </div>
-
-            {/* 근거 상세 — 사용자가 펼쳤을 때만. 자체 스크롤이라 전사 영역을 잠식하지 않는다. */}
-            {wikiExpanded && relatedNotes.length > 0 && (
-              <div className="px-4 md:px-8 pb-2 max-h-44 overflow-y-auto border-t border-emerald-100">
-                {relatedNotes.map((n) => (
-                  <div key={`ev-${n.filename || n.title}`} className="py-1.5 border-b border-emerald-100/60 last:border-0">
-                    <div className="flex items-baseline gap-2 flex-wrap">
-                      <span className="text-xs font-bold text-emerald-900">
-                        {SOURCE_ICON[n.sourceType || "note"] || "📄"} {n.sectionPath || n.title}
-                      </span>
-                      <span className="text-[11px] font-mono text-zinc-500 tabular-nums">
-                        score {(n.score ?? 0).toFixed(2)}
-                        {n.foundBy ? ` · ${n.foundBy === "section" ? "섹션 일치" : n.foundBy === "web" ? "웹" : "노트 일치"}` : ""}
-                      </span>
-                      {n.filename && (
-                        <span className="text-[11px] text-zinc-500 truncate max-w-[40vw]">{n.filename}</span>
-                      )}
-                    </div>
-                    {n.snippet && (
-                      <p className="text-[11px] text-zinc-600 mt-0.5 line-clamp-2">{n.snippet}</p>
-                    )}
-                    {n.segmentText && (
-                      <p className="text-[11px] text-zinc-500 mt-0.5 italic truncate">발화: {n.segmentText}</p>
-                    )}
-                  </div>
+              <fieldset disabled={isRecording} className="space-y-1">
+                <legend className="text-base font-medium text-ink">소리 잡는 법</legend>
+                {CAPTURE_MODES.filter((m) => !m.system || HAS_DISPLAY_MEDIA).map((m) => (
+                  <label key={m.value}
+                    className={`flex cursor-pointer items-start gap-2 rounded-ctl border px-2.5 py-2 transition-colors ${
+                      captureMode === m.value
+                        ? "border-accent bg-accent-weak"
+                        : "border-line bg-surface-2 hover:border-line-strong"
+                    } ${isRecording ? "cursor-not-allowed opacity-60" : ""}`}>
+                    <input type="radio" name="captureMode" value={m.value} className="mt-1 shrink-0"
+                      checked={captureMode === m.value} disabled={isRecording}
+                      onChange={() => {
+                        setCaptureMode(m.value);
+                        try { localStorage.setItem("CAPTURE_MODE", m.value); } catch { /* ignore */ }
+                      }} />
+                    <span className="min-w-0">
+                      <span className="block text-base font-semibold text-ink">{m.label}</span>
+                      <span className="block text-xs text-ink-3">{m.desc}</span>
+                    </span>
+                  </label>
                 ))}
-                <p className="text-[11px] text-zinc-500 pt-1.5">
-                  녹음 중에는 노트로 이동하지 않습니다(녹음 보호). 종료 후 회의 상세의
-                  <b> 참조된 관련 노트</b>에서 클릭해 열 수 있습니다.
+                <p className="text-xs leading-relaxed text-ink-3">
+                  {captureMode === "mic+system"
+                    ? "녹음이 시작된 직후 공유 창이 뜹니다 — [전체 화면]을 고르고 아래 [시스템 오디오도 공유]를 꼭 켜세요. 줌·팀즈 앱은 이렇게 해야 상대 목소리가 들어옵니다([창]을 고르면 크롬이 소리를 함께 주지 않습니다). 고르는 동안에도 마이크는 이미 녹음 중이고, 화면은 녹화되지 않습니다."
+                    : captureMode === "room"
+                    ? "멀리서 나는 소리가 지워지지 않도록 에코 취소를 끄고 마이크 감도를 올립니다."
+                    : "헤드셋·근접 발화 기준입니다. 온라인 회의 상대 목소리나 회의실 TV 소리가 안 잡히면 위에서 상황을 바꿔보세요."}
                 </p>
-              </div>
-            )}
+              </fieldset>
+            </div>
+
+            <ModePanel modeNum={modeNum} onChange={setModeNum} disabled={isRecording}
+              hint="말한 내용이 실시간으로 전사됩니다. 표시까지 1~5초 정도 걸릴 수 있어요." />
           </div>
         )}
-
-        {/* 페르소나 레인 — 관련 노트 바 바로 아래(PRD §19.2). 기능이 꺼져 있으면
-            서버가 아무 이벤트도 보내지 않고, 레인은 내용이 없으면 스스로 렌더를
-            건너뛴다(빈 바가 전사 영역을 잠식하지 않게). */}
-        <PersonaPanel
-          items={interventions}
-          status={facStatus}
-          pending={facPending}
-          muted={facMuted}
-          briefOn={facBriefOn && isRecording}
-          briefBusy={facBriefBusy}
-          onCheckNow={facCheckNow}
-          onBriefNow={facBriefNow}
-          onMute={facMute}
-          onJump={jumpToSpan}
-          onAck={(id) => facFeedback(id, "ack")}
-          onDismiss={(id) => facFeedback(id, "dismiss")}
-        />
-
-        <div className="flex-1 flex flex-col p-4 md:p-10">
-          {/* Settings Toggle */}
-          <div className="flex items-center justify-between mb-4 md:mb-6 shrink-0">
-            <h4 className="text-sm font-bold text-zinc-500 uppercase tracking-widest">세션 설정</h4>
-            <button
-              onClick={() => setIsSettingsCollapsed(!isSettingsCollapsed)}
-              className="flex items-center gap-2 text-xs font-bold text-zinc-500 hover:text-zinc-900 transition-colors"
-            >
-              <ChevronDown className={`w-4 h-4 transition-transform ${isSettingsCollapsed ? "-rotate-90" : ""}`} />
-              {isSettingsCollapsed ? "설정 보기" : "설정 숨기기"}
-            </button>
-          </div>
-
-          <AnimatePresence>
-            {!isSettingsCollapsed && (
-              <motion.div
-                initial={{ height: 0, opacity: 0 }}
-                animate={{ height: "auto", opacity: 1 }}
-                exit={{ height: 0, opacity: 0 }}
-                className="overflow-hidden"
-              >
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-10 mb-12">
-                  <div className="space-y-6">
-                    <div className="space-y-2">
-                      <label className="text-xs font-bold text-zinc-500 uppercase tracking-widest flex items-center gap-2">
-                        <Info className="w-3 h-3" /> 세션 제목
-                      </label>
-                      <input
-                        type="text"
-                        value={title}
-                        onChange={(e) => setTitle(e.target.value)}
-                        placeholder="예: 주간 제품 회의"
-                        disabled={isRecording}
-                        className="w-full px-5 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-zinc-900 focus:border-transparent outline-none transition-all disabled:opacity-50 font-medium"
-                      />
-                    </div>
-
-                    <div className="space-y-2">
-                      <label className="text-xs font-bold text-zinc-500 uppercase tracking-widest flex items-center gap-2">
-                        <User className="w-3 h-3" /> 참석자
-                      </label>
-                      <input
-                        type="text"
-                        value={speakers}
-                        onChange={(e) => setSpeakers(e.target.value)}
-                        placeholder="예: 홍길동, 김영희, 이철수"
-                        disabled={isRecording}
-                        className="w-full px-5 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-zinc-900 focus:border-transparent outline-none transition-all disabled:opacity-50 font-medium"
-                      />
-                    </div>
-
-                    <div className="space-y-2">
-                      <label className="text-xs font-bold text-zinc-500 uppercase tracking-widest flex items-center gap-2">
-                        <Settings2 className="w-3 h-3" /> 주제 / 맥락
-                      </label>
-                      <textarea
-                        value={topic}
-                        onChange={(e) => setTopic(e.target.value)}
-                        placeholder="정확도를 높이려면 회의 배경을 적어주세요..."
-                        disabled={isRecording}
-                        className="w-full px-5 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-zinc-900 focus:border-transparent outline-none transition-all disabled:opacity-50 h-32 resize-none font-medium"
-                      />
-                    </div>
-
-                    <div className="space-y-2">
-                      <label className="text-xs font-bold text-zinc-500 uppercase tracking-widest flex items-center gap-2">
-                        <Settings2 className="w-3 h-3" /> 음성 인식 모델 (이번 녹음만)
-                      </label>
-                      <select
-                        value={sttModel}
-                        onChange={(e) => setSttModel(e.target.value)}
-                        disabled={isRecording}
-                        className="w-full px-5 py-3 bg-zinc-50 border border-zinc-200 rounded-xl focus:ring-2 focus:ring-zinc-900 focus:border-transparent outline-none transition-all disabled:opacity-50 font-medium text-sm"
-                      >
-                        {/* 저장된 기본값이 목록에 없더라도 항상 선택돼 보이도록 보강 */}
-                        {sttModel && !STT_OPTIONS.some((o) => o.value === sttModel) && (
-                          <option value={sttModel}>{sttModel} (설정 기본값)</option>
-                        )}
-                        {STT_OPTIONS.map((o) => (
-                          <option key={o.value} value={o.value}>{o.label}</option>
-                        ))}
-                      </select>
-                      <p className="text-[11px] text-zinc-500 leading-relaxed">
-                        설정의 기본 모델이 자동 선택됩니다. 이번 녹음에만 다른 모델을 쓰려면 바꾸세요 — <b>설정 기본값은 그대로 유지</b>됩니다.
-                      </p>
-                    </div>
-
-                    <div className="space-y-2">
-                      <label className="text-xs font-bold text-zinc-500 uppercase tracking-widest flex items-center gap-2">
-                        <Mic className="w-3 h-3" /> 소리 잡는 방법
-                      </label>
-                      <div className="space-y-2">
-                        {CAPTURE_MODES
-                          .filter((m) => !m.system || HAS_DISPLAY_MEDIA)
-                          .map((m) => (
-                            <label
-                              key={m.value}
-                              className={`flex items-start gap-3 px-4 py-3 rounded-xl border cursor-pointer transition-all ${
-                                captureMode === m.value
-                                  ? "bg-zinc-900 border-zinc-900 text-white"
-                                  : "bg-zinc-50 border-zinc-200 hover:border-zinc-300"
-                              } ${isRecording ? "opacity-50 cursor-not-allowed" : ""}`}
-                            >
-                              <input
-                                type="radio"
-                                name="captureMode"
-                                value={m.value}
-                                checked={captureMode === m.value}
-                                disabled={isRecording}
-                                onChange={() => {
-                                  setCaptureMode(m.value);
-                                  try { localStorage.setItem("CAPTURE_MODE", m.value); } catch { /* ignore */ }
-                                }}
-                                className="mt-1 accent-zinc-900 shrink-0"
-                              />
-                              <span className="min-w-0">
-                                <span className="block text-sm font-bold leading-tight">{m.label}</span>
-                                <span className={`block text-[11px] mt-0.5 leading-relaxed ${
-                                  captureMode === m.value ? "text-zinc-300" : "text-zinc-500"
-                                }`}>{m.desc}</span>
-                              </span>
-                            </label>
-                          ))}
-                      </div>
-                      <p className="text-[11px] text-zinc-500 leading-relaxed">
-                        {captureMode === "mic+system"
-                          ? "녹음이 시작된 직후 공유 창이 뜹니다 — [전체 화면]을 고르고 아래 [시스템 오디오도 공유]를 꼭 켜세요. 줌·팀즈 앱은 이렇게 해야 상대 목소리가 들어옵니다([창]을 고르면 크롬이 소리를 함께 주지 않습니다). 고르는 동안에도 마이크는 이미 녹음 중이고, 화면은 녹화되지 않습니다."
-                          : captureMode === "room"
-                          ? "멀리서 나는 소리가 지워지지 않도록 에코 취소를 끄고 마이크 감도를 올립니다."
-                          : "헤드셋·근접 발화 기준입니다. 온라인 회의 상대 목소리나 회의실 TV 소리가 안 잡히면 위에서 상황을 바꿔보세요."}
-                      </p>
-                    </div>
-                  </div>
-
-                  <ModePanel
-                    modeNum={modeNum}
-                    onChange={setModeNum}
-                    disabled={isRecording}
-                    hint="말한 내용이 실시간으로 전사됩니다. 연결 방식(WS/HTTP)에 따라 화면 표시까지 1~5초 정도 걸릴 수 있어요."
-                  />
-                </div>
-              </motion.div>
-            )}
-          </AnimatePresence>
-
-          {/* Recording Area */}
-          <div className={`flex-1 flex flex-col items-center justify-center ${isSettingsCollapsed && isRecording ? "py-2 md:py-6" : "py-8 md:py-12"} ${isRecording ? "" : "border-2 border-dashed border-brand-200 rounded-[2.5rem] bg-white/50"} backdrop-blur-sm transition-all duration-500 min-h-[300px]`}>
-            <AnimatePresence mode="wait">
-              {isRecording || status === "generating" || status === "completed" ? (
-                <motion.div
-                  key="recording"
-                  initial={{ opacity: 0, scale: 0.95 }}
-                  animate={{ opacity: 1, scale: 1 }}
-                  exit={{ opacity: 0, scale: 0.95 }}
-                  className="w-full h-full flex flex-col items-center gap-6 md:gap-10 px-0 md:px-10"
-                >
-                  {/* Live Transcript — 높이를 화면 비율로 제한하고 패널 안에서만
-                      스크롤한다. 과거엔 상위에 확정 높이가 없어 flex-1 이 내용만큼
-                      늘어나 페이지 전체가 길어지고(한국어는 특히 줄이 빨리 쌓인다)
-                      정지 버튼이 화면 밖으로 밀려났다. */}
-                  <div
-                    ref={transcriptPanelRef}
-                    onScroll={onTranscriptScroll}
-                    className={`w-full max-w-4xl glass-panel md:rounded-[2rem] p-3 md:p-5 min-h-[220px] max-h-[42dvh] md:max-h-[52dvh] overflow-y-auto overscroll-contain flex flex-col gap-2 md:gap-3 transition-all duration-700 relative`}
-                  >
-                    {/* 배경이 없으면 전사 텍스트가 이 줄 뒤로 비쳐 지나간다(좌측 라벨은
-                        칩과 달리 자체 배경이 없었다). 패널 좌우 패딩만큼 넓혀 덮는다. */}
-                    <div className="sticky top-0 z-10 flex items-center justify-between gap-2 -mx-3 md:-mx-5 px-3 md:px-5 pb-2 bg-white/85 backdrop-blur-md">
-                      {/* 전사 줄 수 — 얼마나 쌓였는지, 화면에 안 보이는 앞부분이 있는지 알려준다 */}
-                      <span className="text-[11px] font-bold text-brand-500 tabular-nums pl-1">
-                        {liveTranscript.length > 0 && `전사 ${liveTranscript.length}줄`}
-                        {hiddenLineCount > 0 && ` (앞 ${hiddenLineCount}줄은 종료 후 전사 문서에서)`}
-                      </span>
-                       <div className="inline-flex items-center gap-2 bg-white/80 backdrop-blur-md px-3 py-1.5 rounded-full shadow-sm">
-                        {/* 녹음 중에는 실제 마이크 입력(소리 감지/무음)을 여기 표시 — 전사를
-                            보는 바로 그 자리에서 소리가 들어가는지 즉시 알 수 있게 한다. */}
-                        {status === "recording" ? (
-                          <>
-                            <div className={`w-2 h-2 rounded-full ${
-                              isPaused ? "bg-amber-500" : soundDetected ? "bg-emerald-500 animate-pulse motion-reduce:animate-none" : "bg-zinc-300"
-                            }`} />
-                            <span className={`text-[11px] font-bold uppercase tracking-widest ${
-                              isPaused ? "text-amber-500" : soundDetected ? "text-emerald-600" : "text-zinc-500"
-                            }`}>
-                              {isPaused ? "일시정지" : soundDetected ? "🎤 소리 감지 중" : "무음 — 소리 없음"}
-                            </span>
-                            {/* 기본이 아닌 캡처 방식은 녹음 중에도 여기 남긴다 — 세션 설정은
-                                시작과 함께 접히므로, 상대 목소리가 실제로 들어오는 방식으로
-                                녹음 중인지 확인할 자리가 사라진다. 'PC 소리'는 고른 값이
-                                아니라 성사된 상태(systemAudioOn)를 표시한다. */}
-                            {systemAudioOn && (
-                              <span title="이 PC에서 나는 소리(온라인 회의 상대방 목소리)가 함께 녹음되고 있습니다."
-                                className="text-[11px] font-bold text-sky-600 border-l border-zinc-200 pl-2">
-                                🖥 PC 소리 포함
-                              </span>
-                            )}
-                            {captureMode === "room" && (
-                              <span title="에코 취소를 끄고 마이크 감도를 올린 상태입니다(멀리서 나는 소리용)."
-                                className="text-[11px] font-bold text-sky-600 border-l border-zinc-200 pl-2">
-                                🏢 회의실 마이크
-                              </span>
-                            )}
-                          </>
-                        ) : (
-                          <>
-                            <div className={`w-2 h-2 rounded-full ${status === "generating" ? "bg-amber-500 animate-pulse motion-reduce:animate-none" : status === "completed" ? "bg-emerald-500" : "bg-red-500 animate-pulse motion-reduce:animate-none"}`} />
-                            <span className="text-[11px] font-bold text-brand-500 uppercase tracking-widest">
-                              {status === "generating" ? "처리 중" : status === "completed" ? "완료" : "실시간 스트리밍"}
-                            </span>
-                          </>
-                        )}
-                      </div>
-                    </div>
-
-                    {liveTranscript.length === 0 ? (
-                      // text-brand-300(1.6:1)이 컨테이너라 안의 상태 문구까지 상속됐다 —
-                      // "문서 생성 중..."은 정보 텍스트라 -500 으로 올렸다
-                      <div className="flex flex-col items-center justify-center flex-1 text-brand-500 gap-4 min-h-[200px]">
-                        <div className="relative">
-                          <Loader2 className="animate-spin" size={32} />
-                          <Activity className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 text-brand-500" size={14} />
-                        </div>
-                        <p className="text-sm font-medium tracking-wide">
-                          {status === "generating"
-                            ? "회의 문서를 생성하는 중..."
-                            : isPaused
-                              ? "일시정지됨"
-                              : soundDetected
-                                ? "🎤 소리 감지 중 — 전사를 기다리는 중..."
-                                : "오디오를 듣는 중... (아직 소리가 감지되지 않았어요)"}
-                        </p>
-                      </div>
-                    ) : (
-                      <div className="flex flex-col gap-2 md:gap-2.5">
-                        {visibleTranscript.map((item) => (
-                          <motion.div
-                            initial={{ opacity: 0, y: 10 }}
-                            animate={{ opacity: 1, y: 0 }}
-                            // 안정 id 기반 key — 과거 시간+내용 키는 스트리밍으로 텍스트가
-                            // 변할 때마다 행이 리마운트돼 깜빡였다.
-                            key={item.id ?? `${item.start.toFixed(2)}-${item.text.slice(0, 16)}`}
-                            // 페르소나 카드의 [⟲ 발화 보기]가 이 좌표로 줄을 찾는다.
-                            data-seg-start={item.start}
-                            className={`flex flex-col w-full ${
-                              flashStart !== null && item.start === flashStart
-                                ? "ring-2 ring-slate-300 rounded-lg -mx-1 px-1"
-                                : ""}`}
-                          >
-                            {item.speaker && (
-                              <div className="flex items-center gap-2 mb-1">
-                                <span className="text-[11px] font-black uppercase tracking-[0.2em] text-brand-500">
-                                  {item.speaker}
-                                </span>
-                                <div className="h-px flex-1 bg-brand-100" />
-                              </div>
-                            )}
-                            
-                            {(item.translatedText || (preset.translate && item.start >= 0)) ? (
-                              // 번역 모드: 좌=영어(보조·작게), 우=한국어(주·조금 크게).
-                              // 번역이 아직 안 왔어도 2열 틀을 유지해 도착 시 레이아웃이
-                              // 출렁이지 않게 하고, 자리에 '번역 중…'을 표시한다.
-                              // min-w-0: grid item 의 기본 min-width:auto 는 자식이 줄어들지
-                              // 못하게 해서 줄바꿈 속성만으로는 칼럼이 넓어지는 것을 못 막는다.
-                              <div className={`flex flex-col md:grid md:grid-cols-2 gap-0.5 md:gap-3 w-full items-start ${item.provisional ? "opacity-60" : ""}`}>
-                                {/* Source (English) — 보조 */}
-                                <p className={`ko-text min-w-0 text-xs md:text-[13px] leading-snug ${item.start === -1 ? "text-zinc-500 italic" : "text-zinc-500"}`}>
-                                  {item.text}{item.start === -1 && " …"}
-                                </p>
-                                {/* Translated (Korean) — 주 */}
-                                <p className={`ko-text min-w-0 text-sm md:text-base leading-snug font-medium md:border-l-2 md:border-l-brand-300 md:pl-3 ${item.translatedText ? "text-brand-900" : "text-brand-500 italic"}`}>
-                                  {item.translatedText || "번역 중…"}
-                                </p>
-                              </div>
-                            ) : (
-                              // 받아쓰기(비번역) 모드: 더 작게, 한 줄로 조밀하게.
-                              // provisional(빠른 패스 임시 조각)은 흐리게 — 보정되면 선명해진다.
-                              <p className={`ko-text text-[13px] md:text-sm leading-snug ${
-                                item.start === -1 ? "text-brand-500 italic"
-                                : item.provisional ? "text-zinc-500"
-                                : "text-brand-900"}`}>
-                                {item.text}{item.start === -1 && " …"}
-                              </p>
-                            )}
-                          </motion.div>
-                        ))}
-                        <div className="h-4" />
-                      </div>
-                    )}
-
-                    {hasSuspectMark && (
-                      <p className="text-[11px] text-brand-500 border-t border-brand-100 pt-2 mt-1">
-                        <b>[불명]</b> 표시는 음성인식이 잘못 만들어낸 구간입니다(주로 무음·잡음
-                        구간). 회의록에는 반영되지 않습니다.
-                      </p>
-                    )}
-
-                    {/* 위를 읽는 동안 자동 스크롤이 멈추므로, 돌아갈 방법을 항상 준다 */}
-                    {!followLatest && liveTranscript.length > 0 && (
-                      <button
-                        onClick={jumpToLatest}
-                        className="sticky bottom-0 self-center mt-1 inline-flex items-center gap-1.5 bg-brand-900 text-white text-xs font-bold px-3.5 py-2 rounded-full shadow-lg hover:bg-brand-800 transition-colors"
-                      >
-                        <ChevronDown className="w-3.5 h-3.5" />
-                        최신 전사로{unseenCount > 0 ? ` (새 ${unseenCount}줄)` : ""}
-                      </button>
-                    )}
-                  </div>
-
-                  {/* Controls */}
-                  {status === "recording" && (
-                    <div className="flex flex-col items-center gap-4 md:gap-6 shrink-0 pb-4">
-                      {/* Audio Level Wave — 실제 입력 볼륨 기반. 무음이면 잔잔(bar가
-                          거의 안 움직이고 흐려짐), 소리가 들어오면 볼륨에 비례해 커진다.
-                          과거엔 Math.random()이라 무음에도 춤춰 '소리 들어가는 척' 착시를 줬다. */}
-                      <div className="flex gap-1.5 md:gap-2 items-end h-10 md:h-16">
-                        {[...Array(24)].map((_, i) => {
-                          const level = Math.min(volume / 40, 1);            // 0~1 정규화
-                          const shape = 0.35 + 0.65 * Math.sin(((i + 1) / 25) * Math.PI); // 가운데 높은 형태
-                          const h = isPaused ? 4 : 4 + level * 44 * shape;
-                          return (
-                            <div
-                              key={i}
-                              style={{ height: `${h}px` }}
-                              className={`w-1 md:w-1.5 rounded-full transition-[height,background-color] duration-150 ${
-                                isPaused ? "bg-brand-300" : soundDetected ? "bg-brand-900" : "bg-brand-200"
-                              }`}
-                            />
-                          );
-                        })}
-                      </div>
-
-                      <div className="flex items-center gap-6 md:gap-8">
-                        {/* 라벨 없는 글리프뿐이었다 — 특히 [정지]는 회의를 끝내고 문서
-                            생성(비용)을 시작하는 버튼이라 무엇인지 분명해야 한다.
-                            아이콘 아래 텍스트 + title/aria-label 을 모두 붙인다. */}
-                        <button
-                          onClick={pauseRecording}
-                          title={isPaused ? "녹음 다시 시작" : "녹음 일시정지"}
-                          aria-label={isPaused ? "녹음 다시 시작" : "녹음 일시정지"}
-                          className={`w-14 h-14 md:w-16 md:h-16 rounded-2xl flex flex-col items-center justify-center gap-0.5 transition-all shadow-xl ${
-                            isPaused ? "bg-emerald-500 hover:bg-emerald-600" : "bg-amber-500 hover:bg-amber-600"
-                          } text-white hover:scale-105 active:scale-95`}
-                        >
-                          {isPaused ? <Play size={20} fill="currentColor" /> : <Pause size={20} fill="currentColor" />}
-                          <span className="text-[11px] font-bold tracking-tight">
-                            {isPaused ? "재시작" : "일시정지"}
-                          </span>
-                        </button>
-                        <button
-                          onClick={stopRecording}
-                          title="녹음을 끝내고 회의록을 생성합니다"
-                          aria-label="녹음 정지 및 회의록 생성"
-                          className="w-20 h-20 md:w-24 md:h-24 bg-brand-950 text-white rounded-[1.5rem] md:rounded-[2rem] flex flex-col items-center justify-center gap-1 hover:bg-brand-900 transition-all shadow-2xl hover:scale-105 active:scale-95 group relative overflow-hidden"
-                        >
-                          <Square size={24} fill="currentColor" className="group-hover:scale-90 transition-transform relative z-10" />
-                          <span className="text-[11px] font-bold tracking-tight relative z-10">정지</span>
-                        </button>
-                      </div>
-
-                      <p className="text-[11px] md:text-xs text-brand-500 font-bold uppercase tracking-[0.3em] animate-pulse motion-reduce:animate-none">
-                        {isPaused ? "녹음 일시정지" : "세션 진행 중"}
-                      </p>
-
-                      <button
-                        onClick={cancelRecording}
-                        className="text-xs text-brand-500 hover:text-red-500 underline underline-offset-2 transition-colors"
-                      >
-                        저장하지 않고 취소
-                      </button>
-                    </div>
-                  )}
-
-                  {status === "generating" && (
-                    <div className="flex flex-col items-center gap-3">
-                      <div className="flex items-center gap-3 text-amber-600">
-                        <Loader2 className="animate-spin" size={20} />
-                        <span className="text-sm font-bold">AI가 회의 문서를 생성하는 중...</span>
-                      </div>
-                      <button
-                        onClick={startNewWhileGenerating}
-                        className="px-4 py-2 bg-white border border-brand-200 text-brand-600 rounded-xl text-xs font-semibold hover:bg-brand-50 transition-all"
-                      >
-                        새 녹음 시작 (생성은 백그라운드에서 계속)
-                      </button>
-                    </div>
-                  )}
-                </motion.div>
-              ) : (
-                <motion.div
-                  key="idle"
-                  initial={{ opacity: 0, scale: 0.9 }}
-                  animate={{ opacity: 1, scale: 1 }}
-                  exit={{ opacity: 0, scale: 0.9 }}
-                  className="flex flex-col items-center gap-8"
-                >
-                  {/* 주 동작 버튼 — 아이콘뿐이라 접근 가능한 이름이 없었다(정지·일시정지는
-                      고쳤는데 정작 가장 먼저 누르는 이 버튼만 빠져 있었다). */}
-                  <button
-                    onClick={startRecording}
-                    disabled={status === "connecting"}
-                    aria-label={status === "connecting" ? "연결 중" : "녹음 시작"}
-                    title="녹음 시작"
-                    className="w-32 h-32 bg-zinc-900 text-white rounded-full flex items-center justify-center hover:bg-zinc-800 transition-all shadow-2xl hover:scale-105 active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed group"
-                  >
-                    {status === "connecting" ? (
-                      <Loader2 size={48} className="animate-spin" />
-                    ) : (
-                      <Mic size={48} className="group-hover:scale-110 transition-transform" />
-                    )}
-                  </button>
-                  <div className="text-center">
-                    <p className="text-lg font-bold text-zinc-900">새 세션 시작</p>
-                    <p className="text-sm text-zinc-500 mt-1">
-                      말하면 실시간으로 전사돼요 — 표시까지 몇 초 걸릴 수 있어요
-                    </p>
-                    {/* 녹음 전 화면에만 둔다 — 녹음 중 상시 배너는 곧 안 읽힌다. */}
-                    <p className="text-xs text-zinc-500 mt-3">
-                      녹음 전 참석자에게 <b>녹음·자동 전사</b> 사실을 알려 주세요.
-                    </p>
-                  </div>
-                </motion.div>
-              )}
-            </AnimatePresence>
-          </div>
-        </div>
       </div>
+
+      {isRecording || status === "generating" || status === "completed" ? (
+        <div className="flex min-h-0 flex-1 gap-3">
+          <div className="flex min-w-0 flex-1 flex-col">
+            <TranscriptPanel
+              segments={visibleTranscript}
+              hiddenCount={hiddenLineCount}
+              totalCount={liveTranscript.length}
+              translate={preset.translate}
+              viewMode={viewMode}
+              onViewMode={setViewMode}
+              flashStart={flashStart}
+              hasSuspectMark={hasSuspectMark}
+              status={status}
+              isPaused={isPaused}
+              soundDetected={soundDetected}
+              systemAudioOn={systemAudioOn}
+              roomMic={captureMode === "room"}
+              followLatest={followLatest}
+              unseenCount={unseenCount}
+              onJumpLatest={jumpToLatest}
+              onScroll={onTranscriptScroll}
+              panelRef={transcriptPanelRef}
+            />
+
+            {/* 컨트롤 — [정지]는 회의를 끝내고 문서 생성(비용)을 시작하는 버튼이라
+                아이콘만 두지 않는다. */}
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              {status === "recording" && (
+                <>
+                  <Button variant="secondary" icon={isPaused ? Play : Pause} onClick={pauseRecording}>
+                    {isPaused ? "재시작" : "일시정지"}
+                  </Button>
+                  <Button variant="danger" icon={Square} onClick={stopRecording}>
+                    정지 &amp; 회의록 생성
+                  </Button>
+                  <Button variant="ghost" onClick={cancelRecording} className="ml-auto text-rec">
+                    저장하지 않고 취소
+                  </Button>
+                </>
+              )}
+              {status === "generating" && (
+                <>
+                  <StatusPill tone="proc" pulse>회의록을 만드는 중…</StatusPill>
+                  <Button variant="secondary" size="sm" onClick={startNewWhileGenerating}>
+                    새 녹음 시작 (생성은 백그라운드에서 계속)
+                  </Button>
+                </>
+              )}
+            </div>
+          </div>
+
+          {/* 우측 인스펙터(FR-REC-6) — 관련 노트 / 진행 도우미. 모바일에서는 같은 내용이
+              하단 트리거 바 + 바텀시트로 나온다(Inspector 가 함께 책임진다). */}
+          <Inspector
+            tabs={inspectorTabs}
+            value={inspectorTab}
+            onChange={setInspectorTab}
+            label="관련 노트와 진행 도우미"
+            mobileAlert={pinnedCount > 0
+              ? <span className="text-rec">확인 필요 {pinnedCount}</span>
+              : undefined}
+          >
+            {inspectorTab === "notes" ? (
+              <RelatedNotesTab
+                notes={relatedNotes}
+                muted={wikiMuted}
+                searchOff={!!wikiStatus && !wikiStatus.enabled}
+                searchOffReason={wikiStatus?.reasonText}
+                canMute={isRecording && backendMode}
+                onMute={wikiMute}
+                showEvidence={wikiExpanded}
+                onToggleEvidence={() => setWikiExpanded((v) => !v)}
+              />
+            ) : (
+              <PersonaPanel
+                items={interventions}
+                status={facStatus}
+                pending={facPending}
+                muted={facMuted}
+                briefOn={facBriefOn && isRecording}
+                briefBusy={facBriefBusy}
+                onCheckNow={facCheckNow}
+                onBriefNow={facBriefNow}
+                onMute={facMute}
+                onJump={jumpToSpan}
+                onAck={(id) => facFeedback(id, "ack")}
+                onDismiss={(id) => facFeedback(id, "dismiss")}
+              />
+            )}
+          </Inspector>
+        </div>
+      ) : (
+        /* 유휴 — 시작 버튼과 녹음 고지. 녹음 중 상시 배너는 곧 안 읽히므로 여기에만 둔다. */
+        <div className="flex flex-1 flex-col items-center justify-center gap-3 rounded-card
+          border border-dashed border-line-strong bg-surface-2 py-12">
+          <Button variant="danger" icon={Mic} onClick={startRecording}
+            busy={status === "connecting"}>
+            {status === "connecting" ? "연결 중…" : "녹음 시작"}
+          </Button>
+          <p className="text-sm text-ink-3">말하면 실시간으로 전사돼요 — 표시까지 몇 초 걸릴 수 있어요.</p>
+          <p className="text-xs text-ink-3">
+            녹음 전 참석자에게 <b>녹음·자동 전사</b> 사실을 알려 주세요.
+          </p>
+        </div>
+      )}
+    </div>
   );
 }

@@ -97,23 +97,6 @@
   --shadow-flat: 0 1px 2px rgba(28, 26, 23, .05);
   --shadow-pop: 0 2px 4px rgba(28, 26, 23, .06), 0 12px 28px -12px rgba(28, 26, 23, .28);
 
-  /* ── 폐기 예정: 구 팔레트 별칭 ─────────────────────────────────────
-     `brand-*` 는 아직 재구현 전 화면들이 522곳에서 쓴다. 여기서 바로 지우면 그 화면들이
-     클래스 자체를 잃어 배경·글자색이 통째로 빠진다(커밋마다 앱이 돌아야 한다는 조건 위반).
-     그래서 마이그레이션 동안만 **웜 중립 램프로 매핑**해 둔다 — 옛 화면도 즉시 웜 톤이 되고,
-     화면을 하나씩 옮길 때마다 참조가 줄어든다. 마지막 커밋에서 `grep -rn "brand-" src/` 가
-     0이 되면 이 블록과 아래 .glass-panel 을 함께 지운다. 새 코드에서 쓰지 말 것. */
-  --color-brand-50: #f7f6f3;
-  --color-brand-100: #f0ede7;
-  --color-brand-200: #eae7e1;
-  --color-brand-300: #d8d3ca;
-  --color-brand-400: #a9a196;
-  --color-brand-500: #8a8279;
-  --color-brand-600: #6f675e;
-  --color-brand-700: #57534e;
-  --color-brand-800: #3b3833;
-  --color-brand-900: #2a2723;
-  --color-brand-950: #1c1a17;
 }
 
 /* 다크(미드나잇) — 같은 변수를 덮어쓴다. 여기 없는 토큰은 라이트 값을 그대로 쓴다. */
@@ -193,13 +176,6 @@ body {
 :where(a, button, input, select, textarea, [tabindex]):focus-visible {
   outline: 2px solid var(--color-accent);
   outline-offset: 1px;
-}
-
-/* 폐기 예정 — Recorder 전사 패널 1곳만 쓴다(녹음 화면 재구현 시 surface 토큰으로 대체하고
-   이 규칙을 지운다). 지금 지우면 전사 텍스트 뒤 배경이 사라져 스티키 헤더가 비쳐 보인다. */
-.glass-panel {
-  background: var(--color-surface);
-  border: 1px solid var(--color-line);
 }
 
 ::-webkit-scrollbar { width: 9px; height: 9px; }

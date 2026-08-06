@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
-import PersonaLane from "./PersonaLane";
+import PersonaPanel from "./PersonaPanel";
 import type { Facilitation } from "../lib/types";
 
 /**
@@ -33,26 +33,26 @@ const item = (over: Partial<Facilitation> = {}): Facilitation => ({
   ...over,
 });
 
-describe("PersonaLane", () => {
+describe("PersonaPanel", () => {
   it("낼 것이 없으면 레인을 렌더하지 않는다", () => {
-    const { container } = render(<PersonaLane items={[]} />);
+    const { container } = render(<PersonaPanel items={[]} />);
     expect(container).toBeEmptyDOMElement();
   });
 
-  it("개입이 오면 레인과 카드가 나타난다", () => {
-    render(<PersonaLane items={[item()]} onMute={vi.fn()} />);
-    expect(screen.getByText("페르소나")).toBeInTheDocument();
+  it("개입이 오면 카드가 나타난다", () => {
+    // 패널 자체에는 제목을 두지 않는다 — 인스펙터 탭 이름("진행 도우미")이 그 역할이다.
+    render(<PersonaPanel items={[item()]} onMute={vi.fn()} />);
     expect(screen.getByText("📝 서기")).toBeInTheDocument();
     expect(screen.getByText(/담당자와 기한이 비어 있습니다/)).toBeInTheDocument();
   });
 
   it("끄는 버튼은 항상 보이고, 끄면 '생성을 멈췄다'로 바뀐다", async () => {
     const onMute = vi.fn();
-    const { rerender } = render(<PersonaLane items={[item()]} onMute={onMute} />);
+    const { rerender } = render(<PersonaPanel items={[item()]} onMute={onMute} />);
     await userEvent.click(screen.getByRole("button", { name: "이번 회의 끔" }));
     expect(onMute).toHaveBeenCalledOnce();
 
-    rerender(<PersonaLane items={[]} muted onMute={onMute} />);
+    rerender(<PersonaPanel items={[]} muted onMute={onMute} />);
     // 문구가 실제 동작과 같아야 한다: 표시만 끄는 게 아니라 서버가 생성을 멈춘다.
     // "표시하지 않습니다"로만 적혀 있던 동안 서버는 계속 개입을 만들고 과금했다.
     expect(screen.getByText(/개입 생성을 멈췄습니다/)).toBeInTheDocument();
@@ -61,7 +61,7 @@ describe("PersonaLane", () => {
   });
 
   it("한도·예산 사유는 회색 칩으로 남는다 — 조용히 꺼지지 않는다", () => {
-    render(<PersonaLane items={[]} status={{
+    render(<PersonaPanel items={[]} status={{
       kind: "budget", message: "이번 회의 개입 예산 12건을 모두 썼습니다",
     }} />);
     expect(screen.getByText(/개입 예산 12건을 모두 썼습니다/)).toBeInTheDocument();
@@ -69,26 +69,52 @@ describe("PersonaLane", () => {
 
   it("대기(참견도 2)가 있으면 [지금 점검] 버튼과 건수가 뜬다", async () => {
     const onCheckNow = vi.fn();
-    render(<PersonaLane items={[]} pending={2} onCheckNow={onCheckNow} />);
+    render(<PersonaPanel items={[]} pending={2} onCheckNow={onCheckNow} />);
     await userEvent.click(screen.getByRole("button", { name: /지금 점검 2/ }));
     expect(onCheckNow).toHaveBeenCalledOnce();
   });
 
   it("pending 이 0이면 [지금 점검] 을 띄우지 않는다", () => {
-    render(<PersonaLane items={[item()]} pending={0} onCheckNow={vi.fn()} />);
+    render(<PersonaPanel items={[item()]} pending={0} onCheckNow={vi.fn()} />);
     expect(screen.queryByRole("button", { name: /지금 점검/ })).toBeNull();
+  });
+});
+
+describe("팩트체커 상단 고정 (FR-REC-7)", () => {
+  /**
+   * 지적(사실 오류)은 흘려보내면 안 되는 유일한 종류다 — 카드가 쌓이면 스크롤 아래로
+   * 밀려 회의가 끝날 때까지 안 보인다. 그래서 팩트체커만 "확인 필요 N" 아래 위로 모은다.
+   */
+  it("팩트체커는 '확인 필요 N' 묶음으로 먼저 나오고 나머지는 '제안' 아래로 간다", () => {
+    render(<PersonaPanel items={[
+      item({ id: "s1", persona: "scribe", personaLabel: "📝 서기" }),
+      item({ id: "f1", persona: "fact_checker", personaLabel: "🔍 팩트체커", risk: "high" }),
+    ]} onMute={vi.fn()} />);
+
+    expect(screen.getByText("확인 필요 1")).toBeInTheDocument();
+    expect(screen.getByText("제안")).toBeInTheDocument();
+
+    // 순서까지 본다 — 라벨만 있고 아래에 있으면 고정의 의미가 없다.
+    const all = screen.getByText("🔍 팩트체커").compareDocumentPosition(screen.getByText("📝 서기"));
+    expect(all & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("팩트체커가 없으면 '확인 필요'도 '제안'도 붙이지 않는다(빈 라벨 금지)", () => {
+    render(<PersonaPanel items={[item()]} onMute={vi.fn()} />);
+    expect(screen.queryByText(/확인 필요/)).toBeNull();
+    expect(screen.queryByText("제안")).toBeNull();
   });
 });
 
 describe("PersonaCard", () => {
   it("'초안' 배지는 항상 붙는다", () => {
-    render(<PersonaLane items={[item()]} />);
+    render(<PersonaPanel items={[item()]} />);
     expect(screen.getByText("초안")).toBeInTheDocument();
   });
 
   it("접힘이 기본 — 근거·버튼은 펼친 뒤에만 보인다", async () => {
     const onJump = vi.fn();
-    render(<PersonaLane items={[item({ span: { t0: 12.5, t1: 15.0 } })]}
+    render(<PersonaPanel items={[item({ span: { t0: 12.5, t1: 15.0 } })]}
                         onJump={onJump} onAck={vi.fn()} onDismiss={vi.fn()} />);
     expect(screen.queryByText(/발화 보기/)).toBeNull();
 
@@ -101,7 +127,7 @@ describe("PersonaCard", () => {
   it("확인·닫기는 각각 id 로 카드를 제거한다", async () => {
     const onAck = vi.fn();
     const onDismiss = vi.fn();
-    render(<PersonaLane items={[item()]} onAck={onAck} onDismiss={onDismiss} />);
+    render(<PersonaPanel items={[item()]} onAck={onAck} onDismiss={onDismiss} />);
     await userEvent.click(screen.getByRole("button", { name: /서기/ }));
     await userEvent.click(screen.getByRole("button", { name: /확인/ }));
     expect(onAck).toHaveBeenCalledWith("fac_1");
@@ -110,7 +136,7 @@ describe("PersonaCard", () => {
   });
 
   it("위험도를 색만으로 전달하지 않는다 — 라벨을 병기한다(색약 대응)", () => {
-    render(<PersonaLane items={[
+    render(<PersonaPanel items={[
       item({ id: "a", risk: "high", persona: "critic", personaLabel: "🧐 비판자",
              kind: "contrast" }),
     ]} />);
@@ -118,7 +144,7 @@ describe("PersonaCard", () => {
   });
 
   it("라이브 검증 없는 도메인·팩트체커 개입엔 '미검증' 배지를 붙인다", () => {
-    render(<PersonaLane items={[
+    render(<PersonaPanel items={[
       item({ persona: "domain_expert", personaLabel: "🎓 도메인 전문가",
              kind: "question", searched: false }),
     ]} />);
@@ -126,7 +152,7 @@ describe("PersonaCard", () => {
   });
 
   it("근거 없는 저위험 페르소나엔 '미검증' 배지를 붙이지 않는다", () => {
-    render(<PersonaLane items={[item({ searched: false })]} />);
+    render(<PersonaPanel items={[item({ searched: false })]} />);
     expect(screen.queryByText(/미검증/)).toBeNull();
   });
 });
@@ -155,7 +181,7 @@ const brief = (over: Partial<Facilitation> = {}): Facilitation => item({
 
 describe("중간 요약 카드", () => {
   it("절 제목과 내용을 펼치지 않아도 보여준다", () => {
-    render(<PersonaLane items={[brief()]} />);
+    render(<PersonaPanel items={[brief()]} />);
     expect(screen.getByText("논점")).toBeInTheDocument();
     expect(screen.getByText(/출시 일정 논의/)).toBeInTheDocument();
     expect(screen.getByText("결정")).toBeInTheDocument();
@@ -164,17 +190,17 @@ describe("중간 요약 카드", () => {
   });
 
   it("비어 있는 절은 렌더하지 않는다", () => {
-    render(<PersonaLane items={[brief()]} />);
+    render(<PersonaPanel items={[brief()]} />);
     expect(screen.queryByText("액션")).toBeNull();   // actions: []
   });
 
   it("brief 본문이 없으면 text 로 폴백한다(구버전 서버 호환)", () => {
-    render(<PersonaLane items={[brief({ brief: undefined })]} />);
+    render(<PersonaPanel items={[brief({ brief: undefined })]} />);
     expect(screen.getByText("[결정] 9월 1일로 확정")).toBeInTheDocument();
   });
 
   it("[지금 정리]로 만든 요약은 그 사실을 배지로 남긴다", () => {
-    render(<PersonaLane items={[brief({ onDemand: true })]} />);
+    render(<PersonaPanel items={[brief({ onDemand: true })]} />);
     expect(screen.getByText("지금 정리")).toBeInTheDocument();
   });
 });
@@ -182,7 +208,7 @@ describe("중간 요약 카드", () => {
 describe("[지금 정리] 버튼", () => {
   it("요약이 켜져 있으면 개입이 0건이어도 레인과 버튼이 보인다", async () => {
     const onBriefNow = vi.fn();
-    render(<PersonaLane items={[]} briefOn onBriefNow={onBriefNow} />);
+    render(<PersonaPanel items={[]} briefOn onBriefNow={onBriefNow} />);
     const btn = screen.getByRole("button", { name: "지금 정리" });
     // 새 비용이 발생한다는 사실을 툴팁으로 알린다([지금 점검]과의 차이)
     expect(btn.getAttribute("title")).toMatch(/비용/);
@@ -192,34 +218,34 @@ describe("[지금 정리] 버튼", () => {
 
   it("요약이 꺼져 있으면 버튼도 레인도 없다", () => {
     const { container } = render(
-      <PersonaLane items={[]} briefOn={false} onBriefNow={vi.fn()} />);
+      <PersonaPanel items={[]} briefOn={false} onBriefNow={vi.fn()} />);
     expect(container).toBeEmptyDOMElement();
   });
 
   it("생성 중에는 잠기고 '정리 중…'으로 바뀐다(연타로 과금되지 않게)", () => {
-    render(<PersonaLane items={[]} briefOn briefBusy onBriefNow={vi.fn()} />);
+    render(<PersonaPanel items={[]} briefOn briefBusy onBriefNow={vi.fn()} />);
     expect(screen.getByRole("button", { name: "정리 중…" })).toBeDisabled();
   });
 
   it("이번 회의 끔 상태에서는 버튼을 내린다", () => {
-    render(<PersonaLane items={[]} briefOn muted onBriefNow={vi.fn()} onMute={vi.fn()} />);
+    render(<PersonaPanel items={[]} briefOn muted onBriefNow={vi.fn()} onMute={vi.fn()} />);
     expect(screen.queryByRole("button", { name: /지금 정리/ })).toBeNull();
   });
 });
 
-describe("PersonaLane — 소리", () => {
+describe("PersonaPanel — 소리", () => {
   it("이 기능이 소리를 내지 않는다는 사실을 레인이 말한다", () => {
     // "소리 어떻게 끄냐"는 실제로 나온 질문이다. 끌 소리가 없다는 게 답이라면
     // 화면이 그걸 말해야 한다 — 참견도 4·5(알림음·음성)는 미구현이고 리포에
     // 소리 재생 코드가 0건이다.
-    render(<PersonaLane items={[item()]} onMute={vi.fn()} />);
+    render(<PersonaPanel items={[item()]} onMute={vi.fn()} />);
     const chip = screen.getByText("소리 없음");
     expect(chip).toBeInTheDocument();
     expect(chip.getAttribute("title")).toMatch(/구현되지 않았습니다/);
   });
 
   it("끈 회의에서도 그 사실은 그대로 보인다", () => {
-    render(<PersonaLane items={[]} muted onMute={vi.fn()} />);
+    render(<PersonaPanel items={[]} muted onMute={vi.fn()} />);
     expect(screen.getByText("소리 없음")).toBeInTheDocument();
   });
 });
@@ -229,7 +255,7 @@ describe("카드의 근거 — 무엇과 대조했는지 보여야 한다(§6-5)
     // 종전엔 이 재료가 생성 프롬프트에만 있어서, 카드가 "이전 회의에서 정한 것과
     // 다르다"고 말해도 화면에는 그 근거가 없었다(아이콘 표조차 도달 불가 코드였다).
     const user = userEvent.setup();
-    render(<PersonaLane items={[item({
+    render(<PersonaPanel items={[item({
       persona: "critic",
       evidence: [{ source: "registry", title: "지난 회의 결정",
                    snippet: "[2026-07-15] STT 기본 모델은 mini 로 간다" }],
@@ -242,7 +268,7 @@ describe("카드의 근거 — 무엇과 대조했는지 보여야 한다(§6-5)
   it("다른 발화에서 나간 웹 결과는 그 사실을 밝힌다", async () => {
     // 이 표시가 없으면 30분 전 검색이 방금 나온 수치를 검증한 것처럼 읽힌다.
     const user = userEvent.setup();
-    render(<PersonaLane items={[item({
+    render(<PersonaPanel items={[item({
       persona: "fact_checker",
       searched: false,
       evidence: [{ source: "web", title: "https://e.com/x", snippet: "일반 정보",
@@ -257,7 +283,7 @@ describe("카드의 근거 — 무엇과 대조했는지 보여야 한다(§6-5)
     const many = Array.from({ length: 9 }, (_, i) => ({
       source: "registry", title: "미완료 액션", snippet: `액션 ${i}`,
     }));
-    render(<PersonaLane items={[item({ evidence: many })]} onMute={vi.fn()} />);
+    render(<PersonaPanel items={[item({ evidence: many })]} onMute={vi.fn()} />);
     await user.click(screen.getByText(/담당자와 기한/));
     expect(screen.getByText(/그 밖에 4건/)).toBeInTheDocument();
     expect(screen.queryByText("액션 8")).toBeNull();   // 잘렸다

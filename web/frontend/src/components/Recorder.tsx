@@ -10,7 +10,7 @@ import {
 } from "../lib/api";
 import { MODE_PRESETS, type Facilitation, type FacilitationStatus, type RealtimeSegment } from "../lib/types";
 import ModeSelector from "./ModeSelector";
-import PersonaLane from "./PersonaLane";
+import PersonaPanel from "../ui/PersonaPanel";
 import { KeepAwake } from '@capacitor-community/keep-awake';
 import { Haptics, ImpactStyle, NotificationType } from '@capacitor/haptics';
 
@@ -1608,7 +1608,7 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
         {/* 페르소나 레인 — 관련 노트 바 바로 아래(PRD §19.2). 기능이 꺼져 있으면
             서버가 아무 이벤트도 보내지 않고, 레인은 내용이 없으면 스스로 렌더를
             건너뛴다(빈 바가 전사 영역을 잠식하지 않게). */}
-        <PersonaLane
+        <PersonaPanel
           items={interventions}
           status={facStatus}
           pending={facPending}

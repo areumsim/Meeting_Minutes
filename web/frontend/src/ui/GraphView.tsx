@@ -1,21 +1,19 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { GraphNode, GraphEdge } from "../lib/types";
+import { entityColor, entityLabel } from "../lib/entities";
 
 // 자체 force-directed 지식 그래프 — 외부 라이브러리 없음(오프라인 exe 번들 안전).
 // 스프링(엣지)·반발(노드쌍)·중심 중력으로 스스로 배치되며, 노드를 드래그하면 그래프가
 // 살아 움직이고, 호버하면 연결된 이웃/엣지를 강조한다. 물리는 순수 JS(브라우저).
+//
+// 색·라벨은 **자기 표를 갖지 않는다** — `lib/entities.ts` 하나를 본다(PRD 리뷰 P2-3).
+// 종전에는 여기(8종 hex)·GraphExplorer(6종 tailwind)·SessionDetail(7종 라벨)이 각자
+// 표를 갖고 있어서 같은 '노트' 노드가 화면마다 다른 색이었고, 원시 hex 라 다크 모드에서
+// 라이트 값이 그대로 남았다. 이제 전부 `var(--color-ent-*)` 라 테마를 따라간다.
 
-const TYPE_COLOR: Record<string, { fill: string; ring: string; text: string }> = {
-  person: { fill: "#e0f2fe", ring: "#0284c7", text: "#075985" },
-  project: { fill: "#ede9fe", ring: "#7c3aed", text: "#5b21b6" },
-  meeting: { fill: "#d1fae5", ring: "#059669", text: "#065f46" },
-  topic: { fill: "#fef3c7", ring: "#d97706", text: "#92400e" },
-  organization: { fill: "#ffe4e6", ring: "#e11d48", text: "#9f1239" },
-  decision: { fill: "#e0e7ff", ring: "#4f46e5", text: "#3730a3" },
-  action: { fill: "#fce7f3", ring: "#db2777", text: "#9d174b" },
-  note: { fill: "#f4f4f5", ring: "#71717a", text: "#3f3f46" },
-};
-const colorOf = (t: string) => TYPE_COLOR[t] || { fill: "#f1f5f9", ring: "#64748b", text: "#334155" };
+/** 노드 채움 — 토큰 색을 배경에 아주 옅게 섞는다(테두리·글자는 토큰 색 그대로). */
+const fillOf = (t: string) =>
+  `color-mix(in srgb, ${entityColor(t)} 14%, var(--color-surface))`;
 const truncate = (s: string, n = 12) => (s && s.length > n ? s.slice(0, n - 1) + "…" : s || "");
 
 interface SimNode {
@@ -271,7 +269,7 @@ export default function MiniGraph({
             <line
               key={i}
               x1={a.x} y1={a.y} x2={b.x} y2={b.y}
-              stroke={hot ? "#0f766e" : "#cbd5e1"}
+              stroke={hot ? "var(--color-accent)" : "var(--color-line-strong)"}
               strokeWidth={hot ? 2 : 1.4}
               opacity={faded ? 0.2 : 1}
             >
@@ -286,7 +284,7 @@ export default function MiniGraph({
             <text
               key={"l" + i}
               x={(a.x + b.x) / 2} y={(a.y + b.y) / 2 - 3}
-              textAnchor="middle" fontSize={8.5} fontWeight={700} fill="#0f766e"
+              textAnchor="middle" fontSize={8.5} fontWeight={700} fill="var(--color-accent)"
               style={{ pointerEvents: "none" }}
             >
               {e.relation_type}
@@ -295,7 +293,7 @@ export default function MiniGraph({
         })}
         {/* 노드 */}
         {sim.list.map((p) => {
-          const c = colorOf(p.node.type);
+          const c = entityColor(p.node.type);
           const active = p.center || activeId === p.node.id || hoverId === p.id;
           const faded = dim(p.id);
           return (
@@ -307,41 +305,92 @@ export default function MiniGraph({
               onPointerEnter={() => setHoverId(p.id)}
               onPointerLeave={() => setHoverId((h) => (h === p.id ? null : h))}
             >
-              <title>{`${p.node.type}: ${p.node.label}`}</title>
+              <title>{`${entityLabel(p.node.type)}: ${p.node.label}`}</title>
               <circle
                 r={p.r}
-                fill={c.fill}
-                stroke={c.ring}
+                fill={fillOf(p.node.type)}
+                stroke={c}
                 strokeWidth={active ? 3 : 1.6}
               />
               <text
                 textAnchor="middle" dominantBaseline="central"
                 fontSize={p.center ? 12 : 10.5}
                 fontWeight={p.center ? 700 : 500}
-                fill={c.text}
+                fill="var(--color-ink)"
                 style={{ pointerEvents: "none" }}
               >
                 {truncate(p.node.label, p.center ? 12 : 10)}
               </text>
+              {/* 타입은 원문(person)이 아니라 한국어 라벨(인물)로 — 화면 기본 언어가 한국어다.
+                  색만으로 타입을 구분하지 않는다는 규칙(PRD §5.5)의 글자 축이기도 하다. */}
               <text
                 y={p.r + 12} textAnchor="middle"
-                fontSize={8.5} fontWeight={700} letterSpacing={0.4} fill={c.ring}
-                style={{ textTransform: "uppercase", pointerEvents: "none" }}
+                fontSize={8.5} fontWeight={700} letterSpacing={0.4} fill={c}
+                style={{ pointerEvents: "none" }}
               >
-                {p.node.type}
+                {entityLabel(p.node.type)}
               </text>
             </g>
           );
         })}
         {sim.hidden > 0 && (
-          <text x={W - 10} y={height - 10} textAnchor="end" fontSize={11} fill="#94a3b8">
+          <text x={W - 10} y={height - 10} textAnchor="end" fontSize={11} fill="var(--color-ink-3)">
             +{sim.hidden}개 더 (아래 목록에서 전체 확인)
           </text>
         )}
       </svg>
-      <p className="text-[11px] text-brand-500 px-3 pb-2 -mt-1">
+      <p className="-mt-1 px-3 pb-2 text-xs text-ink-3">
         노드를 <b>끌어서</b> 움직이거나 <b>클릭</b>해 이동 · 노드에 커서를 올리면 연결 관계가 강조됩니다.
       </p>
     </div>
+  );
+}
+
+/**
+ * 그래프의 **키보드 경로**(PRD FR-KNO-3·§5.5).
+ *
+ * 위 SVG 는 `role="img"` 이라 포인터로만 다룰 수 있다 — 드래그로 도는 물리 시뮬레이션을
+ * 키보드로 조작 가능하게 만드는 것은 무리이고, 그럴 필요도 없다. 대신 **같은 노드 집합을
+ * 버튼 목록으로도** 낸다. 그래프를 못 쓰는 사용자도 모든 노드에 도달하고, 각 버튼은
+ * "인물 심아름, 연결 탐색" 처럼 타입을 포함한 이름을 갖는다(아이콘·색이 안 보여도 구분된다).
+ *
+ * 시각적으로도 감추지 않는다 — 그래프 옆의 노드 칩 목록은 마우스 사용자에게도 유용하고,
+ * 숨긴 접근성 경로는 곧 썩는다(아무도 눈으로 확인하지 않는다).
+ */
+export function GraphNodeList({
+  nodes, activeId, onSelect, emptyText = "표시할 노드가 없습니다.",
+}: {
+  nodes: GraphNode[];
+  activeId?: string | null;
+  onSelect: (node: GraphNode) => void;
+  emptyText?: string;
+}) {
+  if (nodes.length === 0) {
+    return <p className="text-sm text-ink-3">{emptyText}</p>;
+  }
+  return (
+    <ul className="flex flex-wrap gap-1.5">
+      {nodes.map((n) => (
+        <li key={n.id}>
+          <button
+            type="button"
+            onClick={() => onSelect(n)}
+            aria-label={`${entityLabel(n.type)} ${n.label}, 연결 탐색`}
+            aria-current={activeId === n.id ? "true" : undefined}
+            className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-sm
+              transition-colors hover:bg-hover ${
+                activeId === n.id
+                  ? "border-accent bg-accent-weak text-accent"
+                  : "border-line-strong bg-surface text-ink"
+              }`}
+          >
+            <span aria-hidden="true" className="h-1.5 w-1.5 shrink-0 rounded-full"
+              style={{ background: entityColor(n.type) }} />
+            <span className="truncate">{n.label}</span>
+            <span className="text-xs text-ink-3">{entityLabel(n.type)}</span>
+          </button>
+        </li>
+      ))}
+    </ul>
   );
 }

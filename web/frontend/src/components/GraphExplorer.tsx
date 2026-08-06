@@ -2,7 +2,7 @@ import { useState, useEffect } from "react";
 import { Search, Loader2, ChevronRight, Network, ArrowLeft, X } from "lucide-react";
 import { listGraphNodes, getNodeNeighbors } from "../lib/api";
 import type { GraphNode, GraphEdge, GraphNeighbors } from "../lib/types";
-import MiniGraph from "./MiniGraph";
+import GraphView from "../ui/GraphView";
 
 // 노드 타입별 색상 (라벨 배지)
 const TYPE_TONE: Record<string, string> = {
@@ -206,7 +206,7 @@ export default function GraphExplorer({ initialQuery = "" }: { initialQuery?: st
           {/* 시각적 그래프 개요 (배지 리스트와 함께 제공) */}
           {focus.neighbors.length > 0 && (
             <div className="mt-3 mb-4 rounded-xl border border-brand-100 bg-brand-50/40">
-              <MiniGraph
+              <GraphView
                 nodes={[focus.node, ...focus.neighbors]}
                 edges={focus.edges}
                 centerId={focus.node.id}
@@ -248,7 +248,7 @@ export default function GraphExplorer({ initialQuery = "" }: { initialQuery?: st
                     <Network size={13} /> 연결 개요
                     {overviewLoading && <Loader2 size={12} className="animate-spin" />}
                   </div>
-                  <MiniGraph
+                  <GraphView
                     nodes={overview.nodes}
                     edges={overview.edges}
                     onNodeClick={(n) => openNode(n)}

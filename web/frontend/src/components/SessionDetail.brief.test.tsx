@@ -28,7 +28,7 @@ const api = vi.hoisted(() => ({
 
 vi.mock("../lib/api", () => api);
 vi.mock("@capacitor/share", () => ({ Share: { share: vi.fn() } }));
-vi.mock("./MiniGraph", () => ({ default: () => null }));
+vi.mock("../ui/GraphView", () => ({ default: () => null }));
 vi.mock("motion/react", () => ({
   motion: new Proxy({}, { get: () => (p: any) => <div {...p} /> }),
 }));

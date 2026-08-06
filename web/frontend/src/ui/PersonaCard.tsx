@@ -4,6 +4,7 @@ import {
   Search, ShieldAlert, Swords, X,
 } from "lucide-react";
 import type { Facilitation } from "../lib/types";
+import { sourceStyle } from "../lib/entities";
 
 /**
  * 페르소나 개입 카드 1장 (PRD §19.3).
@@ -16,11 +17,15 @@ import type { Facilitation } from "../lib/types";
  *  - 새 디자인 시스템을 만들지 않는다(Tailwind 유틸 + lucide, 기존 관례).
  */
 
-/** 위험 티어별 색 — 저위험(정보) sky / 중위험(관점) violet / 고위험(지적) amber. */
+/**
+ * 위험 티어 — 정보(persona) / 관점(proc) / 지적(warn). 전부 토큰이라 다크에서도 따라간다.
+ * 색은 보조 신호일 뿐이고 `label` 이 함께 나간다(색약 대응, §19.7) — 그래서 sky 같은
+ * 2번째 파랑을 새로 만들지 않고 이미 있는 보조 시스템색을 쓴다(PRD §5.1 리뷰 P2-4).
+ */
 const RISK_STYLE: Record<string, { chip: string; icon: string; label: string }> = {
-  low: { chip: "border-sky-200 bg-sky-50 hover:border-sky-400", icon: "text-sky-600", label: "정보" },
-  medium: { chip: "border-violet-200 bg-violet-50 hover:border-violet-400", icon: "text-violet-600", label: "관점" },
-  high: { chip: "border-amber-200 bg-amber-50 hover:border-amber-400", icon: "text-amber-600", label: "지적" },
+  low: { chip: "border-line bg-persona-bg hover:border-persona", icon: "text-persona", label: "정보" },
+  medium: { chip: "border-line bg-proc-bg hover:border-proc", icon: "text-proc", label: "관점" },
+  high: { chip: "border-warn-line bg-warn-bg hover:border-warn", icon: "text-warn", label: "지적" },
 };
 
 const PERSONA_ICON: Record<string, React.ComponentType<{ className?: string }>> = {
@@ -45,11 +50,9 @@ const KIND_LABEL: Record<string, string> = {
   brief: "중간 요약",
 };
 
-/** 근거 출처 아이콘 — 서버 `realtime_search.SOURCE_ICON` + `personas.EV_REGISTRY`.
- *  "지난 회의 결정"과 "논문"과 "웹"이 같은 📄 로 보이면 무엇과 대조했는지 알 수 없다. */
-const EVIDENCE_ICON: Record<string, string> = {
-  note: "📄", paper: "🎓", web: "🌐", registry: "🗂",
-};
+// 근거 출처 아이콘·라벨은 `lib/entities.ts` 하나를 본다 — 종전에는 여기(EVIDENCE_ICON)와
+// Recorder(SOURCE_ICON)가 같은 개념의 표를 따로 갖고 있었다. 이모지는 쓰지 않는다:
+// Windows 버전마다 렌더가 다르고 스크린리더가 "서류철"처럼 읽는다(PRD §5.3).
 
 /** 카드에 펼쳐 보일 근거 줄 수. 지난 회의 기록은 결정 5 + 액션 5 까지 올 수 있어
  *  전부 그리면 카드가 화면을 덮는다. 넘치는 건수는 숨기지 않고 숫자로 알린다. */
@@ -82,7 +85,9 @@ export default function PersonaCard({
     : [];
 
   return (
-    <div className={`shrink-0 max-w-[min(22rem,80vw)] border rounded-xl px-2.5 py-1.5 transition-colors ${style.chip}`}>
+    // 인스펙터(세로 목록) 안에 놓인다 — 폭은 컨테이너를 따른다. 종전 가로 레인 시절의
+    // 고정 최대폭을 남겨 두면 320px 패널에서 카드가 잘린다.
+    <div className={`w-full rounded-card border px-2.5 py-1.5 transition-colors ${style.chip}`}>
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
@@ -92,28 +97,28 @@ export default function PersonaCard({
       >
         <div className="flex items-center gap-1.5">
           <Icon className={`w-3.5 h-3.5 shrink-0 ${style.icon}`} />
-          <span className="text-[11px] font-bold text-zinc-700 whitespace-nowrap">
+          <span className="text-xs font-bold text-ink whitespace-nowrap">
             {item.personaLabel}
           </span>
-          <span className="text-[11px] text-zinc-500 whitespace-nowrap">
+          <span className="text-xs text-ink-3 whitespace-nowrap">
             {KIND_LABEL[item.kind] || item.kind} · {style.label}
           </span>
           {/* 항상 붙는 초안 라벨 — 판정이 아니라 제안이다 */}
-          <span className="text-[11px] bg-white/70 border border-zinc-200 text-zinc-500 px-1 rounded whitespace-nowrap">
+          <span className="text-xs bg-surface/70 border border-line-strong text-ink-3 px-1 rounded whitespace-nowrap">
             초안
           </span>
           {/* 팩트체커·도메인의 신뢰 수준 구분(§6). M1 은 라이브 검색을 쓰지 않는다. */}
           {item.searched === false && (item.persona === "fact_checker" || item.persona === "domain_expert") && (
             <span
-              className="text-[11px] bg-white/70 border border-amber-200 text-amber-700 px-1 rounded whitespace-nowrap"
+              className="inline-flex items-center gap-0.5 whitespace-nowrap rounded border border-warn-line bg-surface/70 px-1 text-xs text-warn"
               title="라이브 웹 검증 없이 사내 노트·대화만 근거로 한 제안입니다"
             >
-              ⚠ 미검증
+              <AlertTriangle size={10} aria-hidden="true" /> 미검증
             </span>
           )}
           {/* 주기 자동 요약과 사용자가 누른 요약을 구분한다(과금 계기가 다르다) */}
           {isBrief && item.onDemand && (
-            <span className="text-[11px] bg-white/70 border border-zinc-200 text-zinc-500 px-1 rounded whitespace-nowrap">
+            <span className="text-xs bg-surface/70 border border-line-strong text-ink-3 px-1 rounded whitespace-nowrap">
               지금 정리
             </span>
           )}
@@ -121,23 +126,23 @@ export default function PersonaCard({
         {sections.length > 0 ? (
           <div className={`mt-1 space-y-0.5 ${open ? "" : "max-h-10 overflow-hidden"}`}>
             {sections.map((s) => (
-              <p key={s.key} className="text-[11px] text-zinc-700 leading-snug">
-                <b className="text-zinc-500">{s.label}</b>{" "}
+              <p key={s.key} className="text-xs text-ink leading-snug">
+                <b className="text-ink-3">{s.label}</b>{" "}
                 {(item.brief?.[s.key] || []).join(" · ")}
               </p>
             ))}
           </div>
         ) : (
-          <p className={`text-xs text-zinc-700 mt-0.5 ${open ? "" : "line-clamp-1"}`}>
+          <p className={`text-xs text-ink mt-0.5 ${open ? "" : "line-clamp-1"}`}>
             {item.text}
           </p>
         )}
       </button>
 
       {open && (
-        <div className="mt-1.5 pt-1.5 border-t border-white/80 space-y-1.5 max-h-44 overflow-y-auto">
+        <div className="mt-1.5 pt-1.5 border-t border-line space-y-1.5 max-h-44 overflow-y-auto">
           {item.quote && (
-            <p className="text-[11px] text-zinc-500 italic">“{item.quote}”</p>
+            <p className="text-xs text-ink-3 italic">“{item.quote}”</p>
           )}
           {(item.evidence || []).length > 0 && (
             /* 근거는 서버가 한 목록으로 준다(노트·논문·지난 회의 기록·웹). 지난 회의
@@ -146,26 +151,34 @@ export default function PersonaCard({
                EVIDENCE_MAX 로 잘라 카드가 길어지지 않게 한다(지난 결정 5 + 액션 5 가
                올 수 있다). 남은 건수는 아래에 숫자로 알린다 — 조용히 감추지 않는다. */
             <ul className="space-y-0.5">
-              {(item.evidence || []).slice(0, EVIDENCE_MAX).map((e, i) => (
+              {(item.evidence || []).slice(0, EVIDENCE_MAX).map((e, i) => {
+                const src = sourceStyle(e.source);
+                const SrcIcon = src.icon;
+                return (
                 <li
                   key={`${e.title}-${i}`}
-                  className="text-[11px] text-zinc-600"
+                  className="flex items-baseline gap-1 text-xs text-ink-2"
                   title={e.segment ? `"${e.segment}" 발화에서 검색된 결과` : undefined}
                 >
-                  {EVIDENCE_ICON[e.source || "note"] || "📄"} <b>{e.title}</b>
+                  {/* 아이콘은 장식이 아니다 — 무엇과 대조했는지가 정보라 라벨을 함께 낸다
+                      (노트/논문/지난 회의/웹이 같은 그림으로 보이면 구분이 사라진다). */}
+                  <SrcIcon size={11} className="shrink-0 translate-y-0.5" aria-hidden="true" />
+                  <span className="sr-only">{src.label}: </span>
+                  <b>{e.title}</b>
                   {/* 다른 발화에서 나간 웹 검색이면 그 사실을 밝힌다 — 이 카드의
                       주장을 '검증된 것'으로 읽지 않게 한다(searched 배지와 같은 근거). */}
                   {e.source === "web" && e.matched === false && (
-                    <span className="text-zinc-400"> (다른 발화)</span>
+                    <span className="text-ink-3"> (다른 발화)</span>
                   )}
                   {typeof e.score === "number" && e.score > 0 && (
-                    <span className="text-zinc-500"> · {e.score.toFixed(3)}</span>
+                    <span className="text-ink-3"> · {e.score.toFixed(3)}</span>
                   )}
-                  {e.snippet && <span className="text-zinc-500"> — {e.snippet}</span>}
+                  {e.snippet && <span className="text-ink-3"> — {e.snippet}</span>}
                 </li>
-              ))}
+                );
+              })}
               {(item.evidence || []).length > EVIDENCE_MAX && (
-                <li className="text-[11px] text-zinc-400">
+                <li className="text-xs text-ink-3">
                   … 그 밖에 {(item.evidence || []).length - EVIDENCE_MAX}건
                 </li>
               )}
@@ -176,7 +189,7 @@ export default function PersonaCard({
               <button
                 type="button"
                 onClick={() => onJump(item.span!)}
-                className="text-[11px] text-zinc-500 hover:text-zinc-800 font-medium"
+                className="text-xs text-ink-3 hover:text-ink font-medium"
               >
                 ⟲ 발화 보기
               </button>
@@ -185,7 +198,7 @@ export default function PersonaCard({
               <button
                 type="button"
                 onClick={() => onAck(item.id)}
-                className="text-[11px] text-emerald-700 hover:text-emerald-900 font-medium flex items-center gap-0.5"
+                className="text-xs text-ok hover:text-ok font-medium flex items-center gap-0.5"
                 title="봤습니다 — 카드를 닫습니다"
               >
                 <Check className="w-3 h-3" /> 확인
@@ -195,7 +208,7 @@ export default function PersonaCard({
               <button
                 type="button"
                 onClick={() => onDismiss(item.id)}
-                className="text-[11px] text-zinc-500 hover:text-zinc-700 font-medium flex items-center gap-0.5"
+                className="text-xs text-ink-3 hover:text-ink font-medium flex items-center gap-0.5"
                 title="필요 없습니다"
               >
                 <X className="w-3 h-3" /> 닫기

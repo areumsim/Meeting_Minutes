@@ -4,7 +4,7 @@ import { Share as ShareIcon, ArrowLeft, Copy, Download, Loader2, CheckCircle, Cl
 } from "lucide-react";
 import { motion } from "motion/react";
 import Markdown from "./Markdown";
-import MiniGraph from "./MiniGraph";
+import GraphView from "../ui/GraphView";
 import { Share } from '@capacitor/share';
 import { getSession, getSessionStatus, generateSummaryForSession, getTargetEmail,
   getSessionGraph, getNodeNeighbors, getUploadProgress, getSessionCost, cancelUpload,
@@ -488,7 +488,7 @@ export default function SessionDetail({ id, onBack, onOpenGraph }: Props) {
                     const meetingId = (graph.nodes.meeting?.[0])?.id;
                     return allNodes.length > 0 ? (
                       <div className="rounded-xl border border-brand-100 bg-brand-50/40">
-                        <MiniGraph
+                        <GraphView
                           nodes={allNodes}
                           edges={graph.edges}
                           centerId={meetingId}

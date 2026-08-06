@@ -145,6 +145,71 @@ def load_decision_registry(path: Path) -> dict:
         return _empty_decision_reg()
 
 
+def _norm_kw(text: str) -> str:
+    """주제 매칭용 정규화 — 소문자 + **공백 제거**.
+
+    공백을 지우는 이유: 사용자가 녹음 화면 '주제' 칸에 `양자컴퓨터` 라고 붙여 쓰고
+    registry 본문에는 `양자 컴퓨팅` 처럼 띄어 적혀 있으면, 종전 부분문자열 비교로는
+    한 글자도 안 걸렸다. 실측(이 리포의 실제 registry 37건):
+        "양자컴퓨터 도입 검토"  → 지난 결정 0건 / 미완료 액션 2건
+        "양자 컴퓨팅 예산 검토" → 지난 결정 3건 / 미완료 액션 5건
+    **띄어쓰기 하나로 '이전 회의 대조' 기능이 죽는 것은 결함이다.**
+    """
+    return re.sub(r"\s+", "", (text or "").lower())
+
+
+#: 약한 일치를 허용하는 최소 키워드 길이. 짧은 키워드(2~3자)는 이미 부분문자열로
+#: 충분히 걸리고, 짧은데 접두사까지 허용하면 무관한 항목이 들어온다.
+_WEAK_MATCH_MIN_KW = 4
+
+
+def _keyword_hit(keyword: str, text: str) -> int:
+    """키워드가 이 텍스트에 걸리는가 — 2(직접 포함) · 1(약한 일치) · 0(없음).
+
+    · 직접 포함 = 공백을 지운 양쪽에서 부분문자열. `양자컴퓨팅` ↔ `양자 컴퓨팅` 이
+      여기서 같아진다.
+    · 약한 일치 = **본문 토큰이 키워드의 접두사**인 경우. 사용자가 복합어를 붙여 쓴
+      경우를 잡는다(`양자컴퓨터` ← 본문 토큰 `양자`). 포함(containment)이 아니라
+      **접두사**로 한정하는 것이 핵심이다 — 포함으로 열면 `예산검토` 가 본문의
+      흔한 낱말 `검토` 하나로 걸려 registry 전체가 후보가 된다(한국어 복합어는
+      앞쪽 형태소가 주제를 지고, 뒤쪽은 `검토·계획·방안` 같은 일반명사다).
+    """
+    kw, tx = _norm_kw(keyword), _norm_kw(text)
+    if not kw or not tx:
+        return 0
+    if kw in tx:
+        return 2
+    if len(kw) >= _WEAK_MATCH_MIN_KW:
+        for tok in re.split(r"[\s,·/()\[\]{}<>\"'“”‘’]+", str(text or "").lower()):
+            tok = _norm_kw(tok)
+            if len(tok) >= 2 and kw.startswith(tok):
+                return 1
+    return 0
+
+
+def useful_topic_tags(tags: Any) -> List[str]:
+    """저장된 `topics` 태그에서 **주제 정보가 있는 것만** 남긴다(읽는 쪽 필터).
+
+    `_extract_topic_keywords_from_title()` 과 **같은 규칙**이지만 적용 시점이 다르다:
+    저쪽은 쓸 때, 이쪽은 읽을 때다. 둘 다 필요한 이유 — 이미 저장된 항목의 태그는
+    고칠 수 없다(사용자 데이터다). 실측: 실제 registry 37건의 태그가
+    `실시간·2026년·07월·31일·09:15` 뿐이어서, 주제에 그 흔한 낱말이 하나라도 들어가면
+    **전 항목이 매칭**됐다. 읽을 때 걸러야 기존 데이터에도 즉시 듣는다.
+
+    규칙을 두 곳에 복제하지 않으려고 판정은 `_TITLE_TAG_STOPWORDS`/`_DATE_TIME_TAG`
+    하나만 본다.
+    """
+    out: List[str] = []
+    for t in (tags or []):
+        s = str(t).strip().lower()
+        if len(s) < 2 or s in _TITLE_TAG_STOPWORDS:
+            continue
+        if re.match(r'^\d+$', s) or _DATE_TIME_TAG.match(s):
+            continue
+        out.append(s)
+    return out
+
+
 def _filter_actions_by_topic(
     actions: list,
     topic: str,
@@ -175,24 +240,28 @@ def _filter_actions_by_topic(
     if not topic_keywords and not attendee_norms:
         return open_actions[:limit]
 
+    # 점수는 종전의 2배 스케일이다(tag 2→4, 본문 1→2, owner 3→6). 순위는 그대로이고,
+    # **약한 일치를 각자의 절반**으로 둘 자리를 만들기 위한 것이다 — 약한 일치가 직접
+    # 일치와 같은 점수를 받으면 registry 가 여러 프로젝트를 섞어 담고 있을 때 무관한
+    # 항목이 상위로 올라온다(이 함수 docstring 의 '잡음' 우려).
     scored: List[Tuple[int, dict]] = []
     for action in open_actions:
         score = 0
         # topic 매칭
-        for t in action.get("topics", []):
-            if any(kw in str(t).lower() for kw in topic_keywords):
-                score += 2
-        title_text = str(action.get("title", "")).lower()
+        for t in useful_topic_tags(action.get("topics")):
+            best = max((_keyword_hit(kw, str(t)) for kw in topic_keywords), default=0)
+            score += (4 if best == 2 else 2 if best == 1 else 0)
+        title_text = str(action.get("title", ""))
         for kw in topic_keywords:
-            if kw in title_text:
-                score += 1
+            hit = _keyword_hit(kw, title_text)
+            score += (2 if hit == 2 else 1 if hit == 1 else 0)
         # attendees 매칭 — owner 필드
         if attendee_norms:
             owner_norm = re.sub(r'\s+', '', str(action.get("owner", "")).lower())
             # owner_norm이 빈 문자열이면 "" in an이 항상 True가 되어 담당자 미상 액션이
             # 모든 참석자와 매칭된 것처럼 처리되는 버그 방지 — owner가 실제로 있을 때만 비교.
             if owner_norm and any(an in owner_norm or owner_norm in an for an in attendee_norms if an):
-                score += 3
+                score += 6
         if score > 0:
             scored.append((score, action))
 
@@ -217,16 +286,18 @@ def _filter_decisions_by_topic(
     if not topic_keywords:
         return sorted_all[:limit]
 
+    # 점수 스케일·약한 일치 규칙은 `_filter_actions_by_topic` 과 같다(같은 판정을 두 곳에
+    # 복제하지 않도록 `_keyword_hit` 하나만 쓴다 — 이 리포가 반복해서 대가를 치른 패턴).
     scored: List[Tuple[int, dict]] = []
     for d in sorted_all:
         score = 0
-        for t in d.get("topics", []):
-            if any(kw in str(t).lower() for kw in topic_keywords):
-                score += 2
-        summary_text = str(d.get("summary", "")).lower()
+        for t in useful_topic_tags(d.get("topics")):
+            best = max((_keyword_hit(kw, str(t)) for kw in topic_keywords), default=0)
+            score += (4 if best == 2 else 2 if best == 1 else 0)
+        summary_text = str(d.get("summary", ""))
         for kw in topic_keywords:
-            if kw in summary_text:
-                score += 1
+            hit = _keyword_hit(kw, summary_text)
+            score += (2 if hit == 2 else 1 if hit == 1 else 0)
         if score > 0:
             scored.append((score, d))
 
@@ -297,10 +368,50 @@ def _is_junk_registry_text(text: str) -> bool:
     return len(_norm_key(text)) < 2
 
 
+#: 제목 조각 중 **주제가 아닌** 것들. 이 앱이 자동으로 만드는 제목이
+#: `실시간 녹음 260806-1048` · `새로운 녹음 4` · `session_20260715_091717` 형태이고,
+#: 업로드 제목은 파일명에서 온다. 그 조각이 그대로 topics 태그가 되면
+#: **모든 항목이 같은 태그를 갖게 되어** 주제 필터가 "전체 매칭"으로 무력화된다
+#: (실측: 실제 registry 37건의 태그가 실시간·2026년·07월·31일·09:15 뿐이었다).
+_TITLE_TAG_STOPWORDS = frozenset({
+    "실시간", "녹음", "새로운", "회의", "회의록", "세션", "테스트",
+    "session", "audio", "recording", "new",
+    "mp3", "m4a", "wav", "webm", "mp4", "txt", "md",
+})
+
+#: 날짜·시각 조각. 순수 숫자만 걸러도 `2026년` `07월` `31일` `09:15` `260806-1048` 은
+#: 남아 태그가 된다 — 이것들은 주제 정보가 0인데 흔해서 오탐만 만든다.
+_DATE_TIME_TAG = re.compile(
+    r'^('
+    r'\d{1,4}[년월일시분초]|'          # 2026년 07월 31일 09시
+    r'\d{1,2}:\d{2}(:\d{2})?|'         # 09:15 · 09:15:30
+    r'\d{2,8}[-_]?\d{0,6}|'            # 20260731 · 260806-1048 · 091717
+    r'am|pm|오전|오후'
+    r')$', re.IGNORECASE)
+
+
 def _extract_topic_keywords_from_title(title: str) -> List[str]:
-    """회의 제목에서 의미 있는 키워드를 추출해 topics 필드에 사용한다."""
-    words = re.split(r'[\s\-_/,.·]+', title.strip())
-    return [w.lower() for w in words if len(w) >= 2 and not re.match(r'^\d+$', w)]
+    """회의 제목에서 의미 있는 키워드를 추출해 topics 필드에 사용한다.
+
+    **주제가 아닌 조각은 태그로 만들지 않는다** — 날짜·시각(`2026년`·`09:15`)과 자동
+    제목 상용어(`실시간`·`녹음`)가 태그가 되면 registry 전체가 같은 태그를 갖게 되고,
+    그러면 주제 필터가 사실상 "아무거나 매칭"이 된다. 그 상태에서는 이전 회의 대조가
+    다른 프로젝트의 결정을 끌어와 오탐의 재료가 된다(그걸 막으려고 만든 필터가 스스로
+    무력해지는 자리였다).
+
+    빈 목록이 될 수 있다(제목이 `실시간 녹음 260806-1048` 뿐인 경우) — 그건 정상이다.
+    본문(summary/title) 매칭이 남아 있고, 없는 주제를 있다고 하는 것보다 낫다.
+    """
+    words = re.split(r'[\s\-_/,.·]+', (title or "").strip())
+    out: List[str] = []
+    for w in words:
+        w = w.strip().lower()
+        if len(w) < 2 or w in _TITLE_TAG_STOPWORDS:
+            continue
+        if re.match(r'^\d+$', w) or _DATE_TIME_TAG.match(w):
+            continue
+        out.append(w)
+    return out
 
 
 def update_action_registry_from_actions(

@@ -232,6 +232,85 @@ class TestFilterDecisionsByTopic:
         assert [d["summary"] for d in result] == ["아크라이트과 협업 범위 확정"]
 
 
+class TestTopicMatchingIsNotWhitespaceSensitive:
+    """[실사용 2026-08-06] 띄어쓰기 하나로 '이전 회의 대조' 가 죽었다.
+
+    녹음 화면 '주제' 칸에 `양자컴퓨터` 라고 붙여 쓰면, registry 본문의 `양자 컴퓨팅` 과
+    한 글자도 매칭되지 않아 지난 결정·미완료 액션이 **0건**이 됐다. 재료가 0건이면 이전
+    회의 대조는 조용히 아무 일도 하지 않으므로(무관한 결정을 주입하지 않으려는 설계)
+    사용자는 기능이 없는 줄 안다. 실측(실제 registry 37건):
+        "양자컴퓨터 도입 검토"  → 결정 0 / 액션 2   (수정 전)
+        "양자컴퓨터 도입 검토"  → 결정 1 / 액션 5   (수정 후)
+    """
+
+    def test_direct_hit_ignores_whitespace(self):
+        assert wk._keyword_hit("양자컴퓨팅", "양자 컴퓨팅 도입 확정") == 2
+
+    def test_compound_keyword_matches_by_prefix_token(self):
+        """붙여 쓴 복합어 — 본문 토큰이 키워드의 **접두사**면 약한 일치."""
+        assert wk._keyword_hit("양자컴퓨터", "양자 컴퓨팅 도입 확정") == 1
+
+    def test_common_tail_word_does_not_match(self):
+        """`검토`·`계획` 같은 흔한 뒤쪽 낱말로는 걸리지 않는다 — 포함이 아니라 접두사만
+        허용하는 이유다. 열어 두면 registry 전체가 후보가 된다."""
+        assert wk._keyword_hit("예산검토", "기술 검토 일정 조정") == 0
+
+    def test_unrelated_text_scores_zero(self):
+        assert wk._keyword_hit("양자컴퓨터", "기념품 예산 최종 승인") == 0
+
+    def test_short_keyword_has_no_weak_match(self):
+        """2~3자 키워드는 이미 부분문자열로 충분히 걸린다 — 접두사까지 열면 오탐."""
+        assert wk._keyword_hit("양자", "양각 도장 제작") == 0
+
+    def test_registry_lookup_finds_spaced_summary(self):
+        decisions = [{"summary": "양자 컴퓨팅 파일럿 범위 확정",
+                      "created_at": "2026-07-02", "topics": []}]
+        got = wk._filter_decisions_by_topic(decisions, topic="양자컴퓨터 도입", limit=5)
+        assert len(got) == 1, "붙여 쓴 주제가 띄어 쓴 본문을 못 찾았다"
+
+    def test_weak_match_scores_below_direct_match(self):
+        """약한 일치가 직접 일치를 앞지르면, 여러 프로젝트가 섞인 registry 에서 무관한
+        항목이 상위로 올라온다."""
+        decisions = [
+            {"summary": "양자 컴퓨팅 로드맵 확정", "created_at": "2026-07-01", "topics": []},
+            {"summary": "양자컴퓨터 예산 확정", "created_at": "2026-07-02", "topics": []},
+        ]
+        got = wk._filter_decisions_by_topic(decisions, topic="양자컴퓨터", limit=5)
+        assert got[0]["summary"] == "양자컴퓨터 예산 확정"
+
+
+class TestTitleTagsDropMeaninglessFragments:
+    """자동 생성 제목의 조각이 topics 태그가 되면 주제 필터가 무력화된다.
+
+    실측: 실제 registry 37건의 태그가 `실시간·2026년·07월·31일·09:15` 뿐이었다 —
+    주제에 그 낱말이 하나라도 들어가면 **전 항목이 매칭**됐다. 이 앱이 만드는 제목이
+    `실시간 녹음 260806-1048` 형태라 구조적으로 그렇게 된다.
+    """
+
+    def test_auto_generated_titles_yield_no_tags(self):
+        for title in ("실시간 2026년 07월 31일 09:15", "새로운 녹음 4",
+                      "session_20260715_091717", "실시간 녹음 260806-1048"):
+            assert wk._extract_topic_keywords_from_title(title) == [], title
+
+    def test_meaningful_title_keeps_tags(self):
+        assert wk._extract_topic_keywords_from_title("양자 컴퓨팅 예산 검토") == [
+            "양자", "컴퓨팅", "예산", "검토"]
+
+    def test_date_prefix_dropped_but_subject_kept(self):
+        assert wk._extract_topic_keywords_from_title("260806 nvidia") == ["nvidia"]
+
+    def test_stored_garbage_tags_are_ignored_when_reading(self):
+        """**이미 저장된** 항목에도 즉시 들어야 한다 — 태그는 사용자 데이터라 고칠 수 없다."""
+        assert wk.useful_topic_tags(["실시간", "2026년", "07월", "31일", "09:15"]) == []
+        assert wk.useful_topic_tags(["양자", "컴퓨팅"]) == ["양자", "컴퓨팅"]
+
+    def test_garbage_tag_does_not_pull_unrelated_decision(self):
+        """주제 '실시간' 이 (제목 조각으로 태깅된) 무관한 결정을 끌어오지 않는다."""
+        decisions = [{"summary": "기념품 예산 최종 승인", "created_at": "2026-07-01",
+                      "topics": ["실시간", "2026년", "09:15"]}]
+        assert wk._filter_decisions_by_topic(decisions, topic="실시간 회의", limit=5) == []
+
+
 class TestDecisionRegistry:
     def test_accumulate_and_dedup(self, tmp_path):
         reg = tmp_path / "decision_registry.json"

@@ -69,8 +69,11 @@ export function QuietBadge({
   const cls = tone === "err" ? "text-rec bg-rec-bg" : "text-warn bg-warn-bg";
 
   return (
+    // 바깥 div 가 라이브 영역이다 — 배지가 **나타난 사실**이 낭독돼야 한다.
+    // 버튼 자체에 role="status" 를 주면 버튼 시맨틱이 사라져 "누를 수 있다"가 전달되지 않는다.
     <div
       ref={wrapRef}
+      role="status"
       className="relative"
       // 팝오버 밖으로 포커스가 나가면 닫는다. 바깥 클릭 리스너를 document 에 붙이지 않는
       // 이유는 그쪽이 모달·시트와 순서 다툼을 만들기 때문이다.
@@ -80,7 +83,6 @@ export function QuietBadge({
     >
       <button
         type="button"
-        role="status"
         aria-expanded={open}
         aria-controls={open ? id : undefined}
         onClick={() => setOpen((v) => !v)}

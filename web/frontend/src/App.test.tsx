@@ -110,32 +110,46 @@ describe("config 손상 배너", () => {
   });
 });
 
-describe("SSL 검증 꺼짐 배너", () => {
-  it("꺼져 있으면 위험과 되돌리는 방법을 함께 알린다", async () => {
+describe("SSL 검증 꺼짐 — 상시 배너가 아니라 조용한 배지", () => {
+  /**
+   * 기본값이 안전(ON)해진 뒤로 이건 **상시 경고할 일이 아니다** — 늘 떠 있는 배너는
+   * "늘 뭔가 잘못된 앱"이라는 인상만 남기고 아무도 읽지 않는다(PRD §1.2·§10, 원칙 7).
+   * 그래도 사실 자체는 사라지면 안 되므로 topbar 배지로 내리고, **누르면 위험과
+   * 되돌리는 방법을 함께** 보여준다. 문구는 배너 시절 그대로 유지한다.
+   */
+  it("꺼져 있으면 배지가 뜨고, 열면 위험과 되돌리는 방법을 함께 알린다", async () => {
     mockHealth({ ssl_insecure: true });
+    const user = userEvent.setup();
     render(<App />);
-    expect(await screen.findByText(/SSL 인증서 검증이 꺼져 있습니다/)).toBeInTheDocument();
+
+    const badge = await screen.findByRole("button", { name: /SSL 검증 꺼짐/ });
+    // 접기 전에는 본문을 차지하지 않는다(그게 배지로 내린 이유다)
+    expect(screen.queryByText(/Windows 인증서 저장소를 신뢰/)).not.toBeInTheDocument();
+
+    await user.click(badge);
+    expect(screen.getByText(/SSL 인증서 검증이 꺼져 있습니다/)).toBeInTheDocument();
     // 위험만 말하고 방법을 안 주면 사용자는 그대로 둔다.
     expect(screen.getByText(/Windows 인증서 저장소를 신뢰/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "설정 열기" })).toBeInTheDocument();
   });
 
-  it("켜져 있으면 뜨지 않는다(기본값이라 상시 노출되면 의미를 잃는다)", async () => {
+  it("켜져 있으면 배지도 없다(기본값이라 상시 노출되면 의미를 잃는다)", async () => {
     mockHealth({ ssl_insecure: false });
     render(<App />);
     await screen.findByText("대시보드 자리");
-    expect(screen.queryByText(/SSL 인증서 검증이 꺼져 있습니다/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /SSL/ })).not.toBeInTheDocument();
   });
 });
 
-describe("모바일 [더보기] 시트 — 모든 화면에 도달할 수 있어야 한다", () => {
+describe("모바일 [더보기] 시트 — 탭에 없는 화면에 도달할 수 있어야 한다", () => {
   /**
-   * 예전 탭바(6개)에는 회의 준비·회의 비서·지식그래프·도움말이 없어서 모바일에서
-   * 진입 경로가 0이었다 — 그 화면들을 여는 허브(도움말)조차 탭에 없었다.
-   * PRD §17 확정 "v1 범위 = 10화면 전부"는 모바일도 포함한다.
+   * 예전 탭바에는 회의 준비·회의 비서·지식그래프·도움말이 없어서 모바일에서 진입 경로가
+   * 0이었다 — 그 화면들을 여는 허브(도움말)조차 탭에 없었다. 새 IA 는 하단 탭 3 + 중앙
+   * FAB(새 회의) + [더보기]이고, 탭에 없는 것(설정·도움말·테마)이 전부 시트에 있어야 한다.
    */
   // jsdom 은 미디어쿼리를 적용하지 않아 데스크톱 사이드바의 같은 라벨 버튼도 DOM 에
   // 함께 있다 — 시트(dialog) 안으로 범위를 좁혀서 조회한다.
-  it("더보기를 누르면 탭에 없는 화면 6개가 전부 뜬다", async () => {
+  it("더보기를 누르면 탭에 없는 화면과 테마 전환이 전부 뜬다", async () => {
     mockHealth({});
     const user = userEvent.setup();
     render(<App />);
@@ -143,9 +157,11 @@ describe("모바일 [더보기] 시트 — 모든 화면에 도달할 수 있어
     await user.click(screen.getByRole("button", { name: /더보기/ }));
     // 시트는 접근 가능한 대화상자다(Escape·포커스 트랩은 Modal 계약 테스트가 고정)
     const sheet = within(screen.getByRole("dialog"));
-    for (const label of ["텍스트 분석", "회의 준비", "회의 비서", "지식그래프", "도움말", "설정"]) {
+    for (const label of ["설정", "도움말"]) {
       expect(sheet.getByRole("button", { name: label })).toBeInTheDocument();
     }
+    // 다크 모드는 [설정]과 모바일 [더보기] 두 곳에 둔다 — 시트에서 바로 바꾼다.
+    expect(sheet.getByRole("tablist", { name: "화면 테마" })).toBeInTheDocument();
   });
 
   it("항목을 고르면 시트가 닫히고 그 화면으로 이동한다", async () => {
@@ -163,6 +179,32 @@ describe("모바일 [더보기] 시트 — 모든 화면에 도달할 수 있어
     // 실행 방식에 따라 달라졌다). 기다리는 대상은 렌더가 아니라 청크 로드다.
     expect(await screen.findByText(/사용법|자주 묻는/, {}, { timeout: 5000 }))
       .toBeInTheDocument();
+  });
+});
+
+describe("IA — 회의 상세는 내비에 없다 (PRD §4.1, 리뷰 P1-3)", () => {
+  /**
+   * 상세는 라이브러리 행·그래프·위키링크에서만 들어가는 레코드 문맥 뷰다. 내비에 두면
+   * "어떤 회의의 상세인지" 없이 진입할 수 있어 빈 화면이 되고, leaf 5 원칙도 깨진다.
+   */
+  it("사이드바는 leaf 5 + 도움말만 낸다", async () => {
+    mockHealth({});
+    render(<App />);
+    await screen.findByText("대시보드 자리");
+    const nav = within(screen.getAllByRole("navigation", { name: "주요 메뉴" })[0]);
+    for (const label of ["라이브러리", "새로 만들기", "지식", "준비 · 비서", "설정", "도움말"]) {
+      expect(nav.getByRole("button", { name: label })).toBeInTheDocument();
+    }
+    expect(nav.queryByRole("button", { name: /회의 상세/ })).toBeNull();
+  });
+
+  it("어느 화면에서든 [새 회의]로 시작할 수 있다 (PRD §3-8)", async () => {
+    mockHealth({});
+    render(<App />);
+    await screen.findByText("대시보드 자리");
+    // 데스크톱 탑바 버튼과 모바일 중앙 FAB 둘 다 있다(jsdom 은 미디어쿼리를 적용하지
+    // 않아 둘이 함께 DOM 에 있다) — 어느 레이아웃에서도 시작점이 있다는 것이 요구사항이다.
+    expect(screen.getAllByRole("button", { name: /새 회의/ }).length).toBeGreaterThanOrEqual(1);
   });
 });
 

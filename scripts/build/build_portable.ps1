@@ -293,12 +293,51 @@ if ($dataBak -and (Test-Path $dataBak)) { Move-Item $dataBak (Join-Path $OutDir 
 Step '8/8' 'Creating distribution zip (excluding user data)...'
 $zipPath = Join-Path $DistDir 'MeetingMinutesPortable.zip'
 if (Test-Path $zipPath) { Remove-Item $zipPath -Force }
-$stage = Join-Path $env:TEMP ('MMP_STAGE_' + [System.IO.Path]::GetRandomFileName())
-Copy-Item $OutDir $stage -Recurse -Force
-$stageData = Join-Path $stage 'MeetingMinutesData'
-if (Test-Path $stageData) { Remove-Item $stageData -Recurse -Force }
-Compress-Archive -Path (Join-Path $stage '*') -DestinationPath $zipPath -Force
-Remove-Item $stage -Recurse -Force
+
+# 종전 방식(TEMP 로 500MB 스테이징 복사 → `Compress-Archive -Path <dir>\*`)은
+# 2026-08-06 빌드에서 깨졌다: anthropic SDK 0.120 이 들어오며 트리가 깊어진 뒤
+#   Compress-Archive : ... "Could not find a part of the path
+#   '...\MMP_STAGE_xxxx\Lib\site-packages\anthropic\resources\beta\agents'"
+# 로 8/8 에서만 실패했다(1~7 단계와 스모크는 통과). 두 도구를 다 버린다:
+#   · 스테이징 복사 — 500MB 를 한 번 더 복사할 이유가 없다(느리고 실패 지점만 늘린다).
+#   · Compress-Archive(PS 5.1) — 와일드카드 열거가 깊은 트리에서 깨지기 쉽다.
+# 대신 사용자 데이터만 잠시 옆으로 옮기고 폴더를 **그 자리에서** 압축한다.
+# 압축 파일 구조는 종전과 같다(`includeBaseDirectory=$false` → zip 루트에
+# MeetingMinutes.bat) — 사용법.txt 의 "전부 풀고 MeetingMinutes.bat 실행"이 그대로 성립한다.
+
+# .NET 압축은 260자 경로에서 깨진다. **조용히 깨지지 않게 먼저 확인하고 분명히
+# 실패시킨다** — 원인을 알 수 없는 예외보다 낫다. 새 의존성이 트리를 더 깊게 만들면
+# 여기서 잡힌다(현재 최장 234자).
+$longPaths = @(Get-ChildItem $OutDir -Recurse -Force -ErrorAction SilentlyContinue |
+    Where-Object { $_.FullName.Length -ge 255 } | Select-Object -First 5)
+if ($longPaths.Count -gt 0) {
+    foreach ($p in $longPaths) {
+        Write-Host ("  [경로 " + $p.FullName.Length + "자] " + $p.FullName) -ForegroundColor Yellow
+    }
+    Fail @"
+경로가 Windows 한계(260자)에 닿아 압축할 수 없습니다.
+  더 짧은 경로에서 빌드하세요(예: C:\mm 로 리포를 옮긴 뒤 빌드).
+  또는 새로 들어온 의존성의 깊은 디렉터리를 requirements-web.txt 에서 재검토하세요.
+"@
+}
+
+$zipDataBak = $null
+$zipDataDir = Join-Path $OutDir 'MeetingMinutesData'
+if (Test-Path $zipDataDir) {
+    # zip 에서 제외해야 하는 사용자 데이터(config.json = API 키, 회의 DB). 삭제가 아니라
+    # 이동이다 — 실기 검증으로 쌓인 데이터를 빌드가 지우면 안 된다(2단계와 같은 규칙).
+    $zipDataBak = Join-Path $env:TEMP ('MMP_ZIPDATA_' + [System.IO.Path]::GetRandomFileName())
+    Move-Item $zipDataDir $zipDataBak
+}
+try {
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    [System.IO.Compression.ZipFile]::CreateFromDirectory(
+        $OutDir, $zipPath,
+        [System.IO.Compression.CompressionLevel]::Optimal, $false)
+} finally {
+    # 압축이 실패해도 사용자 데이터는 반드시 제자리로 돌린다.
+    if ($zipDataBak -and (Test-Path $zipDataBak)) { Move-Item $zipDataBak $zipDataDir }
+}
 
 $zipMB = [math]::Round((Get-Item $zipPath).Length / 1MB, 1)
 Write-Host "`n============================================" -ForegroundColor Green

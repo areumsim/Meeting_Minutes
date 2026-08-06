@@ -17,6 +17,11 @@ Obsidian 기반 **회의록 자동화 + LLM Wiki 지식순환** 시스템. 오�
   - `wiki_core/` — `vault_indexer`(TF-IDF+임베딩 인덱스), `wiki_ask`(위키 Q&A), `wiki_knowledge`
     (prep-brief/레지스트리), `graph_db`/`graph_sync`(지식그래프), `obsidian`/`obsidian_fs`(볼트 접근).
 - `web/` — `backend/`(FastAPI `app.py` + `api/*.py`) + `frontend/`(React/Vite → `frontend/dist`로 빌드).
+  - 프런트 구조는 **3층**이다(2026-08-06 재설계): `lib/`(계약·계산·토큰 헬퍼) →
+    `ui/`(캐노니컬 컴포넌트 1벌) → `screens/`(화면). 화면 코드는 **원시 색 리터럴을 쓰지
+    않는다** — 색·간격·라운드는 `index.css` 의 `@theme` 토큰뿐이고, 다크는 같은 변수를
+    `:root[data-theme="dark"]` 가 덮어써서 동작한다. 새 색이 필요하면 토큰을 먼저 만든다.
+    예외는 `components/Recorder.tsx` 하나 — 아래 '작업 시 주의' 참조.
 - `scripts/build/` — 배포 빌드. `tests/` — 회귀 테스트. `docs/` — 아키텍처·사용 가이드.
 
 ## 실행 / 테스트 / 빌드
@@ -26,7 +31,7 @@ pip install -e .                       # 개발 설치
 python run_meeting.py <cmd> [args]     # CLI (run_meeting.bat 도 동일)
 webUI_실행.bat                          # 웹 UI 로컬 실행 (데이터 = 리포 루트)
 python -m pytest                       # 테스트 (2026-08-06: 1142 passed, 1 skipped) ← 수치 정본
-cd web/frontend && npx vitest run      # 프런트 테스트 (2026-08-05: 105 passed) ← 정본 명령
+cd web/frontend && npx vitest run      # 프런트 테스트 (2026-08-06: 180 passed) ← 정본 명령
 python run_meeting.py reindex          # 위키/그래프 인덱스 재빌드
 ```
 
@@ -59,6 +64,18 @@ python run_meeting.py reindex          # 위키/그래프 인덱스 재빌드
 
 ## 작업 시 주의
 
+- **`web/frontend/src/components/Recorder.tsx` 는 파일명을 옮기지 않는다.**
+  `tests/test_facilitation.py` 가 이 **경로의 문자열**을 검사한다 —
+  `sendMute("facilitation_mute")` · `sendMute("related_notes_mute")` ·
+  `ws.send(JSON.stringify({ type }))` · `resetRelatedNotes()` 3회(시작·취소·이탈).
+  프런트가 서버에 끄기를 알리지 않으면 서버는 회의 끝까지 생성·검색하며 과금하는데,
+  그 배선은 코드 리뷰로 계속 샜기 때문에 테스트가 파일을 직접 읽는다. 표현은
+  `screens/recording/` 으로 빼되 **로직·파일명은 그 자리에 둔다.**
+- **비용은 프런트가 계산하지 않는다.** 단가는 서버(`/api/cost/rates`·`pricing.py`)가 정본이고
+  화면은 `lib/costEstimate.ts` 한 함수로 **총액과 항목을 함께** 만든다(둘이 다른 식에서
+  나오면 항목 합이 총액과 어긋난다 — 실제로 그랬다). 서버가 금액을 주지 않는 과금 경로
+  (텍스트 분석·볼트 오디오·계획 자동화)는 **금액을 지어내지 말고** `CostConfirmModal` 의
+  '미리 계산되지 않음' 변형을 쓴다. 세션 비용 항목은 서버의 `actual_kinds` 를 그대로 돈다.
 - **`_tmp_*.txt` / `tmp_*.txt` 는 개인 스크래치 파일**(예: `_tmp_key.txt`, `_tmp_prompt.txt`). 개인 키/메모가
   들어있을 수 있고 `.gitignore`로 제외돼 있다. **삭제·커밋·내용 인용 금지** — 있는 그대로 둔다.
 - `TODO.md` 도 gitignore 대상 개인 파일(코드 TODO + 개인 볼트 정리 로그 혼재).

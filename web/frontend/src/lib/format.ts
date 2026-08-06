@@ -13,6 +13,23 @@ export function formatTime(sec: number): string {
   return `${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}`;
 }
 
+/**
+ * 시계 표기 `[HH:]MM:SS` — 녹음 타이머·재생 위치처럼 **자릿수가 흔들리면 안 되는** 자리.
+ *
+ * `formatDuration` 과 굳이 나눠 둔 이유: 그쪽은 "3m 20s" 처럼 읽는 표기라 폭이 계속 바뀐다.
+ * 종전에는 Recorder 가 같은 이름(`formatDuration`)의 지역 함수로 이 형식을 따로 갖고 있어서,
+ * 한 리포에 이름은 같고 결과가 다른 함수가 둘이었다.
+ */
+export function formatClock(sec: number): string {
+  const total = Math.max(0, Math.floor(sec || 0));
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  const mm = m.toString().padStart(2, "0");
+  const ss = s.toString().padStart(2, "0");
+  return h > 0 ? `${h.toString().padStart(2, "0")}:${mm}:${ss}` : `${mm}:${ss}`;
+}
+
 export function formatDate(d: string): string {
   if (!d) return "";
   // `new Date("아무말")` 은 **던지지 않는다** — Invalid Date 를 만들고
@@ -42,11 +59,19 @@ export function statusLabel(s: string): string {
             pending: "대기 중" } as Record<string, string>)[s] || s;
 }
 
+/**
+ * 문서유형 배지의 색 — 디자인 토큰만 쓴다(원시 팔레트 금지, PRD §5.1).
+ *
+ * 상태색(rec/proc/ok/idle)과 **다른 축**이라 유형에는 액센트·상태 hue 를 쓰지 않는다.
+ * 유형은 이미 글자로 구분되므로(회의/세미나/강의) 색은 보조 신호일 뿐 — 엔티티 팔레트를
+ * 빌려 은은하게만 구분한다. 모르는 유형도 반드시 비지 않은 클래스를 돌려준다(배지가 깨진다).
+ */
 export function typeColor(t: string): string {
   switch (t) {
-    case "meeting": return "bg-blue-100 text-blue-700";
-    case "seminar": return "bg-purple-100 text-purple-700";
-    case "lecture": return "bg-amber-100 text-amber-700";
-    default: return "bg-zinc-100 text-zinc-700";
+    case "meeting": return "bg-surface-2 text-ent-meeting border-line-strong";
+    case "seminar": return "bg-surface-2 text-ent-topic border-line-strong";
+    case "lecture": return "bg-surface-2 text-ent-person border-line-strong";
+    case "prep": return "bg-surface-2 text-ent-project border-line-strong";
+    default: return "bg-surface-2 text-ink-2 border-line-strong";
   }
 }

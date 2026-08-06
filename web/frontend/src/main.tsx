@@ -2,6 +2,11 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App";
 import "./index.css";
+import { initTheme } from "./lib/theme";
+
+// 첫 페인트 **전에** data-theme 을 확정한다 — 렌더 후에 붙이면 다크 사용자에게 흰 화면이
+// 한 프레임 번쩍인다(포터블은 창이 뜨는 순간이라 특히 눈에 띈다).
+initTheme();
 
 class ErrorBoundary extends React.Component<
   { children: React.ReactNode },

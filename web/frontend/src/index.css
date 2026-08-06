@@ -1,30 +1,161 @@
 @import "tailwindcss";
 @plugin "@tailwindcss/typography";
 
-@theme {
-  /* 외부 폰트 미사용(오프라인 배포) — 시스템 폰트 스택. 한글은 Malgun Gothic 폴백. */
-  --font-sans: system-ui, -apple-system, "Segoe UI", "Malgun Gothic", sans-serif;
-  --font-display: system-ui, -apple-system, "Segoe UI", "Malgun Gothic", sans-serif;
-  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+/* 다크 변형 — 이 앱은 OS 설정을 기본으로 쓰되 사용자가 [설정]에서 고정할 수 있어야 한다
+   (lib/theme.ts). 그래서 `prefers-color-scheme` 이 아니라 <html data-theme> 를 신호로
+   삼는다. 미디어쿼리를 신호로 쓰면 "라이트 고정"을 만들 수 없다. */
+@custom-variant dark (&:where([data-theme="dark"], [data-theme="dark"] *));
 
-  --color-brand-50: #f8fafc;
-  --color-brand-100: #f1f5f9;
-  --color-brand-200: #e2e8f0;
-  --color-brand-300: #cbd5e1;
-  --color-brand-400: #94a3b8;
-  --color-brand-500: #64748b;
-  --color-brand-600: #475569;
-  --color-brand-700: #334155;
-  --color-brand-800: #1e293b;
-  --color-brand-900: #0f172a;
-  --color-brand-950: #020617;
+/*
+ * 디자인 토큰 (PRD 재설계 v1.0 §5.1) — 웜 페이퍼 + 틸/에메랄드.
+ *
+ * `@theme static` 인 이유: Tailwind v4 는 쓰이지 않는 테마 변수를 출력에서 지운다.
+ * 다크 모드는 아래 `:root[data-theme="dark"]` 가 **같은 변수를 덮어써서** 동작하므로
+ * (유틸리티가 `var(--color-*)` 를 참조한다), 변수가 :root 에 실제로 찍혀 있어야 한다.
+ * static 을 빼면 그 화면에서 안 쓰인 토큰이 사라져 다크 전환이 부분적으로만 먹는다.
+ *
+ * 화면 코드는 **원시 색 리터럴을 쓰지 않는다** — 여기 없는 색이 필요하면 토큰을 먼저 만든다.
+ */
+@theme static {
+  /* 외부 폰트 미사용(오프라인 배포 정책). PRD §5.2 의 Plex 지정은 폴백 스택으로 해석하고,
+     숫자 정렬은 웹폰트가 아니라 tabular-nums 로 얻는다(.num). */
+  --font-sans: system-ui, -apple-system, "Segoe UI", "Malgun Gothic", sans-serif;
+  --font-mono: ui-monospace, Consolas, "Segoe UI Mono", "D2Coding", monospace;
+
+  /* 밀도 스케일 — 본문 13px/1.5, 캡션 11~12px, 화면 제목 14~15px.
+     시맨틱 색 텍스트는 12px 미만 금지(PRD §5.2, 리뷰 P2-7) → --text-2xs 는 중립색 전용. */
+  --text-2xs: 10.5px;   --text-2xs--line-height: 1.45;
+  --text-xs: 11px;      --text-xs--line-height: 1.45;
+  --text-sm: 12px;      --text-sm--line-height: 1.5;
+  --text-base: 13px;    --text-base--line-height: 1.5;
+  --text-md: 13.5px;    --text-md--line-height: 1.5;
+  --text-lg: 14.5px;    --text-lg--line-height: 1.4;
+  --text-xl: 16px;      --text-xl--line-height: 1.35;
+  --text-2xl: 19px;     --text-2xl--line-height: 1.3;
+
+  /* 중립(웜 페이퍼) */
+  --color-bg: #f7f6f3;
+  --color-surface: #ffffff;
+  --color-surface-2: #f4f2ee;
+  --color-hover: #f0ede7;
+  --color-line: #eae7e1;
+  --color-line-strong: #d8d3ca;
+  --color-ink: #1c1a17;
+  --color-ink-2: #57534e;
+  --color-ink-3: #8a8279;      /* ≥12px 전용 */
+
+  /* 액센트 — 유일하다. 링크·포커스·활성 내비·주요 액션에만 쓴다. */
+  --color-accent: #0d9488;
+  --color-accent-hover: color-mix(in srgb, var(--color-accent) 82%, #000);
+  --color-accent-weak: color-mix(in srgb, var(--color-accent) 14%, var(--color-surface));
+
+  /* 상태 — 녹음중 red / 처리중 purple / 완료 green / 오류 red+✕ / 계획·대기 gray */
+  --color-rec: #da1e28;   --color-rec-bg: #fff1f1;
+  --color-proc: #8a3ffc;  --color-proc-bg: #f6f2ff;
+  --color-ok: #198038;    --color-ok-bg: #defbe6;
+  --color-idle: #6f6f6f;  --color-idle-bg: #f4f4f4;
+
+  /* 보조 시스템색 — 미검증·번역됨·대체처리·준비미비·충돌(warn) / 진행 도우미(persona) */
+  --color-warn: #8a5200;  --color-warn-bg: #fdf1de;  --color-warn-line: #f0d9a8;
+  --color-persona: #007d79; --color-persona-bg: #d9fbfb;
+
+  /* 엔티티 그래프 팔레트 — 색맹 안전(Okabe–Ito 계열), status hue(red/violet/green/gray)와
+     accent(teal) 를 재사용하지 않는다(PRD §5.1, 리뷰 P2-3). 6색만 둔다:
+     decision·action 은 자기 hue 를 갖지 않고 소속(회의·인물) 색을 물려받는다
+     — 새 hue 를 더하면 status 와 충돌할 수밖에 없어서 내린 결정이다. */
+  --color-ent-org: #0072b2;
+  --color-ent-person: #e69f00;
+  --color-ent-topic: #cc79a7;
+  --color-ent-meeting: #4c4a8f;
+  --color-ent-note: #7a6a55;
+  --color-ent-project: #56b4e9;
+
+  /* 형태·레이아웃 */
+  --radius-card: 8px;
+  --radius-ctl: 6px;
+  --spacing-rail: 206px;
+  --spacing-topbar: 52px;
+  --spacing-inspector: 320px;
+  --spacing-rail-collapsed: 52px;
+
+  /* 섀도는 아주 옅게만. 다크에서는 none 으로 덮고 보더로 층위를 만든다. */
+  --shadow-card: 0 1px 2px rgba(28, 26, 23, .04), 0 6px 16px -10px rgba(28, 26, 23, .15);
+  --shadow-flat: 0 1px 2px rgba(28, 26, 23, .05);
+  --shadow-pop: 0 2px 4px rgba(28, 26, 23, .06), 0 12px 28px -12px rgba(28, 26, 23, .28);
+
+  /* ── 폐기 예정: 구 팔레트 별칭 ─────────────────────────────────────
+     `brand-*` 는 아직 재구현 전 화면들이 522곳에서 쓴다. 여기서 바로 지우면 그 화면들이
+     클래스 자체를 잃어 배경·글자색이 통째로 빠진다(커밋마다 앱이 돌아야 한다는 조건 위반).
+     그래서 마이그레이션 동안만 **웜 중립 램프로 매핑**해 둔다 — 옛 화면도 즉시 웜 톤이 되고,
+     화면을 하나씩 옮길 때마다 참조가 줄어든다. 마지막 커밋에서 `grep -rn "brand-" src/` 가
+     0이 되면 이 블록과 아래 .glass-panel 을 함께 지운다. 새 코드에서 쓰지 말 것. */
+  --color-brand-50: #f7f6f3;
+  --color-brand-100: #f0ede7;
+  --color-brand-200: #eae7e1;
+  --color-brand-300: #d8d3ca;
+  --color-brand-400: #a9a196;
+  --color-brand-500: #8a8279;
+  --color-brand-600: #6f675e;
+  --color-brand-700: #57534e;
+  --color-brand-800: #3b3833;
+  --color-brand-900: #2a2723;
+  --color-brand-950: #1c1a17;
 }
 
+/* 다크(미드나잇) — 같은 변수를 덮어쓴다. 여기 없는 토큰은 라이트 값을 그대로 쓴다. */
+:root[data-theme="dark"] {
+  --color-bg: #0f1011;
+  --color-surface: #17181a;
+  --color-surface-2: #1d1f22;
+  --color-hover: #212327;
+  --color-line: #2a2e33;
+  --color-line-strong: #3a3f46;
+  --color-ink: #f2f3f4;
+  --color-ink-2: #c3c8d0;
+  --color-ink-3: #8a8f98;
+
+  /* 밝은 틸 — color-mix(accent 62%, white) 를 실제 값으로 고정(PRD §5.1) */
+  --color-accent: #2dd4bf;
+  --color-accent-hover: color-mix(in srgb, var(--color-accent) 82%, #fff);
+  --color-accent-weak: color-mix(in srgb, var(--color-accent) 18%, var(--color-surface));
+
+  --color-rec: #ff6b6b;   --color-rec-bg: #3a1e22;
+  --color-proc: #b794ff;  --color-proc-bg: #2a2340;
+  --color-ok: #4ade80;    --color-ok-bg: #16311f;
+  --color-idle: #8a8f98;  --color-idle-bg: #1d1f22;
+  --color-warn: #fbbf24;  --color-warn-bg: #33290f;  --color-warn-line: #5c4a1a;
+  --color-persona: #5eead4; --color-persona-bg: #12312e;
+
+  /* 엔티티도 어두운 배경에서 읽히도록 명도를 올린다(같은 hue 유지 — 색으로 구분하는
+     정보라 hue 가 바뀌면 라이트/다크 사용자가 서로 다른 것을 배운다). */
+  --color-ent-org: #58a6ff;
+  --color-ent-person: #f0b429;
+  --color-ent-topic: #e79ec8;
+  --color-ent-meeting: #a5a1f0;
+  --color-ent-note: #c9b89c;
+  --color-ent-project: #8fd3f4;
+
+  --shadow-card: none;
+  --shadow-flat: none;
+  --shadow-pop: 0 12px 28px -12px rgba(0, 0, 0, .6);
+}
+
+html, body { height: 100%; }
 body {
   margin: 0;
+  background: var(--color-bg);
+  color: var(--color-ink);
   font-family: var(--font-sans);
+  font-size: var(--text-base);
+  line-height: 1.5;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+/* 시간·비용·점수 — 자릿수를 세로로 맞춰 표에서 눈이 흔들리지 않게 한다(PRD §5.2). */
+@utility num {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
 }
 
 /* 한국어 본문 줄바꿈 — 전사/스크립트처럼 긴 한국어가 이어지는 곳에 쓴다.
@@ -37,13 +168,32 @@ body {
   overflow-wrap: anywhere;
 }
 
-.glass-panel {
-  background: linear-gradient(135deg, rgba(255,255,255,0.9), rgba(248,250,252,0.8));
-  backdrop-filter: blur(20px);
-  border: 1px solid rgba(226, 232, 240, 0.6);
+/* 포커스 링 — 전 인터랙티브 요소에 기본으로 걸어 둔다(PRD §5.5). 개별 컴포넌트가
+   focus-visible 을 잊어도 키보드 사용자가 위치를 잃지 않게 하는 안전망이다. */
+:where(a, button, input, select, textarea, [tabindex]):focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 1px;
 }
 
-::-webkit-scrollbar { width: 6px; }
+/* 폐기 예정 — Recorder 전사 패널 1곳만 쓴다(녹음 화면 재구현 시 surface 토큰으로 대체하고
+   이 규칙을 지운다). 지금 지우면 전사 텍스트 뒤 배경이 사라져 스티키 헤더가 비쳐 보인다. */
+.glass-panel {
+  background: var(--color-surface);
+  border: 1px solid var(--color-line);
+}
+
+::-webkit-scrollbar { width: 9px; height: 9px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
-::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+::-webkit-scrollbar-thumb { background: var(--color-line-strong); border-radius: 5px; }
+::-webkit-scrollbar-thumb:hover { background: var(--color-ink-3); }
+
+/* 동작 줄이기 — 점멸(녹음중 dot)·파형·펄스가 전부 멈춘다(PRD §5.5).
+   개별 사용처의 motion-reduce: 유틸리티에만 의존하면 하나 빠뜨렸을 때 조용히 남는다. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

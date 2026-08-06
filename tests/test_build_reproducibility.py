@@ -253,6 +253,19 @@ class TestPortableZipGuards:
         assert "CreateFromDirectory" not in cmds, "구분자가 `\\` 가 되는 API 로 되돌아갔다"
         assert "Compress-Archive" not in cmds, "깊은 트리에서 깨지는 경로로 되돌아갔다"
 
+    def test_no_bytecode_ships_in_the_app_tree(self, ps1):
+        """배포본 `app\\` 에는 소스만 담는다.
+
+        5단계에서 `__pycache__` 를 지우지만 **7단계 스모크가 그 트리에서 import 를 돌려
+        다시 만든다** — 순서 때문에 정리가 무력화돼 실제로 .pyc 30개가 배포됐다(실측).
+        같은 커밋을 다시 빌드해도 zip 이 달라지고(무엇을 import 했는지가 산출물에 새겨진다)
+        소스와 짝이 안 맞는 바이트코드가 섞인다. 그래서 셋으로 막는다: 스모크에
+        `PYTHONDONTWRITEBYTECODE`, 스모크 뒤 재정리, 그리고 남아 있으면 빌드 실패."""
+        cmds = _commands_only(ps1, comment_prefixes=("#",))
+        assert "PYTHONDONTWRITEBYTECODE" in cmds, "스모크가 .pyc 를 쓰지 못하게 막지 않는다"
+        assert cmds.count("__pycache__") >= 2, "스모크 뒤 재정리가 없다(5단계에만 있으면 무력)"
+        assert ".pyc" in cmds, "남은 .pyc 를 검사해 실패시키지 않는다"
+
     def test_zip_excludes_user_data_but_restores_it(self, ps1):
         """사용자 데이터(config.json=API 키, 회의 DB)는 zip 에서 빠져야 하고, 압축이
         실패해도 **제자리로 돌아와야** 한다(삭제가 아니라 이동인 이유)."""

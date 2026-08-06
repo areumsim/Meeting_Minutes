@@ -228,7 +228,9 @@ Copy-Item (Join-Path $Root 'web\frontend\dist') (Join-Path $AppDir 'web\frontend
 Copy-Item (Join-Path $Root 'config.example.json') (Join-Path $AppDir 'config.example.json') -Force
 if (Test-Path (Join-Path $Root 'prompts')) { Copy-Item (Join-Path $Root 'prompts') (Join-Path $AppDir 'prompts') -Recurse -Force }
 if (Test-Path (Join-Path $Root 'vendor\ffmpeg')) { Copy-Item (Join-Path $Root 'vendor\ffmpeg') (Join-Path $AppDir 'vendor\ffmpeg') -Recurse -Force }
-# 파이썬 캐시/테스트 잔재 제거(용량·혼선 방지)
+# 파이썬 캐시/테스트 잔재 제거(용량·혼선 방지). **7단계 스모크 뒤에 한 번 더 지운다** —
+# 스모크가 이 app\ 트리에서 import 를 돌리므로 여기서만 지우면 그때 다시 생긴다(실측: .pyc
+# 30개가 배포본에 들어가 있었고, 그 목록이 정확히 스모크가 import 하는 모듈이었다).
 Get-ChildItem $AppDir -Recurse -Directory -Filter '__pycache__' | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
 # 개발 중 소스트리에 생긴 런타임 산출물(로그/출력/DB 등)이 딸려가지 않도록 제거.
 # 실행 시 데이터는 항상 MeetingMinutesData\ 에 새로 만들어지므로 패키지에 있으면 안 된다.
@@ -299,8 +301,13 @@ print("IMPORT_OK")
 # EAP 를 잠시 낮춘다 — 앱 로드 중 stderr 로그(예: [mcp] 비활성화)가 PS 5.1 에서
 # 치명적 오류로 취급되지 않도록. 성공/실패는 exit code + IMPORT_OK 로만 판정.
 $prevEap = $ErrorActionPreference; $ErrorActionPreference = 'Continue'
+# 스모크가 app\ 트리에 .pyc 를 남기지 않게 한다 — 남으면 (a) 같은 커밋을 다시 빌드해도
+# zip 이 달라지고(개발 PC 에서 무엇을 import 했는지가 산출물에 새겨진다) (b) 소스와
+# 짝이 안 맞는 바이트코드가 배포본에 섞인다. 아래 정리와 이중으로 막는다.
+$env:PYTHONDONTWRITEBYTECODE = '1'
 $smokeOut = & (Join-Path $EmbedDir 'python.exe') $smokeFile 2>&1
 $smokeCode = $LASTEXITCODE
+Remove-Item Env:\PYTHONDONTWRITEBYTECODE -ErrorAction SilentlyContinue
 $ErrorActionPreference = $prevEap
 Remove-Item $smokeFile -ErrorAction SilentlyContinue
 if ($smokeCode -ne 0 -or ($smokeOut -join "`n") -notmatch 'IMPORT_OK') {
@@ -311,6 +318,15 @@ if ($smokeCode -ne 0 -or ($smokeOut -join "`n") -notmatch 'IMPORT_OK') {
 Write-Host "  $($smokeOut -join ' | ')"
 # 스모크가 만든 빈 데이터 폴더는 zip 제외 대상이므로 정리
 if (Test-Path $env:MM_DATA_DIR) { Remove-Item $env:MM_DATA_DIR -Recurse -Force -ErrorAction SilentlyContinue }
+# 스모크가 남긴 __pycache__ 도 정리한다(위 PYTHONDONTWRITEBYTECODE 와 이중 방어).
+# 5단계에만 있던 동안은 이 시점에 다시 생겨서 배포본에 .pyc 30개가 들어갔다.
+$pycDirs = @(Get-ChildItem $AppDir -Recurse -Directory -Filter '__pycache__' -ErrorAction SilentlyContinue)
+if ($pycDirs.Count -gt 0) {
+    $pycDirs | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+    Write-Host ("  스모크가 남긴 __pycache__ " + $pycDirs.Count + "개 정리")
+}
+$leftPyc = @(Get-ChildItem $AppDir -Recurse -File -Filter '*.pyc' -ErrorAction SilentlyContinue)
+if ($leftPyc.Count -gt 0) { Fail ("app\ 에 .pyc 가 " + $leftPyc.Count + "개 남아 있습니다 — 배포본은 소스만 담아야 합니다.") }
 
 # 백업해둔 사용자 데이터 복원(있었다면)
 if ($dataBak -and (Test-Path $dataBak)) { Move-Item $dataBak (Join-Path $OutDir 'MeetingMinutesData') }

@@ -12,12 +12,15 @@ import {
   getWatcherStatus, startWatcher, stopWatcher, obsidianDiagnose, pickFolder,
   getBackendUrl, setBackendUrl, testBackendUrl, revealSecret,
   localSttStatus, prepareLocalStt,
-} from "../lib/api";
+} from "../../lib/api";
 import { Capacitor } from "@capacitor/core";
-import { typeLabel } from "../lib/format";
-import type { Profile } from "../lib/types";
-import type { WatcherStatus, DiagnoseResult, LocalSttStatus } from "../lib/api";
-import FacilitationSettings from "./FacilitationSettings";
+import { typeLabel } from "../../lib/format";
+import { getThemeChoice, setThemeChoice, type ThemeChoice } from "../../lib/theme";
+import { SegmentedControl } from "../../ui/Tabs";
+import { Input } from "../../ui/Field";
+import type { Profile } from "../../lib/types";
+import type { WatcherStatus, DiagnoseResult, LocalSttStatus } from "../../lib/api";
+import PersonaMatrix from "./PersonaMatrix";
 
 // 네이티브 앱(iOS/Android)에서만 'PC 서버 연결' 카드를 노출한다.
 const IS_NATIVE = Capacitor.isNativePlatform();
@@ -69,6 +72,28 @@ const CLIENT_FALLBACK_SCHEMA: Group[] = [
 
 const pathOf = (f: Field) => (f.key ? `${f.section}.${f.key}` : f.section);
 
+/**
+ * 화면 표시 단계만 내리는 예외 표 (PRD §6.7 리뷰 P2-4).
+ *
+ * 스키마의 tier 가 정본이고 서버(`config_schema.py`)를 바꾸지 않는다 — 다만 PRD 는
+ * "필수 = 키 + 폴더"로 확정했고 모델 그룹은 거기 없다. 서버 스키마에서 모델은 core 라
+ * 그대로 두면 첫 실행 사용자가 STT·LLM 모델 8종을 먼저 만난다. 그래서 **이 한 줄만**
+ * 예외로 두고, 새 예외가 생기면 여기에 적어 한눈에 보이게 한다.
+ */
+const TIER_OVERRIDE: Record<string, "core" | "common" | "advanced"> = { models: "common" };
+
+/** 설정 검색 — 라벨·설명·키를 함께 본다(사용자는 "ssl" 로도, "인증서" 로도 찾는다). */
+function matchesQuery(group: Group, q: string): Group | null {
+  const needle = q.trim().toLowerCase();
+  if (!needle) return group;
+  const hit = (t?: string) => !!t && t.toLowerCase().includes(needle);
+  if (hit(group.label) || hit(group.desc) || hit(group.id)) return group;
+  const fields = group.fields.filter(
+    (f) => hit(f.label) || hit(f.desc) || hit(f.key) || hit(f.section) || hit(pathOf(f)),
+  );
+  return fields.length ? { ...group, fields } : null;
+}
+
 // 서버가 내려준 마스킹 값인지(예: "sk-proj-...Ab3X" 또는 "***"). 실제 키/비번엔
 // 보통 "..."/"***"가 없으므로 편집·저장 판단에 쓴다.
 const looksMasked = (v: any) => typeof v === "string" && (v.includes("...") || v.includes("***"));
@@ -99,16 +124,16 @@ function BackendConnectionCard({ onChanged }: { onChanged: () => void }) {
   };
 
   return (
-    <section className="bg-white border border-brand-200 rounded-2xl mb-3 shadow-sm overflow-hidden">
+    <section className="bg-surface border border-line rounded-card mb-3 shadow-sm overflow-hidden">
       <div className="px-4 md:px-5 py-4">
         <div className="flex items-center gap-2 mb-1">
-          <Plug size={16} className="text-brand-500 shrink-0" />
-          <span className="text-base font-bold text-brand-900">PC 서버 연결</span>
-          <span className={`ml-auto text-[11px] font-bold px-2 py-0.5 rounded-full ${connected ? "bg-emerald-100 text-emerald-700" : "bg-zinc-100 text-zinc-500"}`}>
+          <Plug size={16} className="text-ink-3 shrink-0" />
+          <span className="text-base font-bold text-ink">PC 서버 연결</span>
+          <span className={`ml-auto text-[11px] font-bold px-2 py-0.5 rounded-full ${connected ? "bg-ok text-ok" : "bg-surface-2 text-ink-3"}`}>
             {connected ? "연결됨 (서버 모드)" : "단독 모드"}
           </span>
         </div>
-        <p className="text-xs text-brand-500 mb-3">
+        <p className="text-xs text-ink-3 mb-3">
           같은 WiFi에 있는 PC에서 <b>MeetingMinutes.exe</b>를 켠 뒤 그 주소를 넣으면,
           PC의 고품질 전사(2단계 보정)·위키·그래프를 아이폰에서 그대로 씁니다.
           비워 두면 이 기기의 OpenAI 키로 직접 처리합니다(단독 모드).
@@ -122,31 +147,31 @@ function BackendConnectionCard({ onChanged }: { onChanged: () => void }) {
             value={url}
             onChange={(e) => setUrl(e.target.value)}
             placeholder="예: http://192.168.0.10:8501"
-            className="flex-1 px-4 py-2.5 bg-zinc-50 border border-zinc-200 rounded-xl outline-none focus:ring-2 focus:ring-brand-900 font-mono text-sm"
+            className="flex-1 px-4 py-2.5 bg-surface-2 border border-line rounded-card outline-none focus:ring-2 focus:ring-accent font-mono text-sm"
           />
           <div className="flex gap-2">
             <button onClick={doTest} disabled={busy}
-              className="px-4 py-2.5 bg-brand-50 text-brand-700 rounded-xl text-sm font-semibold hover:bg-brand-100 transition-all disabled:opacity-50">
+              className="px-4 py-2.5 bg-surface-2 text-ink-2 rounded-card text-sm font-semibold hover:bg-hover transition-all disabled:opacity-50">
               {busy ? <Loader2 size={16} className="animate-spin" /> : "테스트"}
             </button>
             <button onClick={doConnect} disabled={busy || !url.trim()}
-              className="px-4 py-2.5 bg-brand-950 text-white rounded-xl text-sm font-bold hover:bg-brand-900 transition-all disabled:opacity-50">
+              className="px-4 py-2.5 bg-accent-solid text-white rounded-card text-sm font-bold hover:bg-accent-solid-hover transition-all disabled:opacity-50">
               연결
             </button>
             {connected && (
               <button onClick={doDisconnect} disabled={busy}
-                className="px-4 py-2.5 bg-red-50 text-red-600 rounded-xl text-sm font-semibold hover:bg-red-100 transition-all disabled:opacity-50">
+                className="px-4 py-2.5 bg-rec-bg text-rec rounded-card text-sm font-semibold hover:bg-rec-bg transition-all disabled:opacity-50">
                 해제
               </button>
             )}
           </div>
         </div>
         {result && (
-          <div className={`mt-2 flex items-center gap-2 text-sm ${result.ok ? "text-emerald-600" : "text-red-600"}`}>
+          <div className={`mt-2 flex items-center gap-2 text-sm ${result.ok ? "text-ok" : "text-rec"}`}>
             {result.ok ? <CheckCircle size={14} /> : <XCircle size={14} />} {result.message}
           </div>
         )}
-        <p className="text-[11px] text-brand-500 mt-2">
+        <p className="text-[11px] text-ink-3 mt-2">
           PC 주소 확인: exe 실행 후 브라우저에 표시되는 주소, 또는 PC에서 <b>ipconfig</b>의 IPv4 주소 + <b>:8501</b>.
         </p>
       </div>
@@ -174,6 +199,12 @@ export default function SettingsView() {
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [showNewProfile, setShowNewProfile] = useState(false);
   const [newProfile, setNewProfile] = useState({ name: "", description: "", type: "meeting", language: "ko", translate: false });
+
+  // 설정 검색(FR-SET-1) — 14그룹·수십 필드라 "어디 있더라"가 가장 흔한 막힘이다.
+  const [query, setQuery] = useState("");
+
+  // 화면 테마 — [설정]과 모바일 [더보기] 두 곳에서 바꾼다(사용자 확정).
+  const [theme, setTheme] = useState<ThemeChoice>(getThemeChoice);
 
   // 고급: 전체 설정(JSON) 직접 편집
   const [showRaw, setShowRaw] = useState(false);
@@ -416,27 +447,35 @@ export default function SettingsView() {
   if (!schema) return null;
 
   // 화면 배치: 스키마 tier(core/common/advanced)로 3단 분리. tier가 없으면 advanced 여부로 폴백.
-  const tierOf = (g: Group): "core" | "common" | "advanced" => g.tier || (g.advanced ? "advanced" : "core");
-  const core = schema.filter((g) => tierOf(g) === "core");
-  const common = schema.filter((g) => tierOf(g) === "common");
-  const advanced = schema.filter((g) => tierOf(g) === "advanced");
+  // TIER_OVERRIDE 는 화면 표시 단계만 바꾼다(서버 스키마는 그대로).
+  const tierOf = (g: Group): "core" | "common" | "advanced" =>
+    TIER_OVERRIDE[g.id] || g.tier || (g.advanced ? "advanced" : "core");
+  // 검색어가 있으면 걸린 그룹만, 그룹 안에서도 걸린 필드만 남긴다.
+  const visible = schema
+    .map((g) => matchesQuery(g, query))
+    .filter((g): g is Group => !!g);
+  const core = visible.filter((g) => tierOf(g) === "core");
+  const common = visible.filter((g) => tierOf(g) === "common");
+  const advanced = visible.filter((g) => tierOf(g) === "advanced");
+  const searching = query.trim().length > 0;
 
   const renderGroup = (group: Group) => {
-    const isOpen = open[group.id] ?? !group.advanced;
+    // 검색 중에는 접힘을 무시한다 — 찾았는데 접혀 있으면 못 찾은 것과 같다.
+    const isOpen = searching || (open[group.id] ?? tierOf(group) !== "advanced");
     return (
-      <section key={group.id} className="bg-white border border-brand-200 rounded-2xl mb-3 shadow-sm overflow-hidden">
+      <section key={group.id} className="bg-surface border border-line rounded-card mb-3 shadow-sm overflow-hidden">
         <button
           onClick={() => setOpen((p) => ({ ...p, [group.id]: !isOpen }))}
-          className="w-full flex items-center gap-2 px-4 md:px-5 py-4 text-left hover:bg-brand-50/50 transition-colors"
+          className="w-full flex items-center gap-2 px-4 md:px-5 py-4 text-left hover:bg-hover transition-colors"
         >
-          {isOpen ? <ChevronDown size={18} className="text-brand-500 shrink-0" /> : <ChevronRight size={18} className="text-brand-500 shrink-0" />}
-          <Settings size={16} className="text-brand-500 shrink-0" />
-          <span className="text-base font-bold text-brand-900">{group.label}</span>
+          {isOpen ? <ChevronDown size={18} className="text-ink-3 shrink-0" /> : <ChevronRight size={18} className="text-ink-3 shrink-0" />}
+          <Settings size={16} className="text-ink-3 shrink-0" />
+          <span className="text-base font-bold text-ink">{group.label}</span>
         </button>
 
         {isOpen && (
           <div className="px-4 md:px-5 pb-5">
-            {group.desc && <p className="text-xs text-brand-500 mb-3 -mt-1">{group.desc}</p>}
+            {group.desc && <p className="text-xs text-ink-3 mb-3 -mt-1">{group.desc}</p>}
             <div className="space-y-3">
               {group.fields.map((f) => (
                 <FieldRow key={pathOf(f)} field={f} value={values[pathOf(f)]} packaged={packaged} onChange={(v) => setField(pathOf(f), v)} />
@@ -459,7 +498,7 @@ export default function SettingsView() {
                   result={testMsg.localstt}
                   onClick={handlePrepareLocalStt}
                 />
-                <p className="text-xs text-brand-500 mt-1">
+                <p className="text-xs text-ink-3 mt-1">
                   {localStt && !localStt.lib_available
                     ? "이 설치본에는 로컬 전사 라이브러리(faster-whisper)가 없습니다. 포터블 배포본에서는 기본 포함됩니다."
                     : "회의 중에 내려받지 않도록 미리 준비하세요. 모델 크기에 따라 수십~수백 MB, 1~3분 걸립니다. 준비하지 않으면 위 '로컬 STT 최종 백업'을 켜도 이 백업은 폴백 순서에서 자동으로 제외됩니다(전사 자체는 계속됩니다)."}
@@ -469,31 +508,31 @@ export default function SettingsView() {
             {packaged && group.id === "email" && (
               <>
                 <TestRow label="메일 연결 테스트 (테스트 메일 발송)" busy={testing === "email"} result={testMsg.email} onClick={() => runTest("email")} />
-                <p className="text-xs text-brand-500 mt-1">받는 주소로 테스트 메일 1통을 보내 설정을 확인합니다. 받은 편지함(스팸함 포함)을 확인하세요.</p>
+                <p className="text-xs text-ink-3 mt-1">받는 주소로 테스트 메일 1통을 보내 설정을 확인합니다. 받은 편지함(스팸함 포함)을 확인하세요.</p>
               </>
             )}
             {packaged && group.id === "notify" && (
               <>
                 <TestRow label="Slack 테스트 메시지 보내기" busy={testing === "slack"} result={testMsg.slack} onClick={() => runTest("slack")} />
                 <TestRow label="Teams 테스트 메시지 보내기" busy={testing === "teams"} result={testMsg.teams} onClick={() => runTest("teams")} />
-                <p className="text-xs text-brand-500 mt-1">각 Webhook URL을 입력·저장한 뒤 눌러 채널에 메시지가 도착하는지 확인하세요.</p>
+                <p className="text-xs text-ink-3 mt-1">각 Webhook URL을 입력·저장한 뒤 눌러 채널에 메시지가 도착하는지 확인하세요.</p>
               </>
             )}
             {packaged && group.id === "obsidian" && (
               <>
                 <TestRow label="노트 폴더 경로 확인" busy={testing === "obsidian"} result={testMsg.obsidian} onClick={() => runTest("obsidian")} />
                 <TestRow label="검색 인덱스·그래프 재빌드" busy={testing === "reindex"} result={testMsg.reindex} onClick={handleReindex} />
-                <p className="text-xs text-brand-500 mt-1">노트 폴더(.md)를 바꾸거나 노트를 추가한 뒤 눌러 검색·위키·지식 그래프를 최신화하세요. (Obsidian 앱은 필요 없습니다.)</p>
+                <p className="text-xs text-ink-3 mt-1">노트 폴더(.md)를 바꾸거나 노트를 추가한 뒤 눌러 검색·위키·지식 그래프를 최신화하세요. (Obsidian 앱은 필요 없습니다.)</p>
                 <div className="mt-5">
-                  <button onClick={handleDiagnose} disabled={testing === "diagnose"} className="flex items-center gap-2 px-5 py-2.5 bg-brand-50 text-brand-700 rounded-xl text-sm font-semibold hover:bg-brand-100 transition-all w-fit">
+                  <button onClick={handleDiagnose} disabled={testing === "diagnose"} className="flex items-center gap-2 px-5 py-2.5 bg-surface-2 text-ink-2 rounded-card text-sm font-semibold hover:bg-hover transition-all w-fit">
                     {testing === "diagnose" ? <Loader2 size={16} className="animate-spin" /> : <Plug size={16} />} Obsidian 전체 진단
                   </button>
                   {diag && (
                     <div className="mt-3 space-y-1.5">
                       {diag.checks.map((ch) => (
                         <div key={ch.name} className="flex items-start gap-2 text-sm">
-                          {ch.ok ? <CheckCircle size={16} className="text-emerald-600 mt-0.5 shrink-0" /> : <XCircle size={16} className="text-red-600 mt-0.5 shrink-0" />}
-                          <span><b className="text-brand-900">{ch.name}</b> — <span className="text-brand-500">{ch.detail}</span></span>
+                          {ch.ok ? <CheckCircle size={16} className="text-ok mt-0.5 shrink-0" /> : <XCircle size={16} className="text-rec mt-0.5 shrink-0" />}
+                          <span><b className="text-ink">{ch.name}</b> — <span className="text-ink-3">{ch.detail}</span></span>
                         </div>
                       ))}
                     </div>
@@ -512,16 +551,48 @@ export default function SettingsView() {
       <div className="flex items-start justify-between gap-3 mb-1">
         <h2 className="text-2xl font-bold tracking-tight">설정</h2>
         {packaged && (
-          <button onClick={openWizard} className="flex items-center gap-1.5 px-3 py-1.5 bg-brand-50 text-brand-700 rounded-lg text-xs font-semibold hover:bg-brand-100 transition-all shrink-0">
+          <button onClick={openWizard} className="flex items-center gap-1.5 px-3 py-1.5 bg-surface-2 text-ink-2 rounded-ctl text-xs font-semibold hover:bg-hover transition-all shrink-0">
             <Wand2 size={14} /> 설정 마법사 다시 열기
           </button>
         )}
       </div>
-      <p className="text-sm text-brand-500 mb-4">
+      <p className="text-sm text-ink-3 mb-4">
         {packaged
           ? "모든 설정은 이 PC의 config.json 에 저장됩니다. 잘 모르는 항목은 그대로 두세요."
           : "설정은 이 기기(브라우저)에만 저장됩니다."}
       </p>
+
+      {/* 설정 검색 — 14그룹·수십 필드 중 어디에 있는지 찾는 것이 가장 흔한 막힘이다.
+          라벨뿐 아니라 설명과 키(ssl.verify)도 함께 본다. */}
+      <div className="mb-3">
+        <Input aria-label="설정 검색" value={query} onChange={(e) => setQuery(e.target.value)}
+          placeholder="설정 검색 — 예: 노트 폴더, 페르소나, SSL, 지출 한도" />
+        {searching && (
+          <p className="mt-1 text-xs text-ink-3">
+            {core.length + common.length + advanced.length}개 그룹에서 찾았습니다.
+            {" "}<button type="button" onClick={() => setQuery("")}
+              className="underline hover:text-ink">검색 지우기</button>
+          </p>
+        )}
+      </div>
+
+      {/* 화면 테마 — 스키마 필드가 아니라 이 기기의 표시 설정이라 여기에 직접 둔다
+          (config.json 이 아니라 localStorage). 모바일은 [더보기]에도 같은 컨트롤이 있다. */}
+      {!searching && (
+        <section className="mb-3 rounded-card border border-line bg-surface p-3 shadow-card">
+          <h3 className="mb-1.5 text-md font-semibold text-ink">화면 테마</h3>
+          <SegmentedControl id="settings-theme" label="화면 테마" value={theme}
+            onChange={(c) => { setTheme(c); setThemeChoice(c); }}
+            items={[
+              { key: "system" as const, label: "시스템 설정 따름" },
+              { key: "light" as const, label: "라이트" },
+              { key: "dark" as const, label: "다크" },
+            ]} />
+          <p className="mt-1.5 text-xs text-ink-3">
+            이 기기에만 저장됩니다(설정 파일과 무관). 기본값은 Windows 의 앱 모드를 따릅니다.
+          </p>
+        </section>
+      )}
 
       {/* PC 서버 연결 (네이티브 앱 전용) — 연결/해제 시 전체 설정을 다시 로드해
           서버 모드 ↔ 단독 모드 전환을 즉시 반영한다. */}
@@ -552,19 +623,25 @@ export default function SettingsView() {
               {renderGroup(g)}
               {/* 페르소나별 참견도는 8×6 매트릭스라 스키마 필드로는 못 쓴다 —
                   해당 그룹 바로 아래에 전용 카드로 붙인다(PRD §19.6). */}
-              {g.id === "facilitation" && (open[g.id] ?? !g.advanced) && <FacilitationSettings />}
+              {g.id === "facilitation" && (open[g.id] ?? !g.advanced) && <PersonaMatrix />}
             </React.Fragment>
           ))}
         </>
       )}
 
+      {searching && core.length + common.length + advanced.length === 0 && (
+        <p className="rounded-card border border-line bg-surface px-3 py-6 text-center text-sm text-ink-3">
+          “{query}” 와 맞는 설정이 없습니다. 다른 말로 찾아보세요(예: 폴더, 키, 한도, 알림).
+        </p>
+      )}
+
       {error && (
-        <div role="alert" className="mb-3 rounded-xl border border-red-200 bg-red-50 text-red-600 px-4 py-3 text-sm flex items-start gap-2">
+        <div role="alert" className="mb-3 rounded-card border border-rec bg-rec-bg text-rec px-4 py-3 text-sm flex items-start gap-2">
           <XCircle size={16} className="mt-0.5 shrink-0" /> <span>{error}</span>
         </div>
       )}
       {warn.length > 0 && (
-        <div className="mb-4 rounded-xl border border-amber-200 bg-amber-50 text-amber-700 px-4 py-3 text-sm">
+        <div className="mb-4 rounded-card border border-warn-line bg-warn-bg text-warn px-4 py-3 text-sm">
           <div className="flex items-center gap-2 font-semibold mb-1"><AlertTriangle size={16} /> 확인이 필요합니다(저장은 되었습니다)</div>
           <ul className="list-disc ml-6 space-y-0.5">{warn.map((w, i) => <li key={i}>{w}</li>)}</ul>
         </div>
@@ -572,16 +649,16 @@ export default function SettingsView() {
 
       {/* 항상 보이는 하단 고정 저장 바 — 어느 섹션에서든 바로 저장 */}
       <div className="sticky bottom-3 z-20 mb-8">
-        <div className="flex flex-col md:flex-row md:items-center gap-2 bg-white/85 backdrop-blur border border-brand-200 rounded-2xl p-3 shadow-2xl shadow-brand-900/10">
+        <div className="flex flex-col md:flex-row md:items-center gap-2 bg-surface/85 backdrop-blur border border-line rounded-card p-3 shadow-2xl shadow-none">
           <button
             onClick={handleSave}
             disabled={saving}
-            className="w-full md:w-auto flex items-center justify-center gap-2 px-8 py-3 bg-brand-950 text-white rounded-xl font-bold hover:bg-brand-900 transition-all active:scale-95"
+            className="w-full md:w-auto flex items-center justify-center gap-2 px-8 py-3 bg-accent-solid text-white rounded-card font-bold hover:bg-accent-solid-hover transition-all active:scale-95"
           >
             {saving ? <Loader2 size={18} className="animate-spin" /> : saved ? <CheckCircle size={18} /> : <Save size={18} />}
             {saved ? "저장되었습니다!" : "설정 저장"}
           </button>
-          <p className="text-xs text-brand-500 md:ml-1">
+          <p className="text-xs text-ink-3 md:ml-1">
             변경 후 꼭 저장하세요. (연결 테스트·진단·재빌드는 자동으로 먼저 저장합니다.)
           </p>
         </div>
@@ -589,23 +666,23 @@ export default function SettingsView() {
 
       {/* 고급: 전체 설정(JSON) 직접 편집 */}
       {packaged && (
-        <section className="bg-white border border-brand-200 rounded-2xl p-4 md:p-5 mb-3 shadow-sm">
-          <button onClick={toggleRaw} className="flex items-center gap-2 text-sm font-bold text-brand-700 hover:text-brand-900">
+        <section className="bg-surface border border-line rounded-card p-4 md:p-5 mb-3 shadow-sm">
+          <button onClick={toggleRaw} className="flex items-center gap-2 text-sm font-bold text-ink-2 hover:text-ink">
             <Settings size={16} /> 고급: 전체 설정(JSON) 직접 편집 {showRaw ? "▲" : "▼"}
           </button>
           {showRaw && (
             <div className="mt-3 space-y-2">
-              <p className="text-xs text-brand-500">위 폼에 없는 항목(도메인 매핑·카테고리·별칭 등)까지 config.json 전체를 직접 편집합니다. 키는 마스킹되어 보이며 그대로 두면 유지됩니다.</p>
+              <p className="text-xs text-ink-3">위 폼에 없는 항목(도메인 매핑·카테고리·별칭 등)까지 config.json 전체를 직접 편집합니다. 키는 마스킹되어 보이며 그대로 두면 유지됩니다.</p>
               <textarea
                 value={rawText}
                 onChange={(e) => setRawText(e.target.value)}
                 spellCheck={false}
-                className="w-full h-96 px-3 py-2 bg-zinc-900 text-zinc-100 border border-zinc-700 rounded-lg outline-none font-mono text-xs leading-relaxed resize-y"
+                className="w-full h-96 px-3 py-2 bg-accent-solid text-surface-2 border border-ink-2 rounded-ctl outline-none font-mono text-xs leading-relaxed resize-y"
               />
               {rawMsg && (
-                <div className={`text-sm ${rawMsg.ok ? "text-emerald-600" : "text-red-600"}`}>{rawMsg.text}</div>
+                <div className={`text-sm ${rawMsg.ok ? "text-ok" : "text-rec"}`}>{rawMsg.text}</div>
               )}
-              <button onClick={saveRaw} className="flex items-center gap-2 px-5 py-2.5 bg-brand-950 text-white rounded-xl text-sm font-bold hover:bg-brand-900 transition-all">
+              <button onClick={saveRaw} className="flex items-center gap-2 px-5 py-2.5 bg-accent-solid text-white rounded-card text-sm font-bold hover:bg-accent-solid-hover transition-all">
                 <Save size={16} /> 전체 설정 저장
               </button>
             </div>
@@ -617,12 +694,12 @@ export default function SettingsView() {
       {packaged && <WatcherCard />}
 
       {/* Profiles */}
-      <section className="bg-white border border-brand-200 rounded-2xl p-4 md:p-5 mb-3">
+      <section className="bg-surface border border-line rounded-card p-4 md:p-5 mb-3">
         <div className="flex items-center justify-between mb-6">
           <h3 className="text-lg font-bold">처리 프로필</h3>
           <button
             onClick={() => setShowNewProfile(!showNewProfile)}
-            className="flex items-center gap-2 px-4 py-2 bg-brand-50 text-brand-700 rounded-xl text-sm font-medium hover:bg-brand-100 transition-all"
+            className="flex items-center gap-2 px-4 py-2 bg-surface-2 text-ink-2 rounded-card text-sm font-medium hover:bg-hover transition-all"
           >
             <Plus size={14} /> 새 프로필
           </button>
@@ -631,27 +708,27 @@ export default function SettingsView() {
         <AnimatePresence>
           {showNewProfile && (
             <motion.div initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }} className="overflow-hidden mb-6">
-              <div className="p-6 bg-zinc-50 rounded-xl space-y-4 border border-zinc-200">
+              <div className="p-6 bg-surface-2 rounded-card space-y-4 border border-line">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <input type="text" value={newProfile.name} onChange={(e) => setNewProfile((p) => ({ ...p, name: e.target.value }))} placeholder="프로필 이름 (예: weekly_team)" className="px-4 py-2 border border-zinc-200 rounded-lg outline-none focus:ring-2 focus:ring-zinc-900 text-sm" />
-                  <input type="text" value={newProfile.description} onChange={(e) => setNewProfile((p) => ({ ...p, description: e.target.value }))} placeholder="설명" className="px-4 py-2 border border-zinc-200 rounded-lg outline-none focus:ring-2 focus:ring-zinc-900 text-sm" />
+                  <input type="text" value={newProfile.name} onChange={(e) => setNewProfile((p) => ({ ...p, name: e.target.value }))} placeholder="프로필 이름 (예: weekly_team)" className="px-4 py-2 border border-line rounded-ctl outline-none focus:ring-2 focus:ring-accent text-sm" />
+                  <input type="text" value={newProfile.description} onChange={(e) => setNewProfile((p) => ({ ...p, description: e.target.value }))} placeholder="설명" className="px-4 py-2 border border-line rounded-ctl outline-none focus:ring-2 focus:ring-accent text-sm" />
                 </div>
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                  <select value={newProfile.type} onChange={(e) => setNewProfile((p) => ({ ...p, type: e.target.value }))} className="px-3 py-2 border border-zinc-200 rounded-lg text-sm bg-white">
+                  <select value={newProfile.type} onChange={(e) => setNewProfile((p) => ({ ...p, type: e.target.value }))} className="px-3 py-2 border border-line rounded-ctl text-sm bg-surface">
                     <option value="meeting">회의</option>
                     <option value="seminar">세미나</option>
                     <option value="lecture">강의</option>
                   </select>
-                  <select value={newProfile.language} onChange={(e) => setNewProfile((p) => ({ ...p, language: e.target.value }))} className="px-3 py-2 border border-zinc-200 rounded-lg text-sm bg-white">
+                  <select value={newProfile.language} onChange={(e) => setNewProfile((p) => ({ ...p, language: e.target.value }))} className="px-3 py-2 border border-line rounded-ctl text-sm bg-surface">
                     <option value="ko">한국어</option>
                     <option value="en">English</option>
                   </select>
                   <label className="flex items-center gap-2 text-sm ml-2">
-                    <input type="checkbox" checked={newProfile.translate} onChange={(e) => setNewProfile((p) => ({ ...p, translate: e.target.checked }))} className="w-4 h-4 rounded border-brand-300 text-brand-900 focus:ring-brand-900" />
+                    <input type="checkbox" checked={newProfile.translate} onChange={(e) => setNewProfile((p) => ({ ...p, translate: e.target.checked }))} className="w-4 h-4 rounded border-line-strong text-ink focus:ring-accent" />
                     영어 → 한국어 번역
                   </label>
                 </div>
-                <button onClick={handleCreateProfile} className="w-full md:w-auto px-6 py-2.5 bg-brand-950 text-white rounded-lg text-sm font-semibold hover:bg-brand-900 transition-all mt-2">프로필 생성</button>
+                <button onClick={handleCreateProfile} className="w-full md:w-auto px-6 py-2.5 bg-accent-solid text-white rounded-ctl text-sm font-semibold hover:bg-accent-solid-hover transition-all mt-2">프로필 생성</button>
               </div>
             </motion.div>
           )}
@@ -659,26 +736,26 @@ export default function SettingsView() {
 
         <div className="space-y-3">
           {profiles.map((p) => (
-            <div key={p.name} className="flex flex-col md:flex-row md:items-center justify-between p-4 bg-zinc-50 border border-zinc-100 rounded-xl gap-3">
+            <div key={p.name} className="flex flex-col md:flex-row md:items-center justify-between p-4 bg-surface-2 border border-line rounded-card gap-3">
               <div>
-                <span className="font-bold text-sm text-zinc-900">{p.name}</span>
-                <span className="text-xs text-zinc-500 ml-3">{p.description}</span>
-                <span className="text-[11px] text-brand-500 font-bold ml-2 bg-brand-50 px-2 py-0.5 rounded-md">
+                <span className="font-bold text-sm text-ink">{p.name}</span>
+                <span className="text-xs text-ink-3 ml-3">{p.description}</span>
+                <span className="text-[11px] text-ink-3 font-bold ml-2 bg-surface-2 px-2 py-0.5 rounded-md">
                   {p.source === "builtin" ? "기본 제공" : "직접 추가"}
                 </span>
               </div>
-              <div className="flex items-center gap-3 text-xs text-zinc-500 font-medium">
-                <span className="bg-white px-2 py-1 rounded shadow-sm">{typeLabel(p.type)}</span>
-                <span className="bg-white px-2 py-1 rounded shadow-sm">
+              <div className="flex items-center gap-3 text-xs text-ink-3 font-medium">
+                <span className="bg-surface px-2 py-1 rounded shadow-sm">{typeLabel(p.type)}</span>
+                <span className="bg-surface px-2 py-1 rounded shadow-sm">
                   {p.language === "ko" ? "한국어" : p.language === "en" ? "영어" : p.language}
                 </span>
-                {p.translate && <span className="bg-amber-50 text-amber-700 px-2 py-1 rounded shadow-sm">번역</span>}
+                {p.translate && <span className="bg-warn-bg text-warn px-2 py-1 rounded shadow-sm">번역</span>}
                 {p.source !== "builtin" && (
                   <button
                     onClick={() => handleDeleteProfile(p.name)}
                     title="이 프로필 삭제"
                     aria-label={`${p.name} 프로필 삭제`}
-                    className="p-1.5 hover:text-red-500 hover:bg-red-50 rounded-lg transition-colors ml-1"
+                    className="p-1.5 hover:text-rec hover:bg-rec-bg rounded-ctl transition-colors ml-1"
                   >
                     <Trash2 size={16} />
                   </button>
@@ -691,16 +768,16 @@ export default function SettingsView() {
 
       {/* 앱 종료 (패키지 모드) */}
       {packaged && (
-        <section className="bg-white border border-brand-200 rounded-2xl p-4 md:p-5 mb-3 shadow-sm">
+        <section className="bg-surface border border-line rounded-card p-4 md:p-5 mb-3 shadow-sm">
           <h3 className="text-base font-bold mb-1">앱 종료</h3>
-          <p className="text-xs text-brand-500 mb-3">프로그램을 완전히 종료합니다. 종료 후 이 브라우저 탭은 닫으세요. 다시 쓰려면 MeetingMinutes.exe 를 다시 실행하세요.</p>
+          <p className="text-xs text-ink-3 mb-3">프로그램을 완전히 종료합니다. 종료 후 이 브라우저 탭은 닫으세요. 다시 쓰려면 MeetingMinutes.exe 를 다시 실행하세요.</p>
           <button
             onClick={async () => {
               if (!confirm("앱을 종료할까요? 진행 중인 처리가 있으면 중단됩니다.")) return;
               await shutdownApp();
               alert("앱이 종료되었습니다. 이 탭을 닫으세요.");
             }}
-            className="flex items-center gap-2 px-5 py-2.5 bg-zinc-800 text-white rounded-xl text-sm font-bold hover:bg-zinc-900 transition-all"
+            className="flex items-center gap-2 px-5 py-2.5 bg-ink text-white rounded-card text-sm font-bold hover:bg-accent-solid transition-all"
           >
             앱 종료
           </button>
@@ -708,13 +785,13 @@ export default function SettingsView() {
       )}
 
       {/* Danger Zone */}
-      <section className="bg-white border border-red-200 rounded-2xl p-6 md:p-8">
-        <h3 className="text-lg font-bold text-red-600 mb-2">위험 구역</h3>
-        <p className="text-sm text-red-500/80 mb-5">
+      <section className="bg-surface border border-rec rounded-card p-6 md:p-8">
+        <h3 className="text-lg font-bold text-rec mb-2">위험 구역</h3>
+        <p className="text-sm text-rec/80 mb-5">
           모든 세션·전사·요약을 휴지통으로 보냅니다. [대시보드] → [휴지통]에서 되돌리거나
           완전히 삭제할 수 있습니다(완전 삭제는 결과 폴더를 Windows 휴지통으로 보냅니다).
         </p>
-        <button onClick={handleClearHistory} className="flex items-center justify-center w-full md:w-auto gap-2 px-6 py-3 bg-red-50 text-red-600 border border-red-200 rounded-xl font-bold hover:bg-red-100 transition-all">
+        <button onClick={handleClearHistory} className="flex items-center justify-center w-full md:w-auto gap-2 px-6 py-3 bg-rec-bg text-rec border border-rec rounded-card font-bold hover:bg-rec-bg transition-all">
           <Trash2 size={16} /> 모든 기록 휴지통으로 보내기
         </button>
       </section>
@@ -786,45 +863,45 @@ function WatcherCard() {
   const c = status?.counts;
 
   return (
-    <section className="bg-white border border-brand-200 rounded-2xl p-4 md:p-5 mb-3 shadow-sm">
-      <h3 className="text-base font-bold mb-1 flex items-center gap-2 text-brand-900">
+    <section className="bg-surface border border-line rounded-card p-4 md:p-5 mb-3 shadow-sm">
+      <h3 className="text-base font-bold mb-1 flex items-center gap-2 text-ink">
         <Settings size={16} /> 폴더 자동 감시
-        <span className={`ml-1 text-[11px] font-bold px-2 py-0.5 rounded-full ${running ? "bg-emerald-100 text-emerald-700" : "bg-zinc-100 text-zinc-500"}`}>
+        <span className={`ml-1 text-[11px] font-bold px-2 py-0.5 rounded-full ${running ? "bg-ok text-ok" : "bg-surface-2 text-ink-3"}`}>
           {running ? "● 감시 중" : "○ 중지됨"}
         </span>
       </h3>
-      <p className="text-xs text-brand-500 mb-1">
+      <p className="text-xs text-ink-3 mb-1">
         지정한 폴더에 새 녹음 파일이 생기면 자동으로 회의록을 생성합니다. 아래에서 감시할 폴더를 추가하세요.
       </p>
       {/*
         녹취 고지 — Recorder·FileUpload 와 같은 톤의 정적 한 줄. 자동 처리 경로라
         처리 시점에 사람이 없으므로, 폴더를 **지정하는** 이 자리가 유일한 고지 지점이다.
       */}
-      <p className="text-xs text-brand-500 mb-3">
+      <p className="text-xs text-ink-3 mb-3">
         감시 폴더에 넣는 녹음은 <b>참석자에게 녹음·자동 전사 사실을 알린 뒤</b> 취득한 것이어야 합니다.
       </p>
 
       {/* 감시 폴더 목록 + 추가/삭제 */}
       <div className="mb-3">
         <div className="flex items-center justify-between mb-1.5">
-          <span className="text-xs font-bold text-brand-600">감시 폴더</span>
-          <button onClick={onAddFolder} disabled={busy} className="flex items-center gap-1.5 px-3 py-1.5 bg-brand-50 text-brand-700 rounded-lg text-xs font-semibold hover:bg-brand-100 transition-all">
+          <span className="text-xs font-bold text-ink-2">감시 폴더</span>
+          <button onClick={onAddFolder} disabled={busy} className="flex items-center gap-1.5 px-3 py-1.5 bg-surface-2 text-ink-2 rounded-ctl text-xs font-semibold hover:bg-hover transition-all">
             {busy ? <Loader2 size={13} className="animate-spin" /> : <FolderOpen size={13} />} 폴더 추가
           </button>
         </div>
         {status?.folders && status.folders.length > 0 ? (
           <ul className="space-y-1">
             {status.folders.map((f) => (
-              <li key={f} className="flex items-center justify-between gap-2 bg-zinc-50 border border-zinc-100 rounded-lg px-3 py-2 text-xs">
-                <span className="font-mono text-brand-700 truncate">{f}</span>
-                <button onClick={() => onRemoveFolder(f)} disabled={busy} className="p-1 text-brand-500 hover:text-red-500 hover:bg-red-50 rounded transition-colors shrink-0">
+              <li key={f} className="flex items-center justify-between gap-2 bg-surface-2 border border-line rounded-ctl px-3 py-2 text-xs">
+                <span className="font-mono text-ink-2 truncate">{f}</span>
+                <button onClick={() => onRemoveFolder(f)} disabled={busy} className="p-1 text-ink-3 hover:text-rec hover:bg-rec-bg rounded transition-colors shrink-0">
                   <Trash2 size={14} />
                 </button>
               </li>
             ))}
           </ul>
         ) : (
-          <div className="text-xs text-amber-600 bg-amber-50 border border-amber-100 rounded-lg px-3 py-2">감시 폴더가 없습니다. '폴더 추가'로 녹음 파일이 쌓이는 폴더를 지정하세요.</div>
+          <div className="text-xs text-warn bg-warn-bg border border-warn-line rounded-ctl px-3 py-2">감시 폴더가 없습니다. '폴더 추가'로 녹음 파일이 쌓이는 폴더를 지정하세요.</div>
         )}
       </div>
 
@@ -839,13 +916,13 @@ function WatcherCard() {
 
       {status?.recent && status.recent.length > 0 && (
         <div className="mb-3 text-xs">
-          <div className="font-bold text-brand-600 mb-1">최근 처리</div>
+          <div className="font-bold text-ink-2 mb-1">최근 처리</div>
           <div className="space-y-1">
             {status.recent.slice(0, 5).map((r, i) => (
-              <div key={i} className="flex items-center gap-2 text-brand-500">
-                <span className={`w-1.5 h-1.5 rounded-full ${r.status === "done" ? "bg-emerald-500" : r.status === "failed" ? "bg-red-500" : "bg-sky-500"}`} />
+              <div key={i} className="flex items-center gap-2 text-ink-3">
+                <span className={`w-1.5 h-1.5 rounded-full ${r.status === "done" ? "bg-ok-bg0" : r.status === "failed" ? "bg-rec-bg0" : "bg-surface-20"}`} />
                 <span className="font-mono truncate max-w-[16rem]">{r.file}</span>
-                <span className="text-brand-500">{r.processed_at?.replace("T", " ")}</span>
+                <span className="text-ink-3">{r.processed_at?.replace("T", " ")}</span>
               </div>
             ))}
           </div>
@@ -854,29 +931,29 @@ function WatcherCard() {
 
       <div className="flex items-center gap-3">
         {running ? (
-          <button onClick={onStop} disabled={busy} className="flex items-center gap-2 px-5 py-2.5 bg-zinc-800 text-white rounded-xl text-sm font-bold hover:bg-zinc-900 transition-all">
+          <button onClick={onStop} disabled={busy} className="flex items-center gap-2 px-5 py-2.5 bg-ink text-white rounded-card text-sm font-bold hover:bg-accent-solid transition-all">
             {busy ? <Loader2 size={16} className="animate-spin" /> : <XCircle size={16} />} 감시 중지
           </button>
         ) : (
-          <button onClick={onStart} disabled={busy} className="flex items-center gap-2 px-5 py-2.5 bg-brand-950 text-white rounded-xl text-sm font-bold hover:bg-brand-900 transition-all">
+          <button onClick={onStart} disabled={busy} className="flex items-center gap-2 px-5 py-2.5 bg-accent-solid text-white rounded-card text-sm font-bold hover:bg-accent-solid-hover transition-all">
             {busy ? <Loader2 size={16} className="animate-spin" /> : <Plug size={16} />} 감시 시작
           </button>
         )}
       </div>
-      {msg && <p className="text-xs text-brand-500 mt-2">{msg}</p>}
+      {msg && <p className="text-xs text-ink-3 mt-2">{msg}</p>}
     </section>
   );
 }
 
 function Stat({ label, value, tone }: { label: string; value: number; tone: string }) {
   const tones: Record<string, string> = {
-    emerald: "bg-emerald-50 text-emerald-700",
-    sky: "bg-sky-50 text-sky-700",
-    red: "bg-red-50 text-red-700",
-    zinc: "bg-zinc-100 text-zinc-600",
+    emerald: "bg-ok-bg text-ok",
+    sky: "bg-surface-2 text-ent-org",
+    red: "bg-rec-bg text-rec",
+    zinc: "bg-surface-2 text-ink-2",
   };
   return (
-    <span className={`px-2.5 py-1 rounded-lg font-bold ${tones[tone] || tones.zinc}`}>
+    <span className={`px-2.5 py-1 rounded-ctl font-bold ${tones[tone] || tones.zinc}`}>
       {label} {value}
     </span>
   );
@@ -916,12 +993,12 @@ function FieldRow({ field, value, onChange, packaged }: { field: Field; value: a
     return (
       <label className="flex items-start justify-between gap-4 cursor-pointer">
         <span>
-          <span className="text-sm font-medium text-brand-900">{field.label}</span>
-          {field.desc && <span id={descId} className="block text-xs text-brand-500 mt-0.5">{field.desc}</span>}
+          <span className="text-sm font-medium text-ink">{field.label}</span>
+          {field.desc && <span id={descId} className="block text-xs text-ink-3 mt-0.5">{field.desc}</span>}
         </span>
         <input type="checkbox" checked={!!value} onChange={(e) => onChange(e.target.checked)}
           aria-describedby={describedBy}
-          className="mt-1 w-5 h-5 rounded border-brand-300 text-brand-900 focus:ring-brand-900 shrink-0" />
+          className="mt-1 w-5 h-5 rounded border-line-strong text-ink focus:ring-accent shrink-0" />
       </label>
     );
   }
@@ -931,9 +1008,9 @@ function FieldRow({ field, value, onChange, packaged }: { field: Field; value: a
     // 문자열 그대로 저장한다.
     return (
       <div className="space-y-2">
-        <label htmlFor={inputId} className="text-sm font-medium text-brand-900">
+        <label htmlFor={inputId} className="text-sm font-medium text-ink">
           {field.label}
-          {field.required && <span className="text-red-500 ml-0.5" aria-hidden="true">*</span>}
+          {field.required && <span className="text-rec ml-0.5" aria-hidden="true">*</span>}
         </label>
         <textarea
           id={inputId}
@@ -943,9 +1020,9 @@ function FieldRow({ field, value, onChange, packaged }: { field: Field; value: a
           rows={5}
           aria-required={field.required || undefined}
           aria-describedby={describedBy}
-          className="w-full px-3 py-2 bg-zinc-50 border border-zinc-200 rounded-lg outline-none focus:ring-2 focus:ring-brand-500 text-sm resize-y leading-relaxed"
+          className="w-full px-3 py-2 bg-surface-2 border border-line rounded-ctl outline-none focus:ring-2 focus:ring-accent text-sm resize-y leading-relaxed"
         />
-        {field.desc && <p id={descId} className="text-xs text-brand-500">{field.desc}</p>}
+        {field.desc && <p id={descId} className="text-xs text-ink-3">{field.desc}</p>}
       </div>
     );
   }
@@ -969,9 +1046,9 @@ function FieldRow({ field, value, onChange, packaged }: { field: Field; value: a
     };
     return (
       <div className="space-y-2">
-        <label htmlFor={inputId} className="text-sm font-medium text-brand-900">
+        <label htmlFor={inputId} className="text-sm font-medium text-ink">
           {field.label}
-          {field.required && <span className="text-red-500 ml-0.5" aria-hidden="true">*</span>}
+          {field.required && <span className="text-rec ml-0.5" aria-hidden="true">*</span>}
         </label>
         <div className="flex items-stretch gap-2">
           <textarea
@@ -982,32 +1059,32 @@ function FieldRow({ field, value, onChange, packaged }: { field: Field; value: a
             rows={3}
             aria-required={field.required || undefined}
             aria-describedby={describedBy}
-            className="flex-1 px-3 py-2 bg-zinc-50 border border-zinc-200 rounded-lg outline-none focus:ring-2 focus:ring-brand-500 text-sm font-mono tracking-wide resize-y"
+            className="flex-1 px-3 py-2 bg-surface-2 border border-line rounded-ctl outline-none focus:ring-2 focus:ring-accent text-sm font-mono tracking-wide resize-y"
           />
           {showPicker && (
             <button type="button" onClick={doPickAppend} disabled={picking}
-              className="flex items-center gap-1.5 px-3 bg-brand-50 text-brand-700 rounded-lg text-sm font-semibold hover:bg-brand-100 transition-all shrink-0 self-stretch"
+              className="flex items-center gap-1.5 px-3 bg-surface-2 text-ink-2 rounded-ctl text-sm font-semibold hover:bg-hover transition-all shrink-0 self-stretch"
               title="폴더 추가">
               {picking ? <Loader2 size={16} className="animate-spin" /> : <FolderOpen size={16} />}
               <span className="hidden md:inline">폴더 추가</span>
             </button>
           )}
         </div>
-        {field.desc && <p id={descId} className="text-xs text-brand-500">{field.desc}</p>}
+        {field.desc && <p id={descId} className="text-xs text-ink-3">{field.desc}</p>}
       </div>
     );
   }
 
   return (
     <div className="space-y-2">
-      <label htmlFor={inputId} className="text-sm font-medium text-brand-900">
+      <label htmlFor={inputId} className="text-sm font-medium text-ink">
         {field.label}
-        {field.required && <span className="text-red-500 ml-0.5" aria-hidden="true">*</span>}
+        {field.required && <span className="text-rec ml-0.5" aria-hidden="true">*</span>}
       </label>
       {field.type === "select" ? (
         <select id={inputId} value={value ?? ""} onChange={(e) => onChange(e.target.value)}
           aria-required={field.required || undefined} aria-describedby={describedBy}
-          className="w-full px-3 py-2 bg-zinc-50 border border-zinc-200 rounded-lg outline-none focus:ring-2 focus:ring-brand-500 text-sm">
+          className="w-full px-3 py-2 bg-surface-2 border border-line rounded-ctl outline-none focus:ring-2 focus:ring-accent text-sm">
           {(field.options || []).map((o) => {
             const val = typeof o === "string" ? o : o.value;
             const lbl = typeof o === "string" ? o : o.label;
@@ -1025,12 +1102,12 @@ function FieldRow({ field, value, onChange, packaged }: { field: Field; value: a
               placeholder={field.placeholder || (field.type === "password" && looksMasked(value) ? "변경하려면 새 값 입력 (그대로 두면 기존 유지)" : "")}
               aria-required={field.required || undefined}
               aria-describedby={describedBy}
-              className={`w-full px-3 py-2 bg-zinc-50 border border-zinc-200 rounded-lg outline-none focus:ring-2 focus:ring-brand-500 text-sm font-mono tracking-wide ${field.type === "password" ? "pr-10" : ""}`}
+              className={`w-full px-3 py-2 bg-surface-2 border border-line rounded-ctl outline-none focus:ring-2 focus:ring-accent text-sm font-mono tracking-wide ${field.type === "password" ? "pr-10" : ""}`}
             />
             {field.type === "password" && (
               // tabIndex=-1 제거 — 키보드 사용자도 키를 확인하며 입력할 수 있어야 한다
               <button type="button" onClick={toggleReveal} disabled={revealBusy}
-                className="absolute right-2 top-1/2 -translate-y-1/2 text-brand-500 hover:text-brand-700 p-1 disabled:opacity-50"
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-ink-3 hover:text-ink-2 p-1 disabled:opacity-50"
                 aria-label={reveal ? "키 숨기기" : "키 표시"} aria-pressed={reveal}
                 title={reveal ? "숨기기" : "표시"}>
                 {revealBusy ? <Loader2 size={16} className="animate-spin" /> : reveal ? <EyeOff size={16} /> : <Eye size={16} />}
@@ -1039,7 +1116,7 @@ function FieldRow({ field, value, onChange, packaged }: { field: Field; value: a
           </div>
           {showPicker && (
             <button type="button" onClick={doPick} disabled={picking}
-              className="flex items-center gap-1.5 px-3 bg-brand-50 text-brand-700 rounded-lg text-sm font-semibold hover:bg-brand-100 transition-all shrink-0"
+              className="flex items-center gap-1.5 px-3 bg-surface-2 text-ink-2 rounded-ctl text-sm font-semibold hover:bg-hover transition-all shrink-0"
               title="폴더 찾아보기">
               {picking ? <Loader2 size={16} className="animate-spin" /> : <FolderOpen size={16} />}
               <span className="hidden md:inline">찾아보기</span>
@@ -1047,8 +1124,8 @@ function FieldRow({ field, value, onChange, packaged }: { field: Field; value: a
           )}
         </div>
       )}
-      {revealNote && <p className="text-xs text-amber-600">{revealNote}</p>}
-      {field.desc && <p id={descId} className="text-xs text-brand-500">{field.desc}</p>}
+      {revealNote && <p className="text-xs text-warn">{revealNote}</p>}
+      {field.desc && <p id={descId} className="text-xs text-ink-3">{field.desc}</p>}
     </div>
   );
 }
@@ -1057,9 +1134,9 @@ function FieldRow({ field, value, onChange, packaged }: { field: Field; value: a
 function SectionHeader({ label, hint, first }: { label: string; hint?: string; first?: boolean }) {
   return (
     <div className={`flex items-baseline gap-3 mb-3 ${first ? "mt-1" : "mt-7"}`}>
-      <span className="text-xs font-bold text-brand-600 uppercase tracking-widest whitespace-nowrap">{label}</span>
-      {hint && <span className="text-[11px] text-brand-500 whitespace-nowrap hidden sm:inline">{hint}</span>}
-      <div className="h-px flex-1 bg-brand-200 self-center" />
+      <span className="text-xs font-bold text-ink-2 uppercase tracking-widest whitespace-nowrap">{label}</span>
+      {hint && <span className="text-[11px] text-ink-3 whitespace-nowrap hidden sm:inline">{hint}</span>}
+      <div className="h-px flex-1 bg-line self-center" />
     </div>
   );
 }
@@ -1067,11 +1144,11 @@ function SectionHeader({ label, hint, first }: { label: string; hint?: string; f
 function TestRow({ label, busy, result, onClick }: { label: string; busy: boolean; result?: { ok: boolean; message: string }; onClick: () => void }) {
   return (
     <div className="mt-5 flex flex-col md:flex-row md:items-center gap-3">
-      <button onClick={onClick} disabled={busy} className="flex items-center gap-2 px-5 py-2.5 bg-brand-50 text-brand-700 rounded-xl text-sm font-semibold hover:bg-brand-100 transition-all w-fit">
+      <button onClick={onClick} disabled={busy} className="flex items-center gap-2 px-5 py-2.5 bg-surface-2 text-ink-2 rounded-card text-sm font-semibold hover:bg-hover transition-all w-fit">
         {busy ? <Loader2 size={16} className="animate-spin" /> : <Plug size={16} />} {label}
       </button>
       {result && (
-        <span className={`flex items-center gap-1.5 text-sm ${result.ok ? "text-emerald-600" : "text-red-600"}`}>
+        <span className={`flex items-center gap-1.5 text-sm ${result.ok ? "text-ok" : "text-rec"}`}>
           {result.ok ? <CheckCircle size={16} /> : <XCircle size={16} />} {result.message}
         </span>
       )}

@@ -59,7 +59,7 @@ export default function Markdown({
                     e.preventDefault();
                     onWikiLink(target);
                   }}
-                  className="text-brand-700 font-medium no-underline border-b border-dashed border-brand-300 hover:border-brand-600 hover:text-brand-900 cursor-pointer"
+                  className="text-ink-2 font-medium no-underline border-b border-dashed border-line-strong hover:border-ink-2 hover:text-ink cursor-pointer"
                   title={`지식 그래프에서 '${target}' 열기`}
                 >
                   {children}

@@ -16,9 +16,9 @@ const api = vi.hoisted(() => ({
   updateConfig: vi.fn(),
 }));
 
-vi.mock("../lib/api", () => api);
+vi.mock("../../lib/api", () => api);
 
-import FacilitationSettings from "./FacilitationSettings";
+import PersonaMatrix from "./PersonaMatrix";
 
 const persona = (over: Partial<any> = {}) => ({
   key: "scribe", label: "📝 서기", role: "결정·액션을 놓치지 않는다",
@@ -43,21 +43,21 @@ function levelButton(label: string, lvl: number) {
   return within(row as HTMLElement).getByRole("button", { name: new RegExp(`^${lvl} `) });
 }
 
-describe("FacilitationSettings — 고위험 개방", () => {
+describe("PersonaMatrix — 고위험 개방", () => {
   beforeEach(() => {
     api.getFacilitationPersonas.mockResolvedValue(payload());
     api.updateConfig.mockResolvedValue({ ok: true });
   });
 
   it("고위험도 3(옆 카드)을 고를 수 있다 — 잠겨 있지 않다", async () => {
-    render(<FacilitationSettings />);
+    render(<PersonaMatrix />);
     await screen.findByText("🔍 팩트체커");
     expect(levelButton("🔍 팩트체커", 3)).not.toBeDisabled();
   });
 
   it("4·5(알림음·음성)는 여전히 잠겨 있다 — 미구현이다", async () => {
     api.getFacilitationPersonas.mockResolvedValue(payload({ maxLevel: 5 }));
-    render(<FacilitationSettings />);
+    render(<PersonaMatrix />);
     await screen.findByText("🔍 팩트체커");
     expect(levelButton("🔍 팩트체커", 4)).toBeDisabled();
     expect(levelButton("🔍 팩트체커", 5)).toBeDisabled();
@@ -65,7 +65,7 @@ describe("FacilitationSettings — 고위험 개방", () => {
 
   it("기본(관찰)에서는 경고가 없고, 3을 고르면 그 줄에 뜬다", async () => {
     const user = userEvent.setup();
-    render(<FacilitationSettings />);
+    render(<PersonaMatrix />);
     await screen.findByText("🔍 팩트체커");
     expect(screen.queryByText(WARN)).toBeNull();
 
@@ -75,7 +75,7 @@ describe("FacilitationSettings — 고위험 개방", () => {
 
   it("저위험을 3으로 올려도 경고는 뜨지 않는다 — 경고가 배경음이 되면 안 된다", async () => {
     const user = userEvent.setup();
-    render(<FacilitationSettings />);
+    render(<PersonaMatrix />);
     await screen.findByText("📝 서기");
     await user.click(levelButton("📝 서기", 3));
     expect(screen.queryByText(WARN)).toBeNull();
@@ -83,7 +83,7 @@ describe("FacilitationSettings — 고위험 개방", () => {
 
   it("'적극' 프리셋도 고위험은 올리지 않는다 — 개별 선택으로만 열린다", async () => {
     const user = userEvent.setup();
-    render(<FacilitationSettings />);
+    render(<PersonaMatrix />);
     await screen.findByText("🔍 팩트체커");
     await user.click(screen.getByRole("button", { name: "적극" }));
     expect(screen.queryByText(WARN)).toBeNull();

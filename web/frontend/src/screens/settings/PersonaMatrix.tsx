@@ -3,7 +3,7 @@ import { AlertTriangle, CheckCircle, Loader2, Lock, Save, Users } from "lucide-r
 import {
   getFacilitationPersonas, updateConfig,
   type FacilitationPersonas, type PersonaInfo,
-} from "../lib/api";
+} from "../../lib/api";
 
 /**
  * 페르소나별 참견도 매트릭스 (PRD §19.6).
@@ -31,9 +31,9 @@ const LEVEL_HINT = [
 ];
 
 const RISK_LABEL: Record<string, { text: string; cls: string }> = {
-  low: { text: "저위험", cls: "bg-sky-50 text-sky-700 border-sky-200" },
-  medium: { text: "중위험", cls: "bg-violet-50 text-violet-700 border-violet-200" },
-  high: { text: "고위험", cls: "bg-amber-50 text-amber-700 border-amber-200" },
+  low: { text: "저위험", cls: "bg-surface-2 text-ent-org border-persona" },
+  medium: { text: "중위험", cls: "bg-proc-bg text-proc border-proc" },
+  high: { text: "고위험", cls: "bg-warn-bg text-warn border-warn-line" },
 };
 
 /** 프리셋 — 사내 온보딩 마찰을 줄인다. 위험 페르소나는 어느 프리셋에서도 올리지 않는다. */
@@ -106,10 +106,10 @@ export default function FacilitationSettings() {
   };
 
   return (
-    <section className="bg-white border border-brand-200 rounded-2xl p-4 md:p-5 mb-3 shadow-sm">
+    <section className="bg-surface border border-line rounded-card p-4 md:p-5 mb-3 shadow-sm">
       <div className="flex items-start justify-between gap-3 mb-1">
-        <h3 className="text-base font-bold text-brand-900 flex items-center gap-2">
-          <Users size={16} className="text-brand-500" /> 페르소나별 참견도
+        <h3 className="text-base font-bold text-ink flex items-center gap-2">
+          <Users size={16} className="text-ink-3" /> 페르소나별 참견도
         </h3>
         <div className="flex gap-1.5 shrink-0">
           {PRESETS.map((p) => (
@@ -118,14 +118,14 @@ export default function FacilitationSettings() {
               type="button"
               onClick={() => applyPreset(p.id)}
               title={p.desc}
-              className="px-2.5 py-1 text-[11px] font-semibold bg-brand-50 text-brand-700 rounded-lg hover:bg-brand-100 transition-colors"
+              className="px-2.5 py-1 text-[11px] font-semibold bg-surface-2 text-ink-2 rounded-ctl hover:bg-hover transition-colors"
             >
               {p.label}
             </button>
           ))}
         </div>
       </div>
-      <p className="text-xs text-brand-500 mb-3">
+      <p className="text-xs text-ink-3 mb-3">
         0=금지(비용 0) · 1=관찰(기록만) · 2=모아 보기([지금 점검]) · 3=옆 카드 자동(무음).
         {!data.enabled && " 이 기능이 꺼져 있어 지금은 아무 것도 동작하지 않습니다 — 위 [회의 진행 페르소나 사용]을 먼저 켜세요."}
       </p>
@@ -136,15 +136,15 @@ export default function FacilitationSettings() {
           const cur = levels[p.key] ?? p.configuredLevel;
           const risk = RISK_LABEL[p.risk] || RISK_LABEL.low;
           return (
-            <div key={p.key} className="flex flex-col md:flex-row md:items-center gap-1.5 md:gap-3 py-1.5 border-b border-brand-100 last:border-0">
+            <div key={p.key} className="flex flex-col md:flex-row md:items-center gap-1.5 md:gap-3 py-1.5 border-b border-line last:border-0">
               <div className="md:w-64 shrink-0">
                 <div className="flex items-center gap-1.5">
-                  <span className="text-sm font-semibold text-brand-900">{p.label}</span>
+                  <span className="text-sm font-semibold text-ink">{p.label}</span>
                   <span className={`text-[11px] px-1.5 py-0.5 rounded border ${risk.cls}`}>
                     {risk.text}
                   </span>
                 </div>
-                <p className="text-[11px] text-brand-500 line-clamp-1" title={p.role}>{p.role}</p>
+                <p className="text-[11px] text-ink-3 line-clamp-1" title={p.role}>{p.role}</p>
               </div>
 
               <div className="flex items-center gap-1 flex-wrap">
@@ -162,12 +162,12 @@ export default function FacilitationSettings() {
                           ? `${p.label}는 오탐의 비용이 커서 참견도 ${p.hardCap} 이상으로 올릴 수 없습니다(코드 상한).`
                           : `참견도 전역 상한(${data.maxLevel})을 넘습니다 — 위 [참견도 전역 상한]을 먼저 올리세요.`)
                         : LEVEL_HINT[lvl]}
-                      className={`px-2 py-1 text-[11px] font-medium rounded-lg border transition-colors flex items-center gap-1 ${
+                      className={`px-2 py-1 text-[11px] font-medium rounded-ctl border transition-colors flex items-center gap-1 ${
                         locked
-                          ? "border-zinc-100 bg-zinc-50 text-zinc-300 cursor-not-allowed"
+                          ? "border-line bg-surface-2 text-line-strong cursor-not-allowed"
                           : active
-                            ? "border-brand-900 bg-brand-900 text-white"
-                            : "border-brand-200 text-brand-600 hover:border-brand-400"
+                            ? "border-ink bg-ink text-white"
+                            : "border-line text-ink-2 hover:border-ink-3"
                       }`}
                     >
                       {locked && <Lock className="w-2.5 h-2.5" />}
@@ -179,7 +179,7 @@ export default function FacilitationSettings() {
 
               {/* 적용값이 적어둔 값과 다르면 그 사실을 숨기지 않는다 */}
               {p.level !== p.configuredLevel && cur === p.configuredLevel && (
-                <span className="text-[11px] text-amber-600 flex items-center gap-1">
+                <span className="text-[11px] text-warn flex items-center gap-1">
                   <AlertTriangle className="w-3 h-3" /> 적용값 {p.level}
                 </span>
               )}
@@ -190,7 +190,7 @@ export default function FacilitationSettings() {
               {p.risk === "high" && cur >= data.displayLevel && (
                 <span
                   role="note"
-                  className="text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-2 py-1 flex items-start gap-1"
+                  className="text-[11px] text-warn bg-warn-bg border border-warn-line rounded-ctl px-2 py-1 flex items-start gap-1"
                 >
                   <AlertTriangle className="w-3 h-3 mt-px shrink-0" />
                   오탐률 실측 전입니다 — 잘못된 대조가 회의 중에 뜰 수 있습니다.
@@ -203,7 +203,7 @@ export default function FacilitationSettings() {
       </div>
 
       {error && (
-        <p role="alert" className="text-xs text-red-600 mt-2">{error}</p>
+        <p role="alert" className="text-xs text-rec mt-2">{error}</p>
       )}
 
       <div className="flex items-center gap-2 mt-3">
@@ -211,13 +211,13 @@ export default function FacilitationSettings() {
           type="button"
           onClick={save}
           disabled={saving || !dirty}
-          className="flex items-center gap-2 px-4 py-2 bg-brand-950 text-white rounded-xl text-sm font-bold hover:bg-brand-900 transition-all disabled:opacity-40"
+          className="flex items-center gap-2 px-4 py-2 bg-accent-solid text-white rounded-card text-sm font-bold hover:bg-accent-solid-hover transition-all disabled:opacity-40"
         >
           {saving ? <Loader2 size={14} className="animate-spin" />
             : saved ? <CheckCircle size={14} /> : <Save size={14} />}
           {saved ? "저장되었습니다!" : "참견도 저장"}
         </button>
-        <p className="text-[11px] text-brand-500">
+        <p className="text-[11px] text-ink-3">
           참견도 2 이상은 개입 문장 생성에 상위 모델이 쓰여 회의당 비용 캡을 소모합니다.
           {data.personas.some((p) => (levels[p.key] ?? 0) >= data.displayLevel)
             && " 3(옆 카드)로 둔 페르소나는 녹음 중 화면에 카드가 뜹니다."}

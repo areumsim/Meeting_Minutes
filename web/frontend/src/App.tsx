@@ -24,7 +24,7 @@ const TextForm = lazy(() => import("./screens/create/TextForm"));
 const AskPanel = lazy(() => import("./screens/knowledge/AskPanel"));
 const PrepPanel = lazy(() => import("./screens/prepare/PrepPanel"));
 const Help = lazy(() => import("./components/Help"));
-const SettingsView = lazy(() => import("./components/Settings"));
+const SettingsView = lazy(() => import("./screens/settings/Settings"));
 const GraphPanel = lazy(() => import("./screens/knowledge/GraphPanel"));
 const AssistantPanel = lazy(() => import("./screens/prepare/AssistantPanel"));
 

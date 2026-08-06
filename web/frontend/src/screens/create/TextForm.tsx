@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
 import { FileText, ClipboardPaste } from "lucide-react";
-import { processTextInput, getCostSummary } from "../../lib/api";
+import { processTextInput, getCostSummary, getCostRates } from "../../lib/api";
 import { MODE_PRESETS } from "../../lib/types";
 import { Button } from "../../ui/Button";
 import { Banner } from "../../ui/Banner";
@@ -14,10 +14,11 @@ import ModePanel from "./ModePanel";
  *
  * 두 가지가 업로드와 다르다:
  *
- * 1. **서버가 예상 비용을 주지 않는다.** `/api/process-text`(tools.py)는 금액도, 지출 한도
- *    검사도 하지 않는다 — 업로드에만 `confirm_required` 계약이 있다. 그렇다고 프런트가
- *    글자수로 금액을 지어내면 단가 표가 두 벌이 된다(이 리포가 반복해 없앤 형태). 그래서
- *    **금액 없는 확인 모달**을 띄운다: 무엇에 과금되는지 + 서버가 준 이번 달 지출·한도.
+ * 1. **금액은 서버가 준 값만 쓴다.** 이 경로에는 업로드 같은 `confirm_required` 2단계
+ *    계약이 없지만, 드는 돈은 회의록 생성 LLM 1회로 고정이고 그 금액이 이미
+ *    `/api/cost/rates` 의 `minutes_flat`(= `pricing.minutes_cost()`)으로 나온다. 그래서
+ *    글자수로 추정을 지어내지 않고 그 숫자를 그대로 보여준다 — 서버의 한도 판정도
+ *    같은 값을 쓰므로 화면과 서버가 어긋나지 않는다.
  *
  * 2. **번역이 적용되지 않는다.** 그 엔드포인트는 language·translate 를 받지 않는다. 모드
  *    요약에서 언어·번역 줄을 빼는 이유다 — 화면이 "번역 영어→한국어"라고 적어도 실제로는
@@ -31,6 +32,9 @@ export default function TextForm({ onComplete }: { onComplete: (id: string) => v
   const [error, setError] = useState("");
   const [confirming, setConfirming] = useState(false);
   const [spend, setSpend] = useState<{ mtd: number; cap: number } | null>(null);
+  // 서버가 계산한 회의록 생성 1회 비용. 못 받으면(구버전·백엔드 없음) 금액 줄을 비운다 —
+  // 화면이 대신 계산하지 않는다.
+  const [estimateUsd, setEstimateUsd] = useState<number | undefined>(undefined);
   // 문서 전체에서 첫 textarea 를 찾던 코드를 ref 로 바꾼다 — 이 화면에는 textarea 가
   // 둘(주제·본문)이라 예전 방식은 엉뚱한 칸에 포커스를 줬다.
   const bodyRef = useRef<HTMLTextAreaElement>(null);
@@ -39,6 +43,7 @@ export default function TextForm({ onComplete }: { onComplete: (id: string) => v
 
   useEffect(() => {
     getCostSummary().then((s) => s && setSpend({ mtd: s.monthToDateUsd, cap: s.monthlyCapUsd }));
+    getCostRates().then((r) => r && setEstimateUsd(r.minutes_flat));
   }, []);
 
   const paste = async () => {
@@ -73,6 +78,7 @@ export default function TextForm({ onComplete }: { onComplete: (id: string) => v
       {confirming && (
         <CostConfirmModal
           what="붙여넣은 글을 회의록·요약·액션으로 정리합니다 — 생성 AI 호출 1회분 비용이 듭니다."
+          estimateUsd={estimateUsd}
           targets={[{ label: "본문 길이", value: `${text.length.toLocaleString()}자` }]}
           monthToDateUsd={spend?.mtd}
           monthlyCapUsd={spend?.cap}

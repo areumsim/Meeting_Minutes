@@ -37,7 +37,8 @@ def _make_output_dir(title: str) -> str:
 
 
 # ── 1) 텍스트 → 회의록 (STT 건너뜀) ───────────────
-def _run_text(session_id: str, text: str, title: str, topic: str, doc_type: str):
+def _run_text(session_id: str, text: str, title: str, topic: str, doc_type: str,
+              est_usd: float = 0.0):
     try:
         from meeting_minutes_app.meeting_pipeline import minutes_generation as mg
         llm = _llm()
@@ -55,6 +56,11 @@ def _run_text(session_id: str, text: str, title: str, topic: str, doc_type: str)
 
         db.import_output_files(session_id, out)
         db.update_session_status(session_id, "completed")
+        # 이 경로의 과금을 세션 비용에 누적한다. 없던 동안 텍스트 분석의 LLM 비용이
+        # 어디에도 기록되지 않아 **월 합계에서 영구히 빠졌다** — 워처 과금이 안 보이던
+        # 것과 같은 형태다(CLAUDE.md 비용 단일 소스). 시작 시점의 추정을 그대로 쓴다:
+        # 실행 도중 설정(모델)이 바뀌어도 사용자가 동의한 금액과 기록이 일치해야 한다.
+        db.add_session_cost(session_id, est_usd)
     except Exception as e:
         traceback.print_exc()
         db.update_session_status(session_id, "error",
@@ -83,20 +89,40 @@ def process_text(payload: dict, background_tasks: BackgroundTasks):
     title = payload.get("title") or "텍스트 입력"
     topic = payload.get("topic") or ""
     doc_type = payload.get("type") or "meeting"
+
+    # 지출 한도를 지난다. 이 경로만 관문이 없어서, 한도를 넘긴 뒤에도 회의록 생성 LLM 을
+    # 무제한으로 부를 수 있었다(재생성·업로드·워처는 모두 검사를 받는다).
+    # 1건당 한도는 적용하지 않는다 — 그 한도는 '오디오 파일 한 건'의 길이를 뜻한다.
+    est = _minutes_llm_cost_usd()
+    from meeting_minutes_app.common import spend_guard
+    reason = spend_guard.blocked(est, check_per_item=False)
+    if reason:
+        raise HTTPException(
+            status_code=400,
+            detail=(f"{reason}. 텍스트 분석을 시작하지 않았습니다. "
+                    f"[설정] → 지출 한도에서 한도를 조정하세요."),
+        )
+
     session_id = db.create_session(
         title=title, topic=topic, doc_type=doc_type,
         language="", translate=False, source="web", mode="text",
     )
-    background_tasks.add_task(_run_text, session_id, text, title, topic, doc_type)
-    return {"sessionId": session_id, "status": "processing"}
+    background_tasks.add_task(_run_text, session_id, text, title, topic, doc_type, est)
+    return {"sessionId": session_id, "status": "processing", "estimatedUsd": round(est, 4)}
 
 
-# ── 2) 회의록 재생성(노트 반영) ───────────────────
-def _regenerate_cost_usd() -> float:
-    """재생성 1회의 예상 비용(USD) = 회의록 생성 LLM 비용.
+def _minutes_llm_cost_usd() -> float:
+    """회의록 생성 LLM 1회의 예상 비용(USD).
 
-    전사는 `args.resume` 으로 재사용하므로 STT 과금이 없다. 세션의 최초
-    `cost_estimate` 도 같은 `minutes_cost()` 를 쓰므로 성질이 같은 추정치다.
+    **STT 가 없는 두 경로**가 이 값을 쓴다:
+      · 텍스트 분석(`/process-text`) — 붙여넣은 글이라 전사가 아예 없다.
+      · 회의록 재생성 — 전사는 `args.resume` 으로 재사용한다.
+    둘 다 회의록·요약·액션을 한 묶음으로 만들고, `estimate_session_cost` 도 그 묶음을
+    `minutes_cost()` **한 번**으로 센다. 그래서 여기서도 한 번만 곱한다 — 경로마다 다시
+    세면 추정이 갈라진다(이 리포가 반복해 없애 온 형태).
+
+    같은 값이 `/api/cost/rates` 의 `minutes_flat` 으로도 나가므로 화면은 금액을 지어내지
+    않고 이 숫자를 그대로 보여줄 수 있다.
     """
     try:
         from meeting_minutes_app.common import pricing
@@ -140,7 +166,7 @@ def _run_regenerate(session_id: str, notes: str):
         # 어디에도 기록되지 않았고(월 합계에서 빠짐), 몇 번을 재생성해도 지출이
         # 0으로 보였다. STT 는 args.resume 으로 재사용하므로 과금이 없다 —
         # 회의록 생성 LLM 비용만 더한다.
-        db.add_session_cost(session_id, _regenerate_cost_usd())
+        db.add_session_cost(session_id, _minutes_llm_cost_usd())
     except Exception as e:
         traceback.print_exc()
         db.update_session_status(session_id, "error",
@@ -159,7 +185,7 @@ def regenerate(session_id: str, payload: dict, background_tasks: BackgroundTasks
     # 재생성도 지출 한도를 지난다. 지금까지 이 경로는 검사를 받지 않아 한도를 넘긴
     # 뒤에도 무제한으로 LLM 을 부를 수 있었다(업로드만 막혀 있었다).
     # 1건당 한도는 적용하지 않는다 — 그 한도는 '오디오 파일 한 건'의 길이를 뜻한다.
-    est = _regenerate_cost_usd()
+    est = _minutes_llm_cost_usd()
     from meeting_minutes_app.common import spend_guard
     reason = spend_guard.blocked(est, check_per_item=False)
     if reason:

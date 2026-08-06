@@ -471,13 +471,104 @@ class TestRegenerateCost:
         db.add_session_cost(sid, -5.0)
         assert db.get_session(sid)["cost_estimate"] == pytest.approx(0.20, rel=1e-6)
 
-    def test_regenerate_cost_is_minutes_only(self):
-        """전사는 재사용하므로 STT 과금이 없다 — 회의록 생성 LLM 비용만."""
+    def test_minutes_llm_cost_is_minutes_only(self):
+        """STT 없는 두 경로(텍스트 분석·재생성)는 회의록 생성 LLM 비용만 든다."""
         from web.backend.api import tools
         from meeting_minutes_app.common import pricing, config_loader as cfg
         m = pricing.current_models(cfg)
-        assert tools._regenerate_cost_usd() == pytest.approx(
+        assert tools._minutes_llm_cost_usd() == pytest.approx(
             pricing.minutes_cost(m["llm"], m["minutes_model"]), rel=1e-6)
+
+
+class TestTextAnalysisGuard:
+    """텍스트 분석(/process-text)이 지출 한도를 지나고 과금을 기록하는가.
+
+    이 경로만 관문이 없었다 — 한도를 넘긴 뒤에도 회의록 생성 LLM 을 무제한으로 부를 수
+    있었고, 쓴 돈은 어디에도 기록되지 않아 **월 합계에서 영구히 빠졌다**(워처 과금이
+    안 보이던 것과 같은 형태). 업로드·재생성·워처는 모두 검사를 받는데 여기만 예외였다.
+    """
+
+    def _client(self, tmp_path, monkeypatch):
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        from web.backend import database as db
+        from web.backend.api import tools
+        monkeypatch.setattr(db, "DB_PATH", tmp_path / "t.db")
+        db.init_db()
+        # LLM 키 검사와 실제 생성은 이 테스트의 관심사가 아니다.
+        monkeypatch.setattr(tools, "_require_llm_key", lambda: None)
+        monkeypatch.setattr(tools, "_run_text", lambda *a, **k: None)
+        app = FastAPI()
+        app.include_router(tools.router, prefix="/api")
+        return TestClient(app), db, tools
+
+    def test_over_cap_is_refused_before_any_llm_call(self, tmp_path, monkeypatch):
+        client, db, tools = self._client(tmp_path, monkeypatch)
+        monkeypatch.setattr(tools, "_minutes_llm_cost_usd", lambda: 0.5)
+        from meeting_minutes_app.common import spend_guard
+        monkeypatch.setattr(spend_guard, "blocked",
+                            lambda est, check_per_item=True: "이번 달 지출 한도를 넘었습니다")
+
+        r = client.post("/api/process-text", json={"text": "회의 메모"})
+
+        assert r.status_code == 400
+        assert "지출 한도" in r.json()["detail"]
+        # 세션조차 만들지 않는다 — 만들면 목록에 실패한 회의가 쌓인다.
+        assert db.list_sessions() == []
+
+    def test_under_cap_starts_and_reports_the_estimate(self, tmp_path, monkeypatch):
+        client, db, tools = self._client(tmp_path, monkeypatch)
+        monkeypatch.setattr(tools, "_minutes_llm_cost_usd", lambda: 0.05)
+        from meeting_minutes_app.common import spend_guard
+        monkeypatch.setattr(spend_guard, "blocked", lambda est, check_per_item=True: "")
+
+        r = client.post("/api/process-text", json={"text": "회의 메모"})
+
+        assert r.status_code == 200
+        body = r.json()
+        assert body["status"] == "processing"
+        # 서버가 금액을 알려 준다 — 화면이 따로 계산하지 않게.
+        assert body["estimatedUsd"] == pytest.approx(0.05, rel=1e-6)
+
+    def test_completed_run_records_the_cost(self, tmp_path, monkeypatch):
+        """추정만 하고 기록을 안 하면 월 합계에서 조용히 빠진다."""
+        from web.backend import database as db
+        from web.backend.api import tools
+        monkeypatch.setattr(db, "DB_PATH", tmp_path / "r.db")
+        db.init_db()
+        sid = db.create_session(title="t", source="web", mode="text")
+
+        # 생성 단계는 목으로 대체하고 기록 계약만 본다. sys.modules 를 바꾸지 않는다 —
+        # `_run_text` 는 `from ... import minutes_generation` 으로 **패키지 속성**을 읽어서
+        # 이미 import 된 뒤에는 sys.modules 교체가 먹지 않는다(전체 실행에서만 실패했다).
+        from meeting_minutes_app.meeting_pipeline import minutes_generation as mg
+        monkeypatch.setattr(tools, "_make_output_dir", lambda title: str(tmp_path))
+        monkeypatch.setattr(tools, "_llm", lambda: object())
+        monkeypatch.setattr(mg, "save", lambda *a, **k: None)
+        monkeypatch.setattr(mg, "generate_minutes", lambda *a, **k: "회의록")
+        monkeypatch.setattr(mg, "generate_summary", lambda *a, **k: "요약")
+        monkeypatch.setattr(mg, "extract_action_items", lambda *a, **k: [])
+        monkeypatch.setattr(db, "import_output_files", lambda *a, **k: None)
+
+        tools._run_text(sid, "본문", "제목", "", "meeting", est_usd=0.07)
+
+        assert db.get_session(sid)["status"] == "completed"
+        assert db.get_session(sid)["cost_estimate"] == pytest.approx(0.07, rel=1e-6)
+
+    def test_failed_run_is_not_charged(self, tmp_path, monkeypatch):
+        """실패한 생성에 돈을 적으면 사용자는 받지도 못한 것에 과금된 것으로 본다."""
+        from web.backend import database as db
+        from web.backend.api import tools
+        monkeypatch.setattr(db, "DB_PATH", tmp_path / "f.db")
+        db.init_db()
+        sid = db.create_session(title="t", source="web", mode="text")
+        monkeypatch.setattr(tools, "_make_output_dir",
+                            lambda title: (_ for _ in ()).throw(OSError("no disk")))
+
+        tools._run_text(sid, "본문", "제목", "", "meeting", est_usd=0.07)
+
+        assert db.get_session(sid)["status"] == "error"
+        assert db.get_session(sid)["cost_estimate"] in (0, 0.0, None)
 
 
 class TestEmbeddingGuardDelegates:

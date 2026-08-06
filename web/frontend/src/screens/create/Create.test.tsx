@@ -16,6 +16,7 @@ const api = vi.hoisted(() => ({
   cancelPendingUpload: vi.fn(),
   processTextInput: vi.fn(),
   getCostSummary: vi.fn(),
+  getCostRates: vi.fn(),
   getProfiles: vi.fn(),
 }));
 vi.mock("../../lib/api", () => api);
@@ -31,6 +32,10 @@ beforeEach(() => {
     months: [], byType: [], top: [], otherUsd: 0, otherByKind: {},
   });
   api.processTextInput.mockResolvedValue({ sessionId: "t1", status: "processing" });
+  api.getCostRates.mockResolvedValue({
+    stt_model: "gpt-4o-mini-transcribe", stt_per_min: 0.003,
+    translate_per_min: 0.002, minutes_flat: 0.05,
+  });
   api.uploadFile.mockResolvedValue({
     pendingId: "p1", estimateUsd: 0.32, durationSec: 2520,
     monthToDateUsd: 0.4, monthlyCapUsd: 5,
@@ -89,17 +94,27 @@ describe("파일 업로드 — 서버가 준 금액으로 확인받는다", () =
 });
 
 describe("텍스트 분석 — 금액이 없어도 사전 동의는 받는다", () => {
-  it("서버가 금액을 안 주므로 지어내지 않고, 대신 규모와 월 지출을 보여준다", async () => {
+  it("서버가 준 금액(minutes_flat)을 그대로 보여준다 — 글자수로 지어내지 않는다", async () => {
     const user = userEvent.setup();
     render(<TextForm onComplete={vi.fn()} />);
     await user.type(screen.getByLabelText("본문"), "회의 메모입니다");
     await user.click(screen.getByRole("button", { name: /분석 & 문서 생성/ }));
 
-    expect(await screen.findByText("미리 계산되지 않음")).toBeInTheDocument();
+    // /api/cost/rates 의 minutes_flat === 서버의 한도 판정에 쓰는 값과 같은 숫자다.
+    expect(await screen.findByText("$0.05")).toBeInTheDocument();
     expect(screen.getByText("본문 길이")).toBeInTheDocument();
     expect(screen.getByText("$0.40 / $5.00")).toBeInTheDocument();
     // 확인 전에는 호출하지 않는다
     expect(api.processTextInput).not.toHaveBeenCalled();
+  });
+
+  it("요율을 못 받으면(구버전·백엔드 없음) 금액을 지어내지 않는다", async () => {
+    api.getCostRates.mockResolvedValue(null);
+    const user = userEvent.setup();
+    render(<TextForm onComplete={vi.fn()} />);
+    await user.type(screen.getByLabelText("본문"), "회의 메모입니다");
+    await user.click(screen.getByRole("button", { name: /분석 & 문서 생성/ }));
+    expect(await screen.findByText("미리 계산되지 않음")).toBeInTheDocument();
   });
 
   it("[분석 시작] 을 눌러야 서버를 부른다", async () => {

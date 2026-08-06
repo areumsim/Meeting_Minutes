@@ -21,12 +21,12 @@ const Recorder = lazy(() => import("./components/Recorder"));
 const Detail = lazy(() => import("./screens/detail/Detail"));
 const UploadForm = lazy(() => import("./screens/create/UploadForm"));
 const TextForm = lazy(() => import("./screens/create/TextForm"));
-const WikiAsk = lazy(() => import("./components/WikiAsk"));
-const PrepBrief = lazy(() => import("./components/PrepBrief"));
+const AskPanel = lazy(() => import("./screens/knowledge/AskPanel"));
+const PrepPanel = lazy(() => import("./screens/prepare/PrepPanel"));
 const Help = lazy(() => import("./components/Help"));
 const SettingsView = lazy(() => import("./components/Settings"));
-const GraphExplorer = lazy(() => import("./components/GraphExplorer"));
-const Assistant = lazy(() => import("./components/Assistant"));
+const GraphPanel = lazy(() => import("./screens/knowledge/GraphPanel"));
+const AssistantPanel = lazy(() => import("./screens/prepare/AssistantPanel"));
 
 /** 내비 leaf 5 — 회의 상세는 여기 없다(PRD §4.1, 리뷰 P1-3). */
 const NAV: NavItem<View>[] = [
@@ -250,8 +250,8 @@ export default function App() {
             <>
               <SegmentedControl id="knowledge" label="지식 보기" value={knowledgeTab}
                 onChange={setKnowledgeTab} items={KNOWLEDGE_TABS} className="mb-3" />
-              {knowledgeTab === "ask" && <WikiAsk />}
-              {knowledgeTab === "graph" && <GraphExplorer initialQuery={graphQuery} />}
+              {knowledgeTab === "ask" && <AskPanel />}
+              {knowledgeTab === "graph" && <GraphPanel initialQuery={graphQuery} />}
             </>
           )}
 
@@ -259,8 +259,8 @@ export default function App() {
             <>
               <SegmentedControl id="prepare" label="준비·비서" value={prepareTab}
                 onChange={setPrepareTab} items={PREPARE_TABS} className="mb-3" />
-              {prepareTab === "prep" && <PrepBrief onSaved={openDetail} />}
-              {prepareTab === "assistant" && <Assistant />}
+              {prepareTab === "prep" && <PrepPanel onSaved={openDetail} />}
+              {prepareTab === "assistant" && <AssistantPanel />}
             </>
           )}
 

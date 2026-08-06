@@ -923,7 +923,7 @@ function WatcherCard() {
           <div className="space-y-1">
             {status.recent.slice(0, 5).map((r, i) => (
               <div key={i} className="flex items-center gap-2 text-ink-3">
-                <span className={`w-1.5 h-1.5 rounded-full ${r.status === "done" ? "bg-ok-bg0" : r.status === "failed" ? "bg-rec-bg0" : "bg-surface-20"}`} />
+                <span className={`w-1.5 h-1.5 rounded-full ${r.status === "done" ? "bg-ok" : r.status === "failed" ? "bg-rec" : "bg-idle"}`} />
                 <span className="font-mono truncate max-w-[16rem]">{r.file}</span>
                 <span className="text-ink-3">{r.processed_at?.replace("T", " ")}</span>
               </div>

@@ -3,7 +3,9 @@
   // 오류가 배포 빌드를 막지 않으면서도 검사는 계속된다(`npm test` 가 함께 돌린다).
   "extends": "./tsconfig.json",
   "compilerOptions": {
-    "types": ["vitest/globals", "@testing-library/jest-dom"]
+    // node: 토큰 검사(ui/tokens.test.ts)가 소스 파일을 직접 읽는다 — 브라우저 API 로는
+    // 할 수 없는 검사라 이 설정에서만 node 타입을 연다(릴리즈 빌드에는 안 들어간다).
+    "types": ["vitest/globals", "@testing-library/jest-dom", "node"]
   },
   "include": ["src"],
   "exclude": []

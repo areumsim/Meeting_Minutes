@@ -16,5 +16,10 @@ export default defineConfig({
     // 화면 테스트가 실제 타이머를 기다리며 느려지지 않게 기본 타임아웃을 낮게 둔다.
     testTimeout: 10000,
     restoreMocks: true,
+    // 동시 실행 워커 수를 묶는다. 파일이 17개로 늘면서 jsdom 환경이 한꺼번에 뜨면
+    // 워커가 "Worker exited unexpectedly" 로 죽고 **테스트 파일 2개가 조용히 안 돌았다**
+    // (통과 수만 줄어 있어 눈치채기 어렵다). 이 리포는 테스트 수치를 정본으로 쓰므로
+    // 러너가 실행마다 다른 답을 주면 안 된다 — 조금 느려도 결정적인 쪽을 고른다.
+    poolOptions: { forks: { maxForks: 4, minForks: 1 } },
   },
 });

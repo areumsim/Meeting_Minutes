@@ -187,7 +187,10 @@ function NavButton<K extends string>({ item, active, collapsed, onClick }: {
       onClick={onClick}
       aria-current={active ? "page" : undefined}
       title={collapsed ? item.label : undefined}
-      aria-label={collapsed ? item.label : undefined}
+      // 접었을 때만이 아니라 **항상** 이름을 명시한다. 펼친 상태에서는 span 의 텍스트로도
+      // 이름이 나오지만, 브라우저 접근성 트리에서 이 버튼들이 이름 없이 잡히는 것을 실기에서
+      // 봤다(도구 차이일 수도 있다). 주 내비가 "버튼" 여섯 개로 읽히는 위험보다 속성 하나가 싸다.
+      aria-label={item.label}
       className={`flex items-center gap-2.5 rounded-ctl px-2.5 py-2 text-base transition-colors
         ${collapsed ? "justify-center" : ""}
         ${active ? "bg-accent-weak font-semibold text-accent" : "text-ink-2 hover:bg-hover"}`}

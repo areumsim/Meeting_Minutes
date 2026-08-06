@@ -1581,6 +1581,9 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
                 onJump={jumpToSpan}
                 onAck={(id) => facFeedback(id, "ack")}
                 onDismiss={(id) => facFeedback(id, "dismiss")}
+                emptyHint={backendMode
+                  ? "아직 개입이 없습니다. 회의 진행 도우미가 켜져 있으면 필요할 때만 조용히 카드가 올라옵니다."
+                  : "이 녹음은 PC 서버를 거치지 않아 진행 도우미가 동작하지 않습니다."}
               />
             )}
           </Inspector>

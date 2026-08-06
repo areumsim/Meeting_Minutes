@@ -31,7 +31,9 @@ type Variant = "underline" | "pill" | "segment";
 const LIST: Record<Variant, string> = {
   underline: "flex items-stretch border-b border-line overflow-x-auto",
   pill: "flex items-center gap-1 overflow-x-auto",
-  segment: "inline-flex items-center gap-0.5 rounded-ctl bg-surface-2 p-0.5",
+  // self-start: flex column 안에 놓이면 교차축 stretch 로 가로 전체를 먹는다.
+  // 세그먼트는 항상 내용 폭이어야 한다(블록 문맥에서는 무해).
+  segment: "inline-flex self-start items-center gap-0.5 rounded-ctl bg-surface-2 p-0.5",
 };
 
 const TAB: Record<Variant, (on: boolean) => string> = {

@@ -52,7 +52,7 @@ function useMonthlySpend() {
 
 export default function AssistantPanel() {
   return (
-    <div className="mx-auto grid max-w-5xl gap-3 lg:grid-cols-2">
+    <div className="mx-auto grid w-full max-w-5xl gap-3 lg:grid-cols-2">
       <StatusCard />
       <MergeCard />
       <VaultAudioCard />

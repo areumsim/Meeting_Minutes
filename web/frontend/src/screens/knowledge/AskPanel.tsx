@@ -69,7 +69,7 @@ export default function AskPanel() {
   const gated = vaultConnected === false;
 
   return (
-    <div className="mx-auto max-w-4xl space-y-3">
+    <div className="mx-auto w-full max-w-4xl space-y-3">
       {gated && (
         <Banner icon={FolderOpen} title="노트 폴더가 연결되지 않았습니다.">
           [설정] → <b>노트 폴더(.md)</b>를 지정하면 이 기능이 켜집니다.{" "}

@@ -58,7 +58,7 @@ export default function PrepPanel({ onSaved }: { onSaved?: (id: string) => void 
   };
 
   return (
-    <div className="mx-auto grid max-w-5xl gap-3 lg:grid-cols-[1fr_300px]">
+    <div className="mx-auto grid w-full max-w-5xl gap-3 lg:grid-cols-[1fr_300px]">
       <div className="space-y-3">
         <div className="space-y-2.5 rounded-card border border-line bg-surface p-3 shadow-card">
           {/* Enter 로 생성 — 한글 조합 가드가 들어 있다(없으면 후보 확정 Enter 가 LLM 호출을

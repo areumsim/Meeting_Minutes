@@ -1,7 +1,6 @@
 import React from "react";
 import NoteCard from "../../ui/NoteCard";
 import { Button } from "../../ui/Button";
-import { Tag } from "../../ui/StatusPill";
 
 export interface LiveNote {
   filename: string;
@@ -92,13 +91,13 @@ export default function RelatedNotesTab({
         </>
       )}
 
+      {/* 아직 결과가 없어도 끌 수 있어야 한다 — 검색은 이미 돌고 있고 그게 과금이다. */}
       {notes.length === 0 && canMute && (
         <Button size="sm" variant="ghost" onClick={onMute}
           title="이번 회의에서만 끕니다 — 서버 검색과 웹 보완도 함께 멈춥니다">
           이번 회의 끔
         </Button>
       )}
-      {notes.length > 0 && <Tag>{notes.length}건</Tag>}
     </div>
   );
 }

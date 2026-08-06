@@ -15,10 +15,11 @@ import { kindLabel } from "../lib/costKinds";
  */
 
 export function CostMeter({
-  total, items, label = "이번 세션", note, defaultOpen = false, compact,
+  total, items, projectedTotal, label = "이번 세션", note, defaultOpen = false, compact,
 }: {
   total: number;
   items: CostItem[];
+  projectedTotal?: number;
   label?: string;
   /** 총액 옆 한 줄 보조(예: "대략치"). */
   note?: string;
@@ -44,7 +45,11 @@ export function CostMeter({
         <ChevronDown size={13} aria-hidden="true"
           className={`transition-transform ${open ? "" : "-rotate-90"}`} />
       </button>
-      {open && <div id={id} className="mt-1"><CostBreakdown items={items} total={total} /></div>}
+      {open && (
+        <div id={id} className="mt-1">
+          <CostBreakdown items={items} total={total} projectedTotal={projectedTotal} />
+        </div>
+      )}
     </div>
   );
 }
@@ -55,18 +60,21 @@ export function CostMeter({
  * 조용히 빠뜨렸다.
  */
 export function CostBreakdown({
-  items, total, disclaimer = "대략치 — 실제 청구액보다 클 수 있습니다.",
+  items, total, projectedTotal, disclaimer = "대략치 — 실제 청구액보다 클 수 있습니다.",
 }: {
   items: CostItem[];
   total: number;
+  /** 아직 안 쓴 항목(회의록 생성)까지 포함한 예상 최종액. total 과 다를 때만 한 줄 더 낸다. */
+  projectedTotal?: number;
   disclaimer?: string;
 }) {
+  const showProjected = projectedTotal != null && projectedTotal > total + 1e-9;
   return (
     <div className="rounded-ctl border border-line bg-surface-2 px-2.5 py-1.5 text-xs text-ink-2">
       <ul className="space-y-0.5">
         {items.map((it) => (
           <li key={it.key} className="flex items-baseline justify-between gap-4">
-            <span>
+            <span className={it.pending ? "text-ink-3" : undefined}>
               {it.label}
               {it.ratePerMin != null && (
                 <span className="num ml-1 text-ink-3">{fmtUsd(it.ratePerMin, 4)}/분</span>
@@ -74,14 +82,23 @@ export function CostBreakdown({
               {/* 추정과 실측을 구분해 적는다 — 개입 카드는 서버가 실제로 계산해 보낸 값이다. */}
               {it.actual && <span className="ml-1 text-ok">실측</span>}
             </span>
-            <span className="num shrink-0">{fmtUsd(it.usd, 4)}</span>
+            {/* 아직 안 쓴 돈은 '+' 를 붙여 지금 합계에 안 들어갔음을 보인다. */}
+            <span className={`num shrink-0 ${it.pending ? "text-ink-3" : ""}`}>
+              {it.pending ? "+" : ""}{fmtUsd(it.usd, 4)}
+            </span>
           </li>
         ))}
       </ul>
       <div className="mt-1 flex items-baseline justify-between gap-4 border-t border-line pt-1 font-semibold text-ink">
-        <span>합계</span>
+        <span>{showProjected ? "지금까지" : "합계"}</span>
         <span className="num">{fmtUsd(total)}</span>
       </div>
+      {showProjected && (
+        <div className="flex items-baseline justify-between gap-4 text-ink-2">
+          <span>정지하면 최종</span>
+          <span className="num">{fmtUsd(projectedTotal)}</span>
+        </div>
+      )}
       <p className="mt-1 text-ink-3">{disclaimer}</p>
     </div>
   );

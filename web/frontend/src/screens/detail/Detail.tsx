@@ -252,7 +252,7 @@ export default function Detail({
   const tabs: TabItem<Tab>[] = TAB_LABEL.filter((t) => available(t.key));
 
   return (
-    <div className="mx-auto flex h-full max-w-6xl flex-col">
+    <div className="mx-auto flex min-h-0 w-full max-w-6xl flex-1 flex-col">
       {/* ── 헤더(한 줄) ─────────────────────────────────────────── */}
       <div className="mb-2 flex flex-wrap items-center gap-2">
         <Button size="sm" variant="ghost" icon={ArrowLeft} onClick={onBack}>라이브러리</Button>

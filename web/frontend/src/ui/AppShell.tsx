@@ -128,7 +128,10 @@ export function AppShell<K extends string>({
           </span>
         </header>
 
-        <main className="min-h-0 flex-1 overflow-y-auto px-3 py-3 pb-24 md:px-4 md:pb-4">
+        {/* flex column 이어야 한다 — 녹음·회의 상세는 `flex-1 min-h-0` 으로 **자기 안에서만**
+            스크롤하는 2-pane 이다. 여기가 블록 박스면 그 flex-1 이 아무 효과가 없어 전사
+            패널이 내용만큼 늘어나고 페이지 전체가 길어진다(정지 버튼이 화면 밖으로 밀린다). */}
+        <main className="flex min-h-0 flex-1 flex-col overflow-y-auto px-3 py-3 pb-24 md:px-4 md:pb-4">
           {/* 문서의 유일한 h1 — 모바일에도 존재해야 한다(사이드바는 display:none 이다). */}
           <h1 className="sr-only">AI Minutes — 회의록 자동화</h1>
           {banners && <div className="mb-3 space-y-2">{banners}</div>}

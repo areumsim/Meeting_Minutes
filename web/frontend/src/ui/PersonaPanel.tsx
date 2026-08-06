@@ -22,10 +22,16 @@ import type { Facilitation, FacilitationStatus } from "../lib/types";
 const PINNED_PERSONAS = new Set(["fact_checker"]);
 
 export default function PersonaPanel({
-  items, status, pending, muted, briefOn, briefBusy,
+  items, status, pending, muted, briefOn, briefBusy, emptyHint,
   onCheckNow, onBriefNow, onMute, onJump, onAck, onDismiss,
 }: {
   items: Facilitation[];
+  /**
+   * 낼 것이 없을 때 대신 보여줄 한 줄. **인스펙터 탭 안에서만** 쓴다 — 탭은 어차피 자리를
+   * 차지하고 있으므로 빈 채로 두면 "고장났나"로 읽힌다. 기본(미지정)은 종전 그대로
+   * 아무것도 렌더하지 않는다: 전사 위 가로 레인처럼 자리를 뺏으면 안 되는 곳이 있다.
+   */
+  emptyHint?: React.ReactNode;
   status?: FacilitationStatus | null;
   pending?: number;
   muted?: boolean;
@@ -41,9 +47,9 @@ export default function PersonaPanel({
 }) {
   const notice = status && status.kind !== "pending" ? status.message : "";
   // [지금 정리]가 가능하면 패널을 띄운다 — 버튼 자체가 내용이다. 그 외에는 낼 것이
-  // 없으면 렌더하지 않는다.
+  // 없으면 렌더하지 않는다(emptyHint 를 준 호출부에서만 안내 한 줄로 대체).
   if (!items.length && !notice && !pending && !muted && !(briefOn && onBriefNow))
-    return null;
+    return emptyHint ? <p className="text-sm text-ink-3">{emptyHint}</p> : null;
 
   const pinned = items.filter((i) => PINNED_PERSONAS.has(String(i.persona)));
   const rest = items.filter((i) => !PINNED_PERSONAS.has(String(i.persona)));

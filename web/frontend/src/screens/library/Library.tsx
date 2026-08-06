@@ -253,7 +253,7 @@ export default function Library({ onSelectSession, onNewUpload, onNewRecord }: P
   };
 
   return (
-    <div className="mx-auto max-w-6xl">
+    <div className="mx-auto w-full max-w-6xl">
       {!showTrash && <CostSummaryCard sessions={sessions} />}
 
       <div className="mb-2 flex flex-wrap items-center gap-2">

@@ -21,11 +21,16 @@ export interface CostItem {
   ratePerMin?: number;
   /** 추정이 아니라 서버가 실제로 계산해 보낸 발생분인지(개입 카드). */
   actual?: boolean;
+  /** **아직 안 쓴 돈** — 목록에는 보이지만 `total` 에는 안 들어간다(회의록 생성비). */
+  pending?: boolean;
 }
 
 export interface CostEstimate {
   items: CostItem[];
+  /** 지금까지 발생한 금액. `pending` 항목은 빠져 있다. */
   total: number;
+  /** 지금 정지하면 최종적으로 낼 금액(= total + pending). */
+  projectedTotal: number;
 }
 
 export interface CostEstimateInput {
@@ -37,13 +42,18 @@ export interface CostEstimateInput {
   facilitationUsd?: number;
   /** 위 금액에 해당하는 개입 건수(내역 문구용). */
   facilitationCount?: number;
-  /** 회의록 생성비(minutes_flat)는 정지 이후에만 더한다 — 녹음 중에는 아직 안 쓴 돈이다. */
+  /** 회의록 생성비(minutes_flat)를 **합계에 넣을지**. 녹음 중에는 아직 안 쓴 돈이라 false —
+   *  그래도 항목 목록에는 "완료 시"로 남는다(무엇이 더 붙을지 미리 알아야 한다). */
   includeMinutes: boolean;
 }
 
 /**
- * 항목과 합계를 함께 만든다. `items.reduce(+usd) === total` 이 항상 성립한다
- * (테스트가 이걸 고정한다 — 이 파일의 존재 이유다).
+ * 항목과 합계를 함께 만든다. 두 불변식이 있고 테스트가 그것을 고정한다:
+ *   · 확정 항목의 합 === `total`
+ *   · 전체 항목의 합 === `projectedTotal`
+ * 회의록 생성비만 `pending` 이다 — 녹음 중에는 아직 안 썼지만 **곧 붙는다는 사실은
+ * 보여야 한다**(FR-REC-1 이 내역에 "완료 시 생성"을 요구한다). 목록에서 아예 빼면
+ * 정지 버튼을 누르는 순간 금액이 뛰는 이유를 알 수 없다.
  */
 export function estimateRunningCost(input: CostEstimateInput): CostEstimate {
   const { rates, durationSec, translate, includeMinutes } = input;
@@ -108,15 +118,18 @@ export function estimateRunningCost(input: CostEstimateInput): CostEstimate {
     });
   }
 
-  if (includeMinutes) {
-    items.push({
-      key: "minutes",
-      label: "회의록 생성",
-      usd: num(rates.minutes_flat),
-    });
-  }
+  items.push({
+    key: "minutes",
+    label: includeMinutes ? "회의록 생성" : "회의록 생성 (완료 시)",
+    usd: num(rates.minutes_flat),
+    pending: !includeMinutes,
+  });
 
-  return { items, total: items.reduce((sum, it) => sum + it.usd, 0) };
+  return {
+    items,
+    total: items.reduce((sum, it) => sum + (it.pending ? 0 : it.usd), 0),
+    projectedTotal: items.reduce((sum, it) => sum + it.usd, 0),
+  };
 }
 
 /** 녹음 중에는 아직 안 쓴 회의록 생성비를 뺀 금액을 보여준다 — 그 구분을 한 곳에 둔다. */

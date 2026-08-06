@@ -3,7 +3,7 @@ import {
   Rocket, KeyRound, FolderOpen, RefreshCw, Power, LifeBuoy, ExternalLink, Sparkles,
   Wand2, Settings as SettingsIcon, FileAudio, Mic, FileText, MessageCircleQuestion,
   ClipboardList, CheckCircle, ChevronDown, Mail, Copy, Download, Share2, Network,
-  CalendarClock, Search, Trash2, Zap, AlertCircle, GitMerge, Play, ListChecks, ShieldCheck,
+  CalendarClock, Search, Trash2, AlertCircle, GitMerge, Play, ListChecks, ShieldCheck,
 } from "lucide-react";
 
 /**

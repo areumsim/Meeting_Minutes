@@ -547,7 +547,7 @@ export default function SettingsView() {
   };
 
   return (
-    <div className="max-w-4xl mx-auto px-1 md:px-0">
+    <div className="mx-auto w-full max-w-4xl px-1 md:px-0">
       <div className="flex items-start justify-between gap-3 mb-1">
         <h2 className="text-2xl font-bold tracking-tight">설정</h2>
         {packaged && (

@@ -66,7 +66,8 @@ export default function RecordingHeader({
         <div className="flex-1" />
 
         {cost && (recording || status === "generating" || status === "completed") && (
-          <CostMeter total={cost.total} items={cost.items} label="이번 회의" note="대략치" />
+          <CostMeter total={cost.total} items={cost.items} projectedTotal={cost.projectedTotal}
+            label="이번 회의" note="대략치" />
         )}
 
         <span className={`num text-xl font-bold tabular-nums ${recording ? "text-rec" : "text-ink"}`}>

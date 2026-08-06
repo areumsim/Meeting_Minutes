@@ -5,7 +5,8 @@ import remarkGfm from "remark-gfm";
 // 공용 마크다운 렌더러.
 //  - remark-gfm: 표(| a | b |)·체크박스(- [ ])·취소선 등 GitHub 확장 문법 렌더
 //  - HTML 주석(<!-- Generated ... -->) 등 provenance 헤더는 화면에서 숨김(파일엔 유지)
-//  - Tailwind Typography(prose)로 서식. 표는 가로 스크롤 래핑.
+//  - Tailwind Typography(prose)로 서식 — 색은 index.css 에서 토큰으로 덮는다
+//    (prose-zinc 같은 색 프리셋을 쓰면 다크에서 제목·굵은 글씨가 사라진다).
 //  - onWikiLink 가 주어지면 본문의 [[위키링크]]를 클릭 가능한 링크로 렌더(지식 그래프로 이동).
 //    주어지지 않으면 원문 그대로 두어 기존 동작을 100% 보존한다.
 
@@ -37,7 +38,7 @@ export default function Markdown({
   if (onWikiLink) clean = injectWikiLinks(clean);
 
   return (
-    <div className={`prose prose-zinc max-w-none prose-table:my-3 prose-th:text-left ${className}`}>
+    <div className={`prose max-w-none prose-table:my-3 prose-th:text-left ${className}`}>
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         // 우리가 만든 #wiki: 링크만 통과시키고 나머지는 기본 새니타이즈 유지(보안).

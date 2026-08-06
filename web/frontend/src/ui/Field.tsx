@@ -36,14 +36,21 @@ export function Field({
         {hint && <span className="ml-auto text-xs text-ink-3">{hint}</span>}
       </div>
       {description && <p className="text-xs text-ink-3">{description}</p>}
-      {children}
+      {/* Field 안의 컨트롤은 폭을 채운다 — 라벨이 붙는 자리는 폼이고, 폼은 가득 찬다. */}
+      <div className="[&>button]:w-full [&>input]:w-full [&>select]:w-full [&>textarea]:w-full">
+        {children}
+      </div>
       {error && <p role="alert" className="text-xs font-medium text-rec">{error}</p>}
     </div>
   );
 }
 
+// 폭은 여기서 정하지 않는다. `w-full` 을 박아 두면 툴바처럼 내용 폭이 필요한 자리에서
+// 호출부의 `w-auto` 와 같은 특이도로 부딪히고, 승자는 클래스 문자열 순서가 아니라 Tailwind
+// 출력 순서라 예측할 수 없다(실기에서 라이브러리 툴바가 4줄로 쌓였다).
+// 라벨을 붙이는 Field/TextField 는 자기 자식을 가득 채우고, 그 외에는 호출부가 정한다.
 const CONTROL =
-  "w-full rounded-ctl border border-control-border bg-surface px-2.5 py-1.5 text-base " +
+  "rounded-ctl border border-control-border bg-surface px-2.5 py-1.5 text-base " +
   "text-ink placeholder:text-ink-3 transition-colors " +
   "hover:border-ink-3 disabled:cursor-not-allowed disabled:bg-surface-2 disabled:opacity-60";
 

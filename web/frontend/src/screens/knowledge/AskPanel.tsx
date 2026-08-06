@@ -86,6 +86,7 @@ export default function AskPanel() {
           onKeyDown={submitOnEnter(ask)}
           disabled={asking || gated}
           rows={2}
+          className="w-full"
           placeholder={gated ? "노트 폴더를 먼저 연결하세요 ([설정])"
             : "예: 지난 세미나에서 발표한 분이 누구였지?"}
         />

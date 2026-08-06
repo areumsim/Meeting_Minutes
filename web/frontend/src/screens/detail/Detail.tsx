@@ -370,7 +370,7 @@ export default function Detail({
             {regenOpen && REGENERABLE.includes(activeTab) && (
               <div className="mb-1.5 flex gap-1.5">
                 <Input value={userNotes} onChange={(e) => setUserNotes(e.target.value)}
-                  aria-label="재생성 지시"
+                  aria-label="재생성 지시" className="min-w-0 flex-1"
                   placeholder="예: 액션 아이템을 표로 정리하고 Q&A 를 더 자세히" />
                 <Button variant="primary" size="sm" busy={regenerating}
                   disabled={!userNotes.trim()} onClick={handleRegenerate}>재생성</Button>

@@ -133,7 +133,7 @@ export default function GraphPanel({ initialQuery = "" }: { initialQuery?: strin
         <div className="relative flex-1">
           <Search size={14} aria-hidden="true"
             className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-ink-3" />
-          <Input aria-label="지식 그래프 노드 검색" value={q} className="pl-8"
+          <Input aria-label="지식 그래프 노드 검색" value={q} className="w-full pl-8"
             onChange={(e) => setQ(e.target.value)}
             onKeyDown={submitOnEnter(runSearch, { allowShiftNewline: false })}
             placeholder="이름·키워드로 찾기 (비우면 상위 노드)" />

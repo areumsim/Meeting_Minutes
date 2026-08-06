@@ -18,6 +18,7 @@ import { typeLabel } from "../../lib/format";
 import { getThemeChoice, setThemeChoice, type ThemeChoice } from "../../lib/theme";
 import { SegmentedControl } from "../../ui/Tabs";
 import { Input } from "../../ui/Field";
+import Toggle from "../../ui/Toggle";
 import type { Profile } from "../../lib/types";
 import type { WatcherStatus, DiagnoseResult, LocalSttStatus } from "../../lib/api";
 import PersonaMatrix from "./PersonaMatrix";
@@ -29,7 +30,9 @@ interface Field {
   section: string;
   key: string;
   label: string;
-  type: "text" | "password" | "bool" | "select" | "number" | "list" | "textarea";
+  /** 스키마가 실제로 쓰는 값들. "boolean" 은 한 필드(analysis.minutes_vault_context)만
+   *  쓰는데 종전 화면이 그 표기를 몰라 **불리언 설정이 텍스트 입력으로** 그려졌다. */
+  type: "text" | "password" | "bool" | "boolean" | "select" | "number" | "list" | "textarea";
   default?: any;
   desc?: string;
   options?: (string | { value: string; label: string })[];
@@ -224,7 +227,7 @@ export default function SettingsView() {
       for (const f of group.fields) {
         // scalar: section 자체가 값 / key 에 점이 있으면 중첩 경로(예: slack.webhook_url)
         const raw = f.key ? getNested(cfg?.[f.section], f.key) : cfg?.[f.section];
-        v[pathOf(f)] = raw ?? f.default ?? (f.type === "bool" ? false : "");
+        v[pathOf(f)] = raw ?? f.default ?? (f.type === "bool" || f.type === "boolean" ? false : "");
       }
     }
     // 모바일: 키는 localStorage 에 별도 저장
@@ -565,7 +568,7 @@ export default function SettingsView() {
       {/* 설정 검색 — 14그룹·수십 필드 중 어디에 있는지 찾는 것이 가장 흔한 막힘이다.
           라벨뿐 아니라 설명과 키(ssl.verify)도 함께 본다. */}
       <div className="mb-3">
-        <Input aria-label="설정 검색" value={query} onChange={(e) => setQuery(e.target.value)}
+        <Input aria-label="설정 검색" className="w-full" value={query} onChange={(e) => setQuery(e.target.value)}
           placeholder="설정 검색 — 예: 노트 폴더, 페르소나, SSL, 지출 한도" />
         {searching && (
           <p className="mt-1 text-xs text-ink-3">
@@ -988,18 +991,14 @@ function FieldRow({ field, value, onChange, packaged }: { field: Field; value: a
     setReveal(true);
   };
 
-  if (field.type === "bool") {
-    // 체크박스는 <label>이 input 을 감싸 이미 암묵 연결이다 — desc 만 연결한다.
+  if (field.type === "bool" || field.type === "boolean") {
+    // 캐노니컬 Toggle(role=switch)을 쓴다. 종전 체크박스는 스크린리더가 "체크박스"로 읽고
+    // 꺼짐 상태의 테두리가 배경 대비 3:1 에 못 미쳤다(PRD §5.4·§5.5). 스키마에 "boolean"
+    // 으로 적힌 필드도 있어(analysis.minutes_vault_context) 두 표기를 함께 받는다 —
+    // 그 필드는 여기 걸리지 않아 텍스트 입력으로 그려지고 있었다.
     return (
-      <label className="flex items-start justify-between gap-4 cursor-pointer">
-        <span>
-          <span className="text-sm font-medium text-ink">{field.label}</span>
-          {field.desc && <span id={descId} className="block text-xs text-ink-3 mt-0.5">{field.desc}</span>}
-        </span>
-        <input type="checkbox" checked={!!value} onChange={(e) => onChange(e.target.checked)}
-          aria-describedby={describedBy}
-          className="mt-1 w-5 h-5 rounded border-line-strong text-ink focus:ring-accent shrink-0" />
-      </label>
+      <Toggle checked={!!value} onChange={onChange}
+        label={field.label} description={field.desc} />
     );
   }
 

@@ -261,10 +261,10 @@ export default function Library({ onSelectSession, onNewUpload, onNewRecord }: P
           <Search size={14} aria-hidden="true"
             className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-ink-3" />
           <Input aria-label="회의 검색" value={search} onChange={(e) => setSearch(e.target.value)}
-            placeholder="제목·유형 검색" className="pl-8" />
+            placeholder="제목·유형 검색" className="w-full pl-8" />
         </div>
         <Select aria-label="유형 필터" value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}
-          className="w-auto">
+          className="shrink-0">
           <option value="">전체 유형</option>
           <option value="meeting">회의</option>
           <option value="seminar">세미나</option>
@@ -272,7 +272,7 @@ export default function Library({ onSelectSession, onNewUpload, onNewRecord }: P
           <option value="prep">회의 준비</option>
         </Select>
         <Select aria-label="상태 필터" value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)}
-          className="w-auto">
+          className="shrink-0">
           <option value="">전체 상태</option>
           <option value="completed">완료</option>
           <option value="processing">처리 중</option>

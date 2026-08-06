@@ -7,7 +7,7 @@ import { uploadFile, confirmUpload, cancelPendingUpload, getProfiles } from "../
 import { MODE_PRESETS } from "../lib/types";
 import type { Profile } from "../lib/types";
 import ModeSelector from "./ModeSelector";
-import Modal from "./ui/Modal";
+import Modal from "../ui/Modal";
 
 export default function FileUpload({ onComplete }: { onComplete: (id: string) => void }) {
   const [file, setFile] = useState<File | null>(null);

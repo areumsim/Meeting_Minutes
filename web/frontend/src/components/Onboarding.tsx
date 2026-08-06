@@ -4,7 +4,7 @@ import {
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { updateConfig, testOpenAIKey, testAnthropicKey, testEmail, pickFolder } from "../lib/api";
-import Modal from "./ui/Modal";
+import Modal from "../ui/Modal";
 
 const TOTAL = 5;
 

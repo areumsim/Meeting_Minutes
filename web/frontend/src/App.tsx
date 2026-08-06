@@ -3,7 +3,7 @@ import { Mic, FileAudio, List, Settings, FileText, MessageCircleQuestion, Clipbo
 import { motion, AnimatePresence, MotionConfig } from "motion/react";
 import Dashboard from "./components/Dashboard";
 import Onboarding from "./components/Onboarding";
-import Modal from "./components/ui/Modal";
+import Modal from "./ui/Modal";
 // 초기 로딩 번들을 줄이기 위해 대시보드(기본 화면)·온보딩 외 뷰는 지연 로드(code splitting).
 const Recorder = lazy(() => import("./components/Recorder"));
 const SessionDetail = lazy(() => import("./components/SessionDetail"));

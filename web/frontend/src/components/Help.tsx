@@ -6,8 +6,13 @@ import {
   CalendarClock, Search, Trash2, Zap, AlertCircle, GitMerge, Play, ListChecks, ShieldCheck,
 } from "lucide-react";
 
-// 도움말에서 특정 화면으로 바로 이동시키기 위한 최소 프롭(선택).
-// App 의 setView 를 그대로 넘겨받는다(넓은 View 타입이라 이 부분집합에 할당 가능).
+/**
+ * 도움말의 [바로 열기] 딥링크.
+ *
+ * 옛 화면 이름(upload/recorder/wiki…)을 문자열로 넘기고 있었는데, IA 가 leaf 5 로 바뀌면
+ * 그 이름들은 어디에도 없다 — App 의 LEGACY_TARGET 이 매핑을 맡고 여기서는 **새 이름**을
+ * 쓴다. 본문의 화면 이름도 새 IA 로 함께 고쳤다(안 고치면 안내가 통째로 거짓이 된다).
+ */
 type NavTarget = "settings" | "upload" | "recorder" | "text" | "wiki" | "prep" | "assistant" | "graph" | "dashboard";
 
 function Card({ icon, title, badge, children }: { icon: React.ReactNode; title: string; badge?: React.ReactNode; children: React.ReactNode }) {
@@ -106,7 +111,7 @@ export default function Help({ onNavigate }: { onNavigate?: (v: NavTarget) => vo
           <>왼쪽 메뉴(모바일은 아래 <Tag>더보기</Tag>)에서 <Tag>설정</Tag> 을 엽니다. — <GoBtn onClick={() => onNavigate?.("settings")}>바로 열기</GoBtn></>,
           <><Tag>API 키</Tag> 항목의 <b>OpenAI API 키</b> 칸에 키(<span className="font-mono">sk-proj-…</span>)를 붙여넣습니다.</>,
           <><b>저장</b> 후 <b>연결 테스트</b>를 눌러 <span className="text-ok font-semibold inline-flex items-center gap-1"><CheckCircle size={13} />성공</span> 이 뜨는지 확인합니다.</>,
-          <>끝! 이제 <Tag>업로드</Tag> 에 녹음 파일을 올리면 회의록이 만들어집니다.</>,
+          <>끝! 이제 <Tag>새로 만들기</Tag> → <Tag>파일 업로드</Tag> 에 녹음 파일을 올리면 회의록이 만들어집니다.</>,
         ]} />
         <p className="text-xs text-ink-3 mt-2">키는 이 PC에만 저장되고 화면에서는 ●●● 로 가려집니다. 키가 아직 없다면 아래 "OpenAI 키 발급"을 펼쳐 보세요.</p>
       </Card>
@@ -137,21 +142,21 @@ export default function Help({ onNavigate }: { onNavigate?: (v: NavTarget) => vo
 
       {/* 3. 회의록 만드는 3가지 방법 */}
       <Card icon={<Sparkles size={16} />} title="회의록 만드는 3가지 방법">
-        <p>상황에 맞게 아무 방법이나 쓰면 됩니다. 결과는 모두 <Tag>대시보드</Tag> 에 모입니다.</p>
+        <p>상황에 맞게 아무 방법이나 쓰면 됩니다. 결과는 모두 <Tag>라이브러리</Tag> 에 모입니다.</p>
 
         <Detail summary={<span className="flex items-center gap-1.5"><FileAudio size={14} /> ① 녹음 파일이 있을 때 — 업로드</span>}>
           <Steps items={[
-            <><Tag>업로드</Tag> 화면을 엽니다. — <GoBtn onClick={() => onNavigate?.("upload")}>바로 열기</GoBtn></>,
+            <><Tag>새로 만들기</Tag> → <Tag>파일 업로드</Tag> 를 엽니다. — <GoBtn onClick={() => onNavigate?.("upload")}>바로 열기</GoBtn></>,
             <>녹음 파일(<b>mp3·m4a·wav·mp4·webm</b>)을 끌어다 놓거나 선택합니다.</>,
             <>제목·유형(회의/세미나/강의)을 정하고 시작하면, 음성 인식 → 회의록 → 요약 → 액션아이템이 자동 생성됩니다.</>,
-            <>완료되면 <Tag>대시보드</Tag> 에서 열어 확인·복사·다운로드.</>,
+            <>완료되면 <Tag>라이브러리</Tag> 에서 열어 확인·복사·다운로드.</>,
           ]} />
           <p className="text-ink-3">긴 파일은 수 분 걸릴 수 있고, 진행 화면에서 <b>처리 취소</b>도 가능합니다.</p>
         </Detail>
         <div className="mt-2">
           <Detail summary={<span className="flex items-center gap-1.5"><Mic size={14} /> ② 지금 회의를 실시간으로 받아쓰기 — 녹음</span>}>
             <Steps items={[
-              <><Tag>녹음</Tag> 화면을 엽니다. — <GoBtn onClick={() => onNavigate?.("recorder")}>바로 열기</GoBtn></>,
+              <><Tag>새로 만들기</Tag> → <Tag>실시간 녹음</Tag> 을 엽니다. — <GoBtn onClick={() => onNavigate?.("recorder")}>바로 열기</GoBtn></>,
               <>언어·번역 여부를 고르고 <b>녹음 시작</b>. 말하는 내용이 화면에 실시간으로 뜹니다.</>,
               <><b>중지</b>하면 전체 전사를 정리해 회의록으로 만들어 줍니다.</>,
             ]} />
@@ -161,7 +166,7 @@ export default function Help({ onNavigate }: { onNavigate?: (v: NavTarget) => vo
         <div className="mt-2">
           <Detail summary={<span className="flex items-center gap-1.5"><FileText size={14} /> ③ 이미 글로 된 메모/전사가 있을 때 — 텍스트 분석</span>}>
             <Steps items={[
-              <><Tag>텍스트 분석</Tag> 화면을 엽니다. — <GoBtn onClick={() => onNavigate?.("text")}>바로 열기</GoBtn></>,
+              <><Tag>새로 만들기</Tag> → <Tag>텍스트</Tag> 를 엽니다. — <GoBtn onClick={() => onNavigate?.("text")}>바로 열기</GoBtn></>,
               <>회의 메모나 다른 곳에서 받은 전사 내용을 붙여넣습니다.</>,
               <>음성 인식을 건너뛰고 바로 회의록·요약·액션아이템을 만듭니다.</>,
             ]} />
@@ -171,7 +176,7 @@ export default function Help({ onNavigate }: { onNavigate?: (v: NavTarget) => vo
 
       {/* 4. 회의록 열어보고 고치기 (세션 상세) — 사용자 요청: 메모 추가 재생성 */}
       <Card icon={<FileText size={16} />} title="만든 회의록 열어보고 고치기">
-        <p><Tag>대시보드</Tag> 에서 항목을 클릭하면 상세 화면이 열립니다. 여기서 문서를 보고, 복사·저장·메일 공유하고, <b>지시를 넣어 다시 만들 수</b> 있습니다.</p>
+        <p><Tag>라이브러리</Tag> 에서 항목을 클릭하면 상세 화면이 열립니다. 여기서 문서를 보고, 복사·저장·메일 공유하고, <b>지시를 넣어 다시 만들 수</b> 있습니다.</p>
 
         <Detail summary="① 문서 탭 — 회의록·요약·스크립트·액션 등" defaultOpen>
           <ul className="list-disc ml-4 space-y-1">
@@ -220,7 +225,7 @@ export default function Help({ onNavigate }: { onNavigate?: (v: NavTarget) => vo
         <p>두 가지 방법이 있습니다. 상황에 맞게 고르세요.</p>
         <Detail summary="방법 A — 만든 회의록을 그때그때 메일로 (간단)">
           <Steps items={[
-            <><Tag>대시보드</Tag> 에서 회의록을 열고 원하는 탭(회의록/요약 등)을 선택.</>,
+            <><Tag>라이브러리</Tag> 에서 회의록을 열고 원하는 탭(회의록/요약 등)을 선택.</>,
             <>오른쪽 위 <span className="inline-flex items-center gap-1"><Share2 size={13} /> <b>공유</b></span> 버튼을 누릅니다.</>,
             <>메일 앱이 열리면 받는 사람을 넣고 보냅니다. (본문이 길면 앞부분만 실리니, 전문은 <b>다운로드</b>해 첨부하세요.)</>,
           ]} />
@@ -260,7 +265,7 @@ export default function Help({ onNavigate }: { onNavigate?: (v: NavTarget) => vo
             <p>말한 내용과 관련된 <b>내 노트 폴더의 문서</b>를 찾아 <b>[[제목]]</b> 칩으로 보여줍니다
               (📄 노트 · 🎓 논문 · 🌐 웹 보완). <b>근거 보기</b>를 누르면 어느 대목이 걸렸는지 펼쳐집니다.</p>
             <ul className="list-disc ml-4 space-y-1">
-              <li><b>끄기</b> — 그 줄 오른쪽 <Tag>이번 회의 끔</Tag>. 표시만이 아니라 <b>서버 검색과
+              <li><b>끄기</b> — 오른쪽 <Tag>관련 노트</Tag> 패널의 <Tag>이번 회의 끔</Tag>. 표시만이 아니라 <b>서버 검색과
                 웹 보완 요금까지</b> 멈춥니다. 이미 찾은 노트는 회의록에 남습니다.</li>
               <li><b>아예 안 쓰기</b> — <Tag>설정</Tag> → <b>실시간 노트 검색</b>을 끄면 다음 회의부터 계속 꺼집니다.</li>
             </ul>
@@ -276,7 +281,7 @@ export default function Help({ onNavigate }: { onNavigate?: (v: NavTarget) => vo
                 🔍·🎓 카드에 <b>⚠ 미검증</b>이 붙으면 <b>그 발화에 대한</b> 웹 검색 없이
                 사내 자료만 본 것입니다(다른 발화에서 나간 웹 결과는 <Tag>다른 발화</Tag>로 표시됩니다).</li>
               <li><b>확인 / 닫기</b> — 도움이 됐는지 눌러 주세요. 이 기록이 정확도를 재는 데 쓰입니다.</li>
-              <li><b>끄기</b> — 그 줄의 <Tag>이번 회의 끔</Tag>. 카드 생성이 멈춰 추가 비용이 들지 않습니다
+              <li><b>끄기</b> — 오른쪽 <Tag>진행 도우미</Tag> 패널의 <Tag>이번 회의 끔</Tag>. 카드 생성이 멈춰 추가 비용이 들지 않습니다
                 (판정 기록만 남습니다). 다음 녹음에서는 다시 켜집니다.</li>
               <li><b>덜 뜨게 하기</b> — <Tag>설정</Tag> → <b>페르소나별 참견도</b>에서 역할마다
                 0(금지)~3(옆 카드)을 고릅니다. 기본은 조용한 쪽입니다.</li>
@@ -322,12 +327,12 @@ export default function Help({ onNavigate }: { onNavigate?: (v: NavTarget) => vo
 
           <Detail summary={<span className="flex items-center gap-1.5"><MessageCircleQuestion size={14} /> 위키 질문 — 쌓인 기록에 근거해 답변</span>}>
             <p>물어보면 노트 폴더의 회의·세미나 기록을 근거로 답하고 <b>출처 노트</b>를 함께 보여줍니다.</p>
-            <GoBtn onClick={() => onNavigate?.("wiki")}>위키 질문 열기</GoBtn>
+            <GoBtn onClick={() => onNavigate?.("wiki")}>지식 → 질문 열기</GoBtn>
           </Detail>
 
           <Detail summary={<span className="flex items-center gap-1.5"><ClipboardList size={14} /> 회의 준비 — 관련 노트·지난 결정·미완료 액션 모으기</span>}>
             <p>제목/주제(+참석자·메모)를 넣으면 관련 기록과 지난 결정·미완료 액션을 모아 준비 자료를 만들어 줍니다. 저장하면 대시보드에도 남습니다.</p>
-            <GoBtn onClick={() => onNavigate?.("prep")}>회의 준비 열기</GoBtn>
+            <GoBtn onClick={() => onNavigate?.("prep")}>준비 · 비서 → 회의 준비 열기</GoBtn>
           </Detail>
 
           <Detail summary={<span className="flex items-center gap-1.5"><CalendarClock size={14} /> 회의 비서 — 일정·충돌 점검, 녹음↔계획 병합, 자동화</span>}>
@@ -337,12 +342,12 @@ export default function Help({ onNavigate }: { onNavigate?: (v: NavTarget) => vo
               <li><span className="inline-flex items-center gap-1"><FileAudio size={13} /> 노트 첨부 오디오 처리</span> — 노트에 붙인 녹음을 찾아 회의록으로 정리.</li>
               <li><span className="inline-flex items-center gap-1"><Play size={13} /> 계획 자동화</span> — 켜 두면 planned 회의에 사전 리서치를 자동 작성하고 새 녹음을 자동 처리.</li>
             </ul>
-            <GoBtn onClick={() => onNavigate?.("assistant")}>회의 비서 열기</GoBtn>
+            <GoBtn onClick={() => onNavigate?.("assistant")}>준비 · 비서 → 비서 열기</GoBtn>
           </Detail>
 
           <Detail summary={<span className="flex items-center gap-1.5"><Network size={14} /> 지식그래프 — 인물·조직·주제의 연결 보기</span>}>
             <p>회의에 등장한 <b>인물·조직·주제·결정·액션</b>이 어떻게 이어지는지 그림으로 봅니다. 노드를 누르면 연결된 항목이 펼쳐지고, 회의록 속 <b>[[위키링크]]</b>를 눌러도 여기로 이동합니다.</p>
-            <GoBtn onClick={() => onNavigate?.("graph")}>지식그래프 열기</GoBtn>
+            <GoBtn onClick={() => onNavigate?.("graph")}>지식 → 그래프 열기</GoBtn>
           </Detail>
         </div>
       </Card>

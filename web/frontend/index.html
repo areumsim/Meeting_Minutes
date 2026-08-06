@@ -14,7 +14,11 @@
          한 개의 CSP 로 둘을 덮으려니 임의 호스트가 열려 있었다(SEC-006).
          자리표시자가 없으면 플러그인이 빌드를 실패시킨다 — CSP 가 조용히 빠지는 것을 막는다. -->
     <meta http-equiv="Content-Security-Policy" content="%MM_CSP%" />
-    <title>AI Meeting Minutes</title>
+    <title>AI Minutes</title>
+    <!-- 파비콘은 data URI 로 인라인한다 — 외부 요청이 0이라 좁혀 둔 CSP 와 오프라인 배포
+         정책을 둘 다 지키고, 별도 자산 파일을 번들에 넣지 않아도 된다.
+         마크는 로고와 같은 중립 색에 액센트 링 하나(PRD §5.1 브랜드 마크). -->
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%231c1a17'/%3E%3Ccircle cx='16' cy='16' r='6' fill='none' stroke='%230d9488' stroke-width='2.5'/%3E%3C/svg%3E" />
   </head>
   <body>
     <div id="root"></div>

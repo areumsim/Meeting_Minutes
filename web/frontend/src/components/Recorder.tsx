@@ -84,7 +84,9 @@ const CAPTURE_MODES: {
     desc: "대면 회의·헤드셋 발화",
     audio: NEAR_FIELD_AUDIO, system: false },
   { value: "mic+system", label: "내 마이크 + 이 PC 소리",
-    desc: "Teams 등 온라인 회의 — 헤드셋을 써도 상대방 목소리가 함께 녹음됩니다",
+    // 앱 이름을 여럿 적는 이유: 시스템 오디오는 **OS 레벨 루프백**이라 어느 회의 앱이든
+    // 똑같이 잡히는데, "Teams 등"만 적혀 있으니 줌 사용자가 자기 경우인지 물어봤다.
+    desc: "Zoom·Teams·Webex·Meet 등 온라인 회의 — 헤드셋을 써도 상대방 목소리가 함께 녹음됩니다",
     audio: NEAR_FIELD_AUDIO, system: true },
   { value: "room", label: "회의실 마이크 (멀리 있는 소리)",
     desc: "TV·스피커폰으로 상대 목소리가 나오는 회의실",
@@ -1747,7 +1749,7 @@ export default function Recorder({ onComplete, onExit }: { onComplete: (id: stri
                       </div>
                       <p className="text-[11px] text-zinc-500 leading-relaxed">
                         {captureMode === "mic+system"
-                          ? "녹음이 시작된 직후 공유 창이 뜹니다 — [전체 화면]을 고르고 아래 [시스템 오디오도 공유]를 꼭 켜세요. 고르는 동안에도 마이크는 이미 녹음 중이고, 화면은 녹화되지 않습니다."
+                          ? "녹음이 시작된 직후 공유 창이 뜹니다 — [전체 화면]을 고르고 아래 [시스템 오디오도 공유]를 꼭 켜세요. 줌·팀즈 앱은 이렇게 해야 상대 목소리가 들어옵니다([창]을 고르면 크롬이 소리를 함께 주지 않습니다). 고르는 동안에도 마이크는 이미 녹음 중이고, 화면은 녹화되지 않습니다."
                           : captureMode === "room"
                           ? "멀리서 나는 소리가 지워지지 않도록 에코 취소를 끄고 마이크 감도를 올립니다."
                           : "헤드셋·근접 발화 기준입니다. 온라인 회의 상대 목소리나 회의실 TV 소리가 안 잡히면 위에서 상황을 바꿔보세요."}

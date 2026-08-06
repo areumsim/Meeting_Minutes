@@ -331,9 +331,27 @@ if (Test-Path $zipDataDir) {
 }
 try {
     Add-Type -AssemblyName System.IO.Compression.FileSystem
-    [System.IO.Compression.ZipFile]::CreateFromDirectory(
-        $OutDir, $zipPath,
-        [System.IO.Compression.CompressionLevel]::Optimal, $false)
+    # `CreateFromDirectory` 를 쓰지 않는 이유: .NET Framework(=PS 5.1) 판은 엔트리 이름에
+    # **플랫폼 구분자(`\`)** 를 쓴다. ZIP 규격(APPNOTE 4.4.17.1)은 `/` 를 요구하므로,
+    # 탐색기는 관대하게 열지만 7-Zip·macOS·`unzip`·python zipfile 은 `\` 를 **파일 이름의
+    # 일부**로 읽어 폴더 구조 없이 `app\web\...` 같은 파일 하나로 풀어버린다. 사내 배포본은
+    # 남의 PC 에서 풀리는 물건이라 이게 치명적이다(실측으로 잡은 회귀 — 첫 수정본이
+    # 그렇게 나왔다). 그래서 엔트리를 직접 만들고 이름을 `/` 로 정규화한다.
+    #
+    # 빈 디렉터리는 넣지 않는다 — 이 트리의 빈 디렉터리는 3개뿐이고 전부 zip 에서
+    # 제외되는 MeetingMinutesData 안이다(실측). 앱이 필요로 하는 폴더는 런타임에 만든다.
+    $files = @(Get-ChildItem $OutDir -Recurse -File -Force)
+    $prefix = $OutDir.TrimEnd('\').Length + 1
+    $zipFile = [System.IO.Compression.ZipFile]::Open($zipPath, 'Create')
+    try {
+        foreach ($f in $files) {
+            $entry = $f.FullName.Substring($prefix).Replace('\', '/')
+            [void][System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile(
+                $zipFile, $f.FullName, $entry,
+                [System.IO.Compression.CompressionLevel]::Optimal)
+        }
+    } finally { $zipFile.Dispose() }
+    Write-Host ("  " + $files.Count + " 파일 압축(엔트리 구분자 '/')")
 } finally {
     # 압축이 실패해도 사용자 데이터는 반드시 제자리로 돌린다.
     if ($zipDataBak -and (Test-Path $zipDataBak)) { Move-Item $zipDataBak $zipDataDir }

@@ -209,14 +209,19 @@ def _register_instance(data_dir, port: int) -> None:
 
 
 def pid_alive(pid) -> bool:
-    """그 pid 가 아직 살아 있나. 신호 0 은 존재 확인만 하고 아무 것도 보내지 않는다."""
+    """그 pid 가 아직 살아 있나. 신호 0 은 존재 확인만 하고 아무 것도 보내지 않는다.
+
+    **자기 pid 도 사실대로 True 를 돌려준다** — 이름이 값의 뜻과 같아야 한다. '자기는
+    대상이 아니다'는 판정은 부르는 쪽(`_register_instance`·`stop_other_instances`)이
+    `pid == os.getpid()` 로 이미 하고 있고, 그게 있어야 할 자리다.
+    """
     import os
 
     try:
         pid = int(pid)
     except (TypeError, ValueError):
         return False
-    if pid <= 0 or pid == os.getpid():
+    if pid <= 0:
         return False
     try:
         os.kill(pid, 0)
@@ -228,6 +233,43 @@ def pid_alive(pid) -> bool:
     except OSError:
         # Windows 는 좀비/종료 중인 핸들에도 OSError 를 낼 수 있다 — 없는 것으로 본다.
         return False
+
+
+def _lock_held(data_dir) -> bool:
+    """그 데이터 폴더의 배타 락을 **누군가 쥐고 있나**(= 그 폴더로 앱이 돌고 있다).
+
+    잡히면 즉시 놓는다 — 이건 검사이지 획득이 아니다. 그래서 프로세스 수명 핸들
+    (`_LOCK_FH`)은 건드리지 않는다.
+    """
+    lock_path, _ = _lock_paths(data_dir)
+    try:
+        fh = open(lock_path, "a+b")
+    except OSError:
+        return False           # 파일도 못 열면 판단 근거가 없다 → '아니다' 쪽으로
+    try:
+        if _try_lock(fh):
+            return False       # 우리가 잡았다 = 아무도 안 쥐고 있었다
+        return True
+    finally:
+        fh.close()             # 잡았든 못 잡았든 닫으면서 풀린다
+
+
+def _looks_like_ours(row: dict) -> bool:
+    """이 목록 항목이 **정말 우리 앱**인가 — 강제 종료 전에 반드시 확인한다.
+
+    없으면 나는 사고: 앱이 레지스트리를 정리하지 못하고 죽은 뒤(크래시) OS 가 그 pid 를
+    **다른 프로그램에 재사용**하면, 다음 실행이 그 무관한 프로세스를 종료시킨다.
+    pid 만으로는 신원을 알 수 없으므로 근거 두 가지 중 하나를 요구한다:
+      ① 그 포트가 우리 앱으로 응답한다(`/api/system/info`) — 정상 동작 중인 경우.
+      ② 그 데이터 폴더의 배타 락이 아직 잡혀 있다 — HTTP 가 먹통이어도 프로세스가
+         그 폴더를 쥐고 있다는 증거(강제 종료가 필요한 바로 그 경우다).
+    둘 다 아니면 이미 사라진 인스턴스의 잔여 기록으로 보고 **손대지 않고 지운다**.
+    """
+    port = row.get("port")
+    if port and probe_instance(int(port), timeout=1.0) is not None:
+        return True
+    where = row.get("data_dir")
+    return bool(where) and _lock_held(where)
 
 
 def _request_shutdown(port: int, timeout: float = 3.0) -> str:
@@ -265,7 +307,7 @@ def _terminate(pid) -> bool:
         return False
 
 
-def stop_other_instances(data_dir, log=print, wait_sec: float = 12.0) -> dict:
+def stop_other_instances(log=print, wait_sec: float = 12.0) -> dict:
     """앞서 떠 있던 이 앱의 인스턴스를 모두 끈다. 락을 잡기 **전에** 부른다.
 
     반환: `{"stopped": [...], "busy": {...}|None}`
@@ -294,6 +336,10 @@ def stop_other_instances(data_dir, log=print, wait_sec: float = 12.0) -> dict:
             continue                      # 이미 죽은 항목은 목록에서 흘려보낸다
         port = row.get("port")
         where = row.get("data_dir") or "?"
+        if not _looks_like_ours(row):
+            # pid 는 살아 있지만 우리 앱이라는 증거가 없다 = 재사용된 pid 일 수 있다.
+            # 남의 프로세스를 죽이는 것보다 기록을 버리는 쪽이 낫다.
+            continue
         verdict = _request_shutdown(port) if port else "fail"
         if verdict == "busy":
             log(f"  [실행 중] 진행 중인 회의가 있어 종료하지 않았습니다 — "
@@ -319,9 +365,31 @@ def stop_other_instances(data_dir, log=print, wait_sec: float = 12.0) -> dict:
             log(f"  [경고] pid {pid} 가 아직 살아 있습니다 — 작업관리자에서 종료하세요.")
             survivors.append(row)
 
-    if stopped:
-        _write_registry([r for r in survivors if pid_alive(r.get("pid"))])
+    # 목록에는 살아 있는 인스턴스만 남긴다 — 죽은 항목·신원 미확인 항목·방금 내린 항목을
+    # 지운다. 종전엔 `if stopped:` 일 때만 썼는데, busy 로 막히기만 하는 실행에서는
+    # 죽은 기록이 영구히 쌓였다.
+    kept = [r for r in survivors if pid_alive(r.get("pid"))]
+    if kept != rows:
+        _write_registry(kept)
     return {"stopped": stopped, "busy": busy}
+
+
+def open_existing(info: dict, log=print, open_browser: bool = True) -> None:
+    """이미 떠 있는(또는 끄지 않기로 한) 인스턴스의 창을 열어 준다 — 두 런처 공용.
+
+    사용자는 앱을 **쓰려고** 런처를 눌렀다. 새로 못 띄우는 상황이라면 최소한 지금 돌고
+    있는 창을 열어 주는 것이 기대에 맞다. 이 처리가 두 런처에 복제돼 있어 문구·조건이
+    갈라지기 시작했으므로(포터블만 no-browser 를 존중, 소스만 포트 없을 때 안내 누락)
+    한 곳으로 모았다.
+    """
+    port = (info or {}).get("port")
+    if not port:
+        log("  기존 인스턴스의 포트를 확인할 수 없습니다 — 작업관리자에서 "
+            "python/pythonw 를 종료한 뒤 다시 실행하세요.")
+        return
+    log(f"  기존 창을 엽니다 — http://localhost:{port}")
+    if open_browser:
+        webbrowser.open(f"http://localhost:{port}")
 
 
 def _wait_pid_gone(pid, timeout: float) -> bool:

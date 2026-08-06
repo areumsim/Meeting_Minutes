@@ -25,7 +25,7 @@ Obsidian 기반 **회의록 자동화 + LLM Wiki 지식순환** 시스템. 오�
 pip install -e .                       # 개발 설치
 python run_meeting.py <cmd> [args]     # CLI (run_meeting.bat 도 동일)
 webUI_실행.bat                          # 웹 UI 로컬 실행 (데이터 = 리포 루트)
-python -m pytest                       # 테스트 (2026-08-06: 1110 passed, 1 skipped) ← 수치 정본
+python -m pytest                       # 테스트 (2026-08-06: 1121 passed, 1 skipped) ← 수치 정본
 cd web/frontend && npx vitest run      # 프런트 테스트 (2026-08-05: 105 passed) ← 정본 명령
 python run_meeting.py reindex          # 위키/그래프 인덱스 재빌드
 ```
@@ -34,9 +34,9 @@ python run_meeting.py reindex          # 위키/그래프 인덱스 재빌드
   자주 걸리는 함정: `webUI_실행.bat`(소스)은 **리포 루트**의 `config.json`·`data/`·`output/`을
   쓰고, `MeetingMinutes.bat`(포터블)은 `MM_DATA_DIR`로 지정된 **자기 폴더의
   `MeetingMinutesData/`**를 쓴다(개인 키가 배포본에 섞이지 않게 한 의도된 격리).
-  같은 PC 에서 둘을 동시에 켜면 8501 을 나눠 갖게 되어 브라우저가 다른 앱을 보여줄 수 있다 —
-  런처가 포트를 옮기고 안내하지만(`common/server_launch.py`), 화면이 어느 쪽인지는
-  [설정] → Obsidian 전체 진단의 "데이터 폴더" 항목으로 확인한다.
+  **둘은 동시에 뜨지 않는다** — 런처를 누르면 앞서 떠 있던 인스턴스를 끄고 8501 을
+  넘겨받는다(`server_launch.stop_other_instances`). 그래서 주소는 같고 **데이터는 다르다**:
+  화면이 어느 쪽인지는 [설정] → Obsidian 전체 진단의 "데이터 폴더" 항목으로 확인한다.
 - **배포(포터블)**: `scripts/build/build_portable.ps1` → `dist/MeetingMinutesPortable.zip`.
   사용자는 압축 해제 후 `MeetingMinutes.bat` 실행(임베디드 파이썬 + pythonw). 이것이 **정본 배포 방식**.
   구형 PyInstaller exe(`build_exe.bat`)는 원격 MCP(`/mcp`)가 필요할 때만 쓰는 대체 경로.
@@ -122,10 +122,25 @@ python run_meeting.py reindex          # 위키/그래프 인덱스 재빌드
   휴지통으로 옮긴 뒤에** DB 행을 지운다 — 순서를 바꾸면 이동 실패 시 고아 폴더가 남는다.
   재부활 방지의 핵심은 `session_scanner` 가 `db.known_output_dirs()`(**삭제분 포함**)를
   보는 것이다. `list_sessions()` 를 쓰면 지운 회의가 재시작 후 되살아난다.
-- **중복 실행은 데이터 폴더 단위 락으로 막는다**(`server_launch.acquire_instance_lock`).
-  포트로 판정할 수 없다 — `find_free_port` 가 점유 시 다른 포트로 옮기므로 첫 인스턴스가
-  랜덤 포트에 있을 수 있다. 두 서버가 같은 폴더에 뜨면 워처가 둘이 되어 중복 과금하고,
-  두 번째 `init_db()` 가 첫 인스턴스의 진행 중 세션을 `error` 로 바꾼다.
+- **런처는 한 번에 하나만 살린다 — 새로 켜면 이전 것을 끄고 8501 을 넘겨받는다**
+  (`server_launch.stop_other_instances`, 두 런처 공용). 두 서버가 뜨면 워처가 둘이 되어
+  중복 과금하고 두 번째 `init_db()` 가 첫 인스턴스의 진행 중 세션을 `error` 로 바꾼다.
+  - **찾기**: 데이터 폴더 락은 **폴더 단위**라 포터블(자기 폴더)과 소스(리포 루트)가 서로를
+    못 본다. 포트로도 못 찾는다(`find_free_port` 가 점유 시 랜덤 포트로 옮긴다 — 실측
+    2810). 그래서 머신 단위 목록(`%LOCALAPPDATA%\MeetingMinutes\instances.json`,
+    pid·port·데이터폴더뿐 — **비밀 없음**)에 좌표를 남긴다.
+  - **끄기**: 강제 kill 전에 `/api/shutdown` 을 먼저 부른다. 그 경로가 ① 진행 중 회의를
+    409 로 알리고(그러면 **끄지 않고** 기존 창을 열어 준다 — 자동으로 죽이면 그 회의의
+    회의록이 만들어지지 않는다. 이것이 유일한 예외다) ② lifespan 을 태워 스레드풀·tmpdir
+    정리와 DB 커밋을 끝낸다(강제 종료는 이걸 건너뛰어 세션이 `processing` 으로 고착된다).
+  - **pid 는 신원이 아니다.** 강제 종료 전에 `_looks_like_ours()` 로 확인한다 — 그 포트가
+    우리 앱으로 응답하거나(`/api/system/info`), 그 데이터 폴더의 락이 아직 잡혀 있어야
+    한다. 없으면 크래시로 남은 기록의 pid 가 **재사용**됐을 때 무관한 프로세스를 죽인다.
+  - 락(`acquire_instance_lock`)은 그대로 남는다 — 자동 종료가 실패했을 때의 마지막 방어선.
+  - **창을 X 로 닫아도 서버는 남는다**(콘솔 종료가 손자 프로세스까지 못 죽인다). 이건
+    의도된 절충이다: 창 닫힘으로 서버를 죽이면 진행 중 녹음·업로드 처리가 함께 죽고,
+    Windows 콘솔 닫힘 유예(약 5초)로는 회의록 생성을 끝낼 수 없다. 남은 서버는 다음
+    실행이 정리하고, 즉시 끄려면 [설정] → [앱 종료] 를 쓴다.
 - **자동 실행 경로는 두 관문을 지난다** — `spend_guard.automation_paused()`(전역 일시정지,
   설정값이라 재시작에도 유지된다)와 `spend_guard.blocked()`(한도). 워처는 한도 초과·기존 파일을
   `status="queued"` 확인 대기열에 넣고, `queued`는 **터미널 상태**다(매 폴링 재판정 방지).

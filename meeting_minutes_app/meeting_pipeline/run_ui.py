@@ -124,6 +124,19 @@ def main():
         # 여기서는 포트를 절대 바꾸지 않는다 — web/frontend/vite.config.ts 의 프록시가
         # localhost:8501 로 하드코딩돼 있어, 백엔드만 다른 포트로 옮기면 프록시가 조용히
         # 깨진다(화면은 뜨는데 모든 /api 요청이 실패). 점유 시엔 분명히 실패시킨다.
+        #
+        # 프로덕션 인스턴스가 8501 을 쥐고 있는 경우가 이 실패의 대부분이다 — 개발 모드는
+        # 포트를 옮길 수 없으니 **여기서도 자동 종료를 지난다**(런처 정책은 하나다).
+        # 다만 개발 서버는 목록에 등록하지 않는다(`publish_instance_port` 를 부르지 않는다):
+        # `reload=True` 는 uvicorn 리로더가 자식 프로세스를 다시 띄우는 구조라, 다른 런처가
+        # /api/shutdown 으로 자식을 내려도 부모가 곧 새로 띄워 '끈 것처럼 보이지만 살아
+        # 있는' 상태가 된다. 개발 서버는 개발자가 직접 끄는 것이 맞다.
+        _dev_takeover = server_launch.stop_other_instances()
+        if _dev_takeover.get("busy"):
+            print("\n  [알림] 진행 중인 회의가 있는 인스턴스가 떠 있어 그대로 두었습니다.")
+            server_launch.open_existing(_dev_takeover["busy"])
+            sys.exit(0)
+        server_launch.wait_port_free(args.port)
         if not server_launch.is_port_free(args.port):
             print(f"\n  [오류] 포트 {args.port} 가 이미 사용 중입니다 — "
                   f"{server_launch.describe_port_holder(args.port)}.")
@@ -178,24 +191,18 @@ def main():
         # 끄고 자리를 넘겨받는다 — 그래야 주소가 8501 하나로 고정된다. 창을 닫아도 서버가
         # 남는 일이 있어(콘솔 종료가 손자 프로세스까지 못 죽인다) 어제 띄운 서버가 오늘
         # 8501 을 쥐고 있는 상황이 실제로 반복됐다. 유일한 예외는 진행 중 회의다.
-        _takeover = server_launch.stop_other_instances(_data_base)
+        _takeover = server_launch.stop_other_instances()
         if _takeover.get("busy"):
-            _busy_port = _takeover["busy"].get("port")
-            print(f"\n  [알림] 진행 중인 회의가 있는 인스턴스가 떠 있어 그대로 두었습니다.")
-            if _busy_port:
-                print(f"         기존 창을 엽니다 — http://localhost:{_busy_port}")
-                webbrowser.open(f"http://localhost:{_busy_port}")
+            print("\n  [알림] 진행 중인 회의가 있는 인스턴스가 떠 있어 그대로 두었습니다.")
+            server_launch.open_existing(_takeover["busy"])
             sys.exit(0)
 
         running = server_launch.acquire_instance_lock(_data_base)
         if running is not None:
             # 자동 종료가 실패했을 때의 마지막 방어선(두 서버가 같은 폴더에 뜨면 워처가
             # 중복 과금하고 진행 중 세션이 error 로 표시된다).
-            other_port = running.get("port")
             print(f"\n  [오류] 같은 데이터 폴더로 이미 실행 중이고 자동 종료도 실패했습니다: {_data_base}")
-            if other_port:
-                print(f"         기존 인스턴스: http://localhost:{other_port}")
-            print("         작업관리자에서 python/pythonw 를 종료한 뒤 다시 실행하세요.")
+            server_launch.open_existing(running)
             sys.exit(1)
 
         # 방금 내린 인스턴스가 쥐고 있던 포트가 닫히기를 기다린다 — 안 기다리면

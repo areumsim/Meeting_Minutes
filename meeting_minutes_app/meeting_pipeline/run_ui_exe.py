@@ -114,28 +114,17 @@ def main():
     # 이 런처를 눌렀다 = "지금 이걸 쓰겠다". 앞서 떠 있던 인스턴스(소스 실행이든 다른
     # 포터블이든)를 끄고 자리를 넘겨받아 주소를 8501 하나로 고정한다. 소스 런처와 **같은
     # 함수**를 쓴다 — 이 판정이 두 곳에 복사되면 한쪽만 고쳐져 갈라진다.
-    takeover = server_launch.stop_other_instances(data_base)
+    takeover = server_launch.stop_other_instances()
     if takeover.get("busy"):
-        busy_port = takeover["busy"].get("port")
         print("  진행 중인 회의가 있는 인스턴스가 떠 있어 그대로 두었습니다.")
-        if busy_port and not args.no_browser:
-            print(f"  기존 창을 엽니다 — http://localhost:{busy_port}")
-            import webbrowser
-            webbrowser.open(f"http://localhost:{busy_port}")
+        server_launch.open_existing(takeover["busy"], open_browser=not args.no_browser)
         return
 
     running = server_launch.acquire_instance_lock(data_base)
     if running is not None:
         # 자동 종료가 실패했을 때의 마지막 방어선(위 ①②).
-        other_port = running.get("port")
         print(f"  이미 실행 중이고 자동 종료도 실패했습니다 (데이터 폴더: {data_base}).")
-        if other_port and not args.no_browser:
-            print(f"  기존 창을 엽니다 — http://localhost:{other_port}")
-            import webbrowser
-            webbrowser.open(f"http://localhost:{other_port}")
-        elif not other_port:
-            print("  기존 인스턴스의 포트를 확인할 수 없습니다 — 작업관리자에서 "
-                  "MeetingMinutes 를 종료한 뒤 다시 실행하세요.")
+        server_launch.open_existing(running, open_browser=not args.no_browser)
         return
 
     server_launch.wait_port_free(args.port)   # 방금 내린 포트가 닫히기를 기다린다

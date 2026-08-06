@@ -439,9 +439,14 @@ class TestTakeover:
     @pytest.fixture(autouse=True)
     def _registry_in_tmp(self, tmp_path, monkeypatch):
         """레지스트리를 임시 폴더로 — **사용자의 실제 목록을 건드리지 않는다**
-        (지금 돌고 있는 앱을 테스트가 종료시키면 안 된다)."""
+        (지금 돌고 있는 앱을 테스트가 종료시키면 안 된다).
+
+        신원 확인(`_looks_like_ours`)은 기본적으로 통과시킨다 — 그 판정 자체는 아래
+        전용 테스트에서 본다. 여기서 열어두지 않으면 모든 케이스가 '남의 pid' 로 걸러져
+        정작 검증하려는 종료 경로에 도달하지 못한다."""
         monkeypatch.setattr(sl, "_registry_path",
                             lambda: tmp_path / "instances.json")
+        monkeypatch.setattr(sl, "_looks_like_ours", lambda row: True)
 
     def test_register_then_stop_kills_previous(self, monkeypatch):
         """등록된 이전 인스턴스에 정상 종료를 요청하고, 죽은 것을 확인한다."""
@@ -451,7 +456,7 @@ class TestTakeover:
         monkeypatch.setattr(sl, "_request_shutdown",
                             lambda port, timeout=3.0: asked.append(port) or "ok")
 
-        report = sl.stop_other_instances("C:/new", log=lambda *_: None)
+        report = sl.stop_other_instances(log=lambda *_: None)
 
         assert asked == [8501]                      # 정상 종료를 먼저 요청했다
         assert [r["pid"] for r in report["stopped"]] == [4242]
@@ -466,7 +471,7 @@ class TestTakeover:
         killed = []
         monkeypatch.setattr(sl, "_terminate", lambda pid: killed.append(pid) or True)
 
-        report = sl.stop_other_instances("C:/new", log=lambda *_: None)
+        report = sl.stop_other_instances(log=lambda *_: None)
 
         assert killed == []                         # 강제 종료도 하지 않는다
         assert report["stopped"] == []
@@ -481,7 +486,7 @@ class TestTakeover:
         monkeypatch.setattr(sl, "pid_alive", lambda pid: not killed)
         monkeypatch.setattr(sl, "_terminate", lambda pid: killed.append(pid) or True)
 
-        report = sl.stop_other_instances("C:/new", log=lambda *_: None)
+        report = sl.stop_other_instances(log=lambda *_: None)
 
         assert killed == [99]
         assert [r["pid"] for r in report["stopped"]] == [99]
@@ -494,7 +499,7 @@ class TestTakeover:
         monkeypatch.setattr(sl, "_request_shutdown",
                             lambda *a, **k: asked.append(1) or "ok")
 
-        report = sl.stop_other_instances("C:/new", log=lambda *_: None)
+        report = sl.stop_other_instances(log=lambda *_: None)
 
         assert asked == []
         assert report == {"stopped": [], "busy": None}
@@ -507,11 +512,13 @@ class TestTakeover:
         monkeypatch.setattr(sl, "_request_shutdown",
                             lambda *a, **k: asked.append(1) or "ok")
 
-        report = sl.stop_other_instances("C:/me", log=lambda *_: None)
+        report = sl.stop_other_instances(log=lambda *_: None)
 
         assert asked == []
         assert report["busy"] is None
-        assert sl.pid_alive(os.getpid()) is False   # 같은 이유로 pid_alive 도 자기를 뺀다
+        # pid_alive 는 사실을 말한다(자기 pid 는 살아 있다) — '자기는 대상이 아니다' 는
+        # 판정은 호출부에 있다. 이름이 값의 뜻과 달라지지 않게 여기서 고정한다.
+        assert sl.pid_alive(os.getpid()) is True
 
     def test_publish_port_registers_for_cross_folder_discovery(self, tmp_path):
         """포터블·소스가 서로를 찾을 수 있게, 포트 공개가 머신 목록에도 남긴다."""
@@ -530,5 +537,57 @@ class TestTakeover:
         """목록이 깨져 있어도 앱은 떠야 한다 — 자동 종료만 못 하게 될 뿐."""
         (tmp_path / "instances.json").write_text("{not json", encoding="utf-8")
         assert sl._read_registry() == []
-        assert sl.stop_other_instances("C:/new", log=lambda *_: None) == {
+        assert sl.stop_other_instances(log=lambda *_: None) == {
             "stopped": [], "busy": None}
+
+
+class TestKillTargetIdentity:
+    """강제 종료 전에 **정말 우리 앱인지** 확인한다.
+
+    없으면 나는 사고: 앱이 레지스트리를 정리하지 못하고 죽은 뒤(크래시) OS 가 그 pid 를
+    다른 프로그램에 재사용하면, 다음 실행이 **무관한 프로세스를 종료**시킨다. pid 는
+    신원이 아니다.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _registry_in_tmp(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(sl, "_registry_path",
+                            lambda: tmp_path / "instances.json")
+
+    def test_recycled_pid_is_not_killed(self, monkeypatch):
+        """포트도 우리 앱이 아니고 락도 안 잡혀 있으면 손대지 않고 기록만 지운다."""
+        sl._write_registry([{"pid": 4321, "port": 8501, "data_dir": "C:/gone"}])
+        monkeypatch.setattr(sl, "pid_alive", lambda pid: True)
+        monkeypatch.setattr(sl, "probe_instance", lambda *a, **k: None)
+        monkeypatch.setattr(sl, "_lock_held", lambda where: False)
+        killed, asked = [], []
+        monkeypatch.setattr(sl, "_terminate", lambda pid: killed.append(pid) or True)
+        monkeypatch.setattr(sl, "_request_shutdown",
+                            lambda *a, **k: asked.append(1) or "ok")
+
+        report = sl.stop_other_instances(log=lambda *_: None)
+
+        assert killed == [] and asked == []      # 남의 프로세스를 죽이지 않는다
+        assert report == {"stopped": [], "busy": None}
+        assert sl._read_registry() == []         # 잔여 기록은 정리한다
+
+    def test_hung_instance_is_identified_by_its_data_folder_lock(self, monkeypatch):
+        """HTTP 가 먹통이어도 그 폴더의 락을 쥐고 있으면 우리 앱이다 → 강제 종료 대상."""
+        sl._write_registry([{"pid": 555, "port": 8501, "data_dir": "C:/hung"}])
+        killed = []
+        monkeypatch.setattr(sl, "pid_alive", lambda pid: not killed)
+        monkeypatch.setattr(sl, "probe_instance", lambda *a, **k: None)
+        monkeypatch.setattr(sl, "_lock_held", lambda where: True)
+        monkeypatch.setattr(sl, "_request_shutdown", lambda *a, **k: "fail")
+        monkeypatch.setattr(sl, "_terminate", lambda pid: killed.append(pid) or True)
+
+        report = sl.stop_other_instances(log=lambda *_: None)
+
+        assert killed == [555]
+        assert [r["pid"] for r in report["stopped"]] == [555]
+
+    def test_lock_probe_does_not_steal_the_lock(self, tmp_path):
+        """`_lock_held` 는 검사다 — 잡았으면 즉시 놓아 이후 획득을 막지 않는다."""
+        assert sl._lock_held(tmp_path) is False          # 아무도 안 쥐고 있다
+        assert sl.acquire_instance_lock(tmp_path) is None  # 그래서 우리가 잡을 수 있다
+        assert sl._lock_held(tmp_path) is True           # 이제는 잡혀 있다고 보인다

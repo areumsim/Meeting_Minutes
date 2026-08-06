@@ -1924,11 +1924,11 @@ class BrowserRealtimeSession:
 
         # 녹음 구간 소비자를 내리고 finalize 에 큐를 넘긴다(finalize 는 자기 소비자를
         # 띄운다 — 둘을 동시에 두면 같은 큐를 나눠 가져 이벤트 순서가 갈라진다).
+        # gather(return_exceptions=True) 는 이 경로의 취소 정리와 같은 관용구다 —
+        # `except (CancelledError, Exception)` 로 잡으면 **바깥 태스크가 취소된 경우까지**
+        # 삼켜서 취소가 전파되지 않는다(그때는 그대로 올라가야 한다).
         browser_task.cancel()
-        try:
-            await browser_task
-        except (asyncio.CancelledError, Exception):
-            pass
+        await asyncio.gather(browser_task, return_exceptions=True)
 
         await self._finalize(
             openai_client, language, translate, doc_type, topic, title,

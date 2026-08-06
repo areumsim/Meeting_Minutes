@@ -271,6 +271,14 @@ class BrowserRealtimeSession:
         topic = self.config.get("topic", "")
         speakers = self.config.get("speakers", "")
 
+        # 스레드→async 브릿지의 목적지 루프. **전송 경로가 정해지기 전에** 세운다 —
+        # `_send_to_browser()` 는 `self._loop` 가 None 이면 조용히 버리고, 아래 검색기의
+        # `warmup()` 은 생성 직후 워커 스레드에서 상태를 보낸다. 종전엔 이 값을 WS
+        # 경로 안에서만 세웠기 때문에, 기본 설정(`realtime.mode="http"`)으로 녹음하면
+        # 관련 노트·페르소나 카드·finalize 진행 상태가 **한 건도 브라우저에 닿지
+        # 않았다**(화면은 "관련 노트 … 대기 중…"에 영구히 머문다).
+        self._loop = asyncio.get_running_loop()
+
         self._searcher = self._create_searcher(topic)
 
         # DB 세션 생성
@@ -412,8 +420,7 @@ class BrowserRealtimeSession:
                 self._note_stt_primary("OpenAI", stt_model)
                 self._note_stt_model("OpenAI", stt_model)
 
-                # 현재 이벤트 루프 저장 (스레드→async 브릿지용)
-                self._loop = asyncio.get_event_loop()
+                # 스레드→async 브릿지 루프는 run() 에서 이미 세웠다(두 경로 공통).
 
                 # 이벤트 루프를 별도 스레드에서 실행
                 event_thread = threading.Thread(
@@ -1275,6 +1282,24 @@ class BrowserRealtimeSession:
         self._note_stt_primary("OpenAI", stt_model)
         await self.ws.send_json({"type": "fallback_http", "model": stt_model})
 
+        # 워커 스레드가 `_send_to_browser()` 로 넣은 이벤트를 실제로 내보내는 소비자.
+        # WS 경로에는 있었고 이 경로에만 없었다 — 그래서 관련 노트·페르소나 카드가
+        # 큐에 쌓인 채 회의가 끝날 때까지 화면에 닿지 않았다(finalize 가 제 소비자를
+        # 띄우는 시점에야 한꺼번에 흘렀다). 회의 중에 보여야 의미가 있는 산출물이므로
+        # 녹음 구간 내내 돈다. finalize 는 자기 소비자를 띄우므로 그 전에 취소한다
+        # (둘이 같은 큐를 나눠 가지면 순서가 갈라진다).
+        async def _browser_queue_consumer():
+            while not self._stop:
+                try:
+                    data = await asyncio.wait_for(self._send_queue.get(), timeout=0.5)
+                    await self.ws.send_json(data)
+                except asyncio.TimeoutError:
+                    continue
+                except Exception:
+                    break
+
+        browser_task = asyncio.create_task(_browser_queue_consumer())
+
         import wave
         import tempfile
         import array
@@ -1839,7 +1864,7 @@ class BrowserRealtimeSession:
             # 취소: 회의록을 만들지 않고 세션·진행물을 버린다(새 녹음 즉시 시작용).
             # 이 경로 전용은 **asyncio 태스크 취소**뿐이고(HTTP 폴백만 태스크를 쓴다),
             # 나머지 정리는 WS 경로와 공유한다(`_cancel_session`).
-            _cancel_targets = [consumer_task, revise_task,
+            _cancel_targets = [consumer_task, revise_task, browser_task,
                                *list(fast_tr_tasks), *list(stt_workers)]
             for t in _cancel_targets:
                 if t is not None:
@@ -1896,6 +1921,14 @@ class BrowserRealtimeSession:
         # 스레드풀 정리 — 과거엔 WS 경로만 shutdown 해 HTTP 세션마다 유휴 스레드가 누적됐다
         self._translator_pool.shutdown(wait=True, cancel_futures=False)
         self._web_pool.shutdown(wait=True, cancel_futures=False)
+
+        # 녹음 구간 소비자를 내리고 finalize 에 큐를 넘긴다(finalize 는 자기 소비자를
+        # 띄운다 — 둘을 동시에 두면 같은 큐를 나눠 가져 이벤트 순서가 갈라진다).
+        browser_task.cancel()
+        try:
+            await browser_task
+        except (asyncio.CancelledError, Exception):
+            pass
 
         await self._finalize(
             openai_client, language, translate, doc_type, topic, title,

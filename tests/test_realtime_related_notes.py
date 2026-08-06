@@ -381,3 +381,109 @@ class _AsyncNoop:
 
     async def __call__(self, payload):
         self.payloads.append(payload)
+
+
+class TestBrowserTransport:
+    """워커 스레드가 만든 산출물이 **회의 중에** 브라우저에 닿는가.
+
+    회귀(2026-08-06 실사용 신고 "관련 노트가 준비중에서 멈춘다"): 관련 노트·페르소나
+    카드·finalize 진행 상태는 모두 워커 스레드에서 `_send_to_browser()` 로 나가는데,
+    그 브릿지의 두 부품이 **WS 경로 안에만** 있었다.
+      1) 목적지 루프(`self._loop`)를 `_run_ws_realtime` 에서 세웠다 → 기본 설정
+         (`realtime.mode="http"`)에서는 None 이라 모든 이벤트가 조용히 버려졌다.
+      2) 큐 소비자(`_send_queue` → ws)를 WS 경로에서만 띄웠다 → 루프를 세워도 큐에
+         쌓인 채 회의가 끝날 때까지 나가지 않았다.
+    두 결함 모두 검색기 자체는 정상이라 로그·테스트에 아무 흔적이 없었고, 기존
+    테스트는 `_send_to_browser` 를 monkeypatch 해서 전송 자체를 검증하지 않았다.
+    """
+
+    def test_loop_is_wired_before_transport_is_chosen(self, monkeypatch):
+        """`run()` 이 전송 경로(WS/HTTP)를 고르기 **전에** 루프를 세운다.
+
+        검색기 warmup 은 생성 직후 워커 스레드에서 상태를 보내므로, 루프가 그보다
+        늦게 세워지면 첫 상태 배지가 사라진다(화면은 "대기 중…"에 머문다)."""
+        import asyncio
+        import threading
+        from meeting_minutes_app.common import config_loader as cfg
+
+        monkeypatch.setattr(cfg, "get", lambda k, d=None: {
+            "api.openai_api_key": "sk-test", "realtime.mode": "http"}.get(k, d))
+        monkeypatch.setattr(rt.db, "create_session", lambda **kw: "sid-http")
+
+        s = rt.BrowserRealtimeSession(MagicMock(), {})
+        s.ws.send_json = _AsyncNoop()
+        monkeypatch.setattr(s, "_create_facilitator", lambda *a, **k: None)
+        monkeypatch.setattr(s, "_announce_facilitation", lambda: None)
+
+        seen = {}
+
+        def _searcher(topic):
+            # 실제 RealtimeVaultSearcher.warmup() 과 같은 타이밍 — 생성 직후,
+            # 전송 경로가 정해지기 전에 워커 스레드에서 상태를 보낸다.
+            seen["loop_at_warmup"] = s._loop
+            t = threading.Thread(target=lambda: s._emit_search_status(
+                {"enabled": True, "gate": True, "backend": "index"}))
+            t.start()
+            t.join()
+            return None
+
+        monkeypatch.setattr(s, "_create_searcher", _searcher)
+
+        async def _fake_http(*a, **k):
+            # call_soon_threadsafe 는 예약만 한다 — 루프에 한 번 양보해야 큐에 들어온다
+            await asyncio.sleep(0)
+            seen["queued"] = s._send_queue.qsize()
+
+        monkeypatch.setattr(s, "_run_http_fallback", _fake_http)
+        asyncio.run(s.run())
+
+        assert seen["loop_at_warmup"] is not None      # 버려지지 않았다
+        assert seen["queued"] == 1                     # 큐에 실제로 들어왔다
+
+    def test_http_path_flushes_queue_during_recording(self, monkeypatch):
+        """HTTP 청크 경로도 녹음 중 큐 소비자를 띄운다(WS 경로와 같은 계약).
+
+        finalize 가 자기 소비자를 띄우기 **전에** 나가야 한다 — 회의 중에 보여야
+        의미가 있는 산출물이다."""
+        import asyncio
+        import json as _json
+        import threading
+        from unittest.mock import AsyncMock
+
+        cfg = MagicMock()
+        cfg.get.side_effect = lambda k, d=None: d          # 전부 기본값
+        ws = MagicMock()
+        ws.send_json = _AsyncNoop()
+        # 첫 수신에서 즉시 정지 → 오디오·STT 없이 경로의 배선만 통과시킨다
+        ws.receive = AsyncMock(return_value={"text": _json.dumps({"type": "stop"})})
+
+        s = rt.BrowserRealtimeSession(ws, {})
+        s.session_id = None
+        finalized = []
+        monkeypatch.setattr(s, "_finalize",
+                            lambda *a, **k: _done(finalized))
+
+        async def _drive():
+            s._loop = asyncio.get_running_loop()          # run() 이 하는 일
+            task = asyncio.create_task(s._run_http_fallback(
+                MagicMock(), "ko", False, "gpt-4o-mini",
+                "meeting", "", "", "", cfg))
+            # 워커 스레드(검색 풀)가 관련 노트를 보내는 순간을 재현
+            await asyncio.sleep(0)
+            t = threading.Thread(target=lambda: s._emit_related_notes([HIT]))
+            t.start()
+            t.join()
+            await asyncio.wait_for(task, timeout=10)
+
+        asyncio.run(_drive())
+
+        types = [p.get("type") for p in ws.send_json.payloads]
+        assert "related_notes" in types, types      # 회의 중에 실제로 나갔다
+        assert finalized == ["ok"]                  # 종료 경로도 그대로 지난다
+
+
+def _done(bucket):
+    """monkeypatch 한 _finalize 대체 — await 가능해야 한다."""
+    async def _noop():
+        bucket.append("ok")
+    return _noop()

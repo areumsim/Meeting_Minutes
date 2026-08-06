@@ -74,6 +74,36 @@ def check_node_deps():
         print("  설치 완료.\n")
 
 
+def dist_csp_profile() -> str:
+    """`dist/index.html` 이 어느 CSP 프로파일로 빌드됐는지 — "packaged"|"standalone"|"".
+
+    왜 필요한가 — **iOS 빌드와 PC 빌드가 같은 `dist/` 에 쓴다**
+    (`npm run build` = packaged / `npm run build:standalone` = standalone, vite 의
+    기본 outDir 하나). 그래서 아이폰용으로 한 번 빌드하면(`npm run ios:sync`) 리포의
+    `dist/` 가 standalone 번들로 바뀌는데, 그 프로파일의 `connect-src` 는 **임의 호스트**
+    (`http: https: ws: wss:`)를 허용한다. PC 웹 UI 는 같은 `dist/` 를 서빙하므로,
+    아래 mtime 비교만으로는 "최신이니 스킵"이 되어 **좁혀 둔 CSP 가 조용히 풀린 채**
+    돌아간다(vite.config.ts 의 프로파일 주석이 경고하는 바로 그 상황인데, 지금까지
+    이를 막는 코드는 없었다).
+
+    판정은 `connect-src` 지시자가 `'self'` **하나뿐인가**로 한다 — 프로파일 문자열의
+    단일 소스는 `web/frontend/vite.config.ts` 의 `CSP_CONNECT` 이고, 이 함수는 그
+    결과물을 읽을 뿐이다. 읽을 수 없거나 CSP 가 없으면 ""(알 수 없음)이고, 호출부는
+    그 경우 다시 빌드한다(안전한 쪽).
+    """
+    import re
+
+    try:
+        html = (DIST_DIR / "index.html").read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+    m = re.search(r"connect-src([^;\"']*(?:'[^']*'[^;\"]*)*);", html)
+    if not m:
+        return ""
+    sources = m.group(1).split()
+    return "packaged" if sources == ["'self'"] else "standalone"
+
+
 def build_frontend():
     """프론트엔드 빌드 (항상 최신 상태로)."""
     check_node_deps()
@@ -85,6 +115,12 @@ def build_frontend():
         dist_mtime = max((f.stat().st_mtime for f in DIST_DIR.rglob("*") if f.is_file()), default=0)
         src_mtime  = max((f.stat().st_mtime for f in src_dir.rglob("*")  if f.is_file()), default=0)
         needs_build = src_mtime > dist_mtime
+    # 프로파일이 packaged 가 아니면 mtime 과 무관하게 다시 빌드한다(위 docstring).
+    profile = "" if needs_build else dist_csp_profile()
+    if not needs_build and profile != "packaged":
+        print(f"  [알림] 현재 dist 는 PC 용 번들이 아닙니다(CSP 프로파일: "
+              f"{profile or '알 수 없음'}) — 다시 빌드합니다.")
+        needs_build = True
 
     if needs_build:
         print("\n  프론트엔드 빌드 중...")

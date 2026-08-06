@@ -86,6 +86,32 @@ try {
 } finally { Pop-Location }
 if (-not (Test-Path (Join-Path $Root 'web\frontend\dist\index.html'))) { Fail '프론트엔드 빌드 결과(index.html)가 없습니다.' }
 
+# 산출물의 CSP 프로파일을 **실제로 열어 확인한다.** iOS 빌드(`npm run build:standalone`)와
+# PC 빌드가 같은 `dist/` 에 쓰기 때문에(vite 기본 outDir 하나), 잘못된 번들이 배포되면
+# `connect-src` 가 임의 호스트(`http: https: ws: wss:`)까지 열린 채 나간다.
+# 위에서 방금 `npm run build`(=packaged)를 돌렸으니 정상이면 반드시 packaged 다 —
+# 그래도 확인한다. 빌드 로그의 SUCCESS 는 산출물이 맞다는 증거가 아니다(zip 구분자
+# 회귀를 그렇게 놓쳤다).
+$indexHtml = Get-Content (Join-Path $Root 'web\frontend\dist\index.html') -Raw
+$cspMatch = [regex]::Match($indexHtml, "connect-src([^;`"']*(?:'[^']*'[^;`"]*)*);")
+if (-not $cspMatch.Success) {
+    Fail 'dist\index.html 에 CSP connect-src 가 없습니다 — cspPlugin 이 돌지 않았습니다.'
+}
+$cspSources = $cspMatch.Groups[1].Value.Trim()
+if ($cspSources -ne "'self'") {
+    # 메시지에 iOS 빌드 npm 스크립트 이름을 그대로 쓰지 않는다 — PC 빌드 경로의 **실행
+    # 줄**에 그 문자열이 있으면 회귀 테스트가 "PC 빌드가 standalone 을 쓴다"로 잡는다
+    # (tests/test_build_reproducibility.py). 주석에서만 쓴다.
+    Fail @"
+프런트 번들의 CSP 프로파일이 packaged 가 아닙니다: connect-src $cspSources
+  PC 배포본은 좁은 프로파일(connect-src 'self')이어야 합니다.
+  아이폰용 프로파일로 만든 dist 가 남아 있으면 이 검사에 걸립니다
+  (`npm run ios:sync` 를 돌린 뒤 PC 빌드를 하면 이 상태가 됩니다).
+  해결: web/frontend 에서 `npm run build` 로 다시 만든 뒤 빌드하세요.
+"@
+}
+Write-Host "  CSP 프로파일: packaged (connect-src 'self')"
+
 # ── 1.5 ffmpeg 확인 ───────────────────────────────────────────────
 $ffmpeg = Join-Path $Root 'vendor\ffmpeg\ffmpeg.exe'
 if (-not (Test-Path $ffmpeg)) {

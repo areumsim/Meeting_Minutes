@@ -1336,6 +1336,13 @@ PyInstaller `.exe` 배포(`scripts/build/build_exe.spec`)는 원격 MCP 서버(`
 - **창을 닫아도 서버는 남는다**(콘솔 종료가 손자 프로세스까지 못 죽인다). 의도된 절충:
   창 닫힘으로 죽이면 진행 중 녹음·업로드 처리가 함께 죽고, Windows 콘솔 닫힘 유예(약 5초)로는
   회의록 생성을 끝낼 수 없다. 남은 서버는 다음 실행이 정리한다.
+- **프런트 번들의 CSP 프로파일도 런처가 확인한다.** `npm run build`(packaged,
+  `connect-src 'self'`)와 `npm run build:standalone`(iOS 앱 번들, 임의 호스트 허용)이
+  **같은 `dist/` 에 쓰기 때문에**(vite 기본 outDir 하나) 아이폰용으로 한 번 빌드하면 리포
+  `dist/` 가 standalone 이 된다. 종전엔 소스 런처가 mtime 만 봐서 "최신이니 스킵"으로
+  **좁혀 둔 CSP 가 풀린 채** 돌았다. 이제 `run_ui.py::dist_csp_profile()` 이 packaged 가
+  아니면 mtime 과 무관하게 다시 빌드하고, `build_portable.ps1` 1단계는 산출물의
+  `connect-src` 가 `'self'` 가 아니면 **빌드를 실패시킨다**(배포 직전 마지막 관문).
 - 브라우저는 `/api/health` 응답 + **config 경로가 우리 것과 같을 때만** 연다.
 - 화면이 어느 인스턴스인지는 [설정] → Obsidian 전체 진단의 "데이터 폴더" 항목으로 확인한다.
 

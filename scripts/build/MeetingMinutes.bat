@@ -5,6 +5,10 @@ rem while the server keeps running.
 rem (The old MeetingMinutes.vbs was blocked by corporate Windows Script Host
 rem  policy - "access denied"; a .bat is not affected by that.)
 rem To see logs for troubleshooting, run "Troubleshoot.bat" instead.
+rem One instance at a time: starting this stops a Meeting Minutes server that is
+rem already running (any launcher) and takes over port 8501, so the address never
+rem changes. A server with a meeting in progress is NOT stopped - its window is
+rem opened instead. See server_launch.stop_other_instances.
 rem NOTE: keep this file ASCII/English only. Korean text here breaks cmd parsing.
 
 cd /d "%~dp0"

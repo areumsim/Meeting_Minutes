@@ -1217,7 +1217,17 @@ class BrowserRealtimeSession:
             pass
 
     def _send_to_browser(self, data: dict):
-        """스레드 안전한 WebSocket 전송. 큐에 넣으면 메인 루프에서 처리."""
+        """스레드 안전한 WebSocket 전송. 큐에 넣으면 이벤트 루프의 소비자가 내보낸다.
+
+        **큐를 비우는 쪽이 세 군데다** — WS 경로(`_run_ws_realtime`), HTTP 청크 경로
+        (`_run_http_fallback`), 그리고 finalize(`_finalize`). 각 구간마다 살아 있는 소비자가
+        정확히 하나여야 하고(둘이면 같은 큐를 나눠 가져 순서가 갈라진다), 하나도 없으면
+        이벤트가 쌓인 채 사라진다 — HTTP 경로에 소비자가 없어서 관련 노트·페르소나 카드가
+        회의 내내 화면에 닿지 못한 것이 그 결함이다(2026-08-06).
+
+        목적지 루프(`self._loop`)는 `run()` 이 **전송 경로를 고르기 전에** 세운다. None
+        이면 이 함수는 조용히 버리므로, 그보다 늦게 세우면 그때까지의 이벤트가 사라진다.
+        """
         loop = self._loop
         if loop is None or loop.is_closed():
             return

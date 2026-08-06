@@ -227,3 +227,35 @@ class TestAllBuildPathsAreConsistent:
         **실행 줄만** 본다 — 주석에는 standalone 설명이 들어 있다."""
         assert "build:standalone" not in exe_bat
         assert "build:standalone" not in _commands_only(ps1, comment_prefixes=("#",))
+
+
+class TestPortableZipGuards:
+    """zip 단계의 두 관문 — 둘 다 **산출물을 실제로 열어 보고** 잡은 결함이다.
+    빌드 로그의 SUCCESS 는 산출물이 맞다는 증거가 아니다(2026-08-06).
+    """
+
+    def test_build_verifies_the_bundle_csp_profile(self, ps1):
+        """프런트 산출물의 CSP 를 확인하고 packaged 가 아니면 빌드를 실패시킨다.
+
+        두 프로파일이 **같은 dist/ 를 쓰기 때문에**(vite 기본 outDir 하나) 아이폰용으로
+        만든 번들이 남아 있으면 `connect-src` 가 임의 호스트까지 열린 채 배포된다."""
+        cmds = _commands_only(ps1, comment_prefixes=("#",))
+        assert "connect-src" in cmds, "산출물의 CSP 를 확인하지 않는다"
+        assert "$cspSources" in cmds, "확인 결과로 분기하지 않는다"
+
+    def test_zip_entry_names_are_normalized_to_forward_slashes(self, ps1):
+        """ZIP 규격은 `/` 를 요구한다. .NET Framework 의 `CreateFromDirectory` 는 `\\` 를
+        써서 7-Zip·macOS·unzip·python zipfile 이 폴더 구조 없이 파일 하나로 풀어버린다
+        (실측 회귀 — 탐색기만 관대해서 통과처럼 보였다)."""
+        cmds = _commands_only(ps1, comment_prefixes=("#",))
+        assert "CreateEntryFromFile" in cmds
+        assert r".Replace('\', '/')" in cmds, "엔트리 이름을 '/' 로 정규화하지 않는다"
+        assert "CreateFromDirectory" not in cmds, "구분자가 `\\` 가 되는 API 로 되돌아갔다"
+        assert "Compress-Archive" not in cmds, "깊은 트리에서 깨지는 경로로 되돌아갔다"
+
+    def test_zip_excludes_user_data_but_restores_it(self, ps1):
+        """사용자 데이터(config.json=API 키, 회의 DB)는 zip 에서 빠져야 하고, 압축이
+        실패해도 **제자리로 돌아와야** 한다(삭제가 아니라 이동인 이유)."""
+        cmds = _commands_only(ps1, comment_prefixes=("#",))
+        assert "MeetingMinutesData" in cmds
+        assert "$zipDataBak" in cmds and "finally" in cmds

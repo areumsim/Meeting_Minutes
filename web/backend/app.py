@@ -230,7 +230,14 @@ app.include_router(assistant_router, prefix="/api")
 
 @app.post("/api/shutdown")
 def shutdown(request: Request, force: bool = False):
-    """웹에서 앱(서버)을 종료. 콘솔 창이 없는 배포(windowed)에서 깔끔히 끄기 위한 용도.
+    """앱(서버)을 종료. 콘솔 창이 없는 배포(windowed)에서 깔끔히 끄기 위한 용도.
+
+    **호출자가 둘이다.** ① 웹 화면의 [설정] → [앱 종료], ② 런처 —
+    `server_launch.stop_other_instances()` 가 새 인스턴스를 띄우기 전에 이 엔드포인트로
+    이전 인스턴스를 내린다(강제 kill 보다 이 경로를 먼저 쓴다). 그래서 아래 두 성질이
+    런처 정책의 일부다: **409(진행 중 회의)** 는 런처가 "끄지 않고 기존 창을 열어 준다"의
+    근거이고, lifespan 을 태우는 정상 종료는 세션이 `processing` 으로 고착되는 것을 막는다.
+    판정을 여기 하나에만 두는 이유이기도 하다 — 런처가 자기 판정을 복제하면 갈라진다.
 
     SEC-009 로 세 가지가 추가됐다.
 

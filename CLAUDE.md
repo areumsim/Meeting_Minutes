@@ -25,7 +25,7 @@ Obsidian 기반 **회의록 자동화 + LLM Wiki 지식순환** 시스템. 오�
 pip install -e .                       # 개발 설치
 python run_meeting.py <cmd> [args]     # CLI (run_meeting.bat 도 동일)
 webUI_실행.bat                          # 웹 UI 로컬 실행 (데이터 = 리포 루트)
-python -m pytest                       # 테스트 (2026-08-06: 1121 passed, 1 skipped) ← 수치 정본
+python -m pytest                       # 테스트 (2026-08-06: 1129 passed, 1 skipped) ← 수치 정본
 cd web/frontend && npx vitest run      # 프런트 테스트 (2026-08-05: 105 passed) ← 정본 명령
 python run_meeting.py reindex          # 위키/그래프 인덱스 재빌드
 ```
@@ -37,6 +37,13 @@ python run_meeting.py reindex          # 위키/그래프 인덱스 재빌드
   **둘은 동시에 뜨지 않는다** — 런처를 누르면 앞서 떠 있던 인스턴스를 끄고 8501 을
   넘겨받는다(`server_launch.stop_other_instances`). 그래서 주소는 같고 **데이터는 다르다**:
   화면이 어느 쪽인지는 [설정] → Obsidian 전체 진단의 "데이터 폴더" 항목으로 확인한다.
+- **프런트 번들은 CSP 프로파일 2종이 같은 `dist/` 를 쓴다** — `npm run build`(packaged,
+  `connect-src 'self'`) / `npm run build:standalone`(iOS 앱 번들, 임의 호스트 허용).
+  vite 기본 outDir 이 하나라 **아이폰용으로 한 번 빌드하면 리포 `dist/` 가 standalone 이
+  된다.** 그 상태의 PC 웹 UI 는 좁혀 둔 CSP 가 풀린 채 돈다. 두 곳이 막는다:
+  `run_ui.py::dist_csp_profile()`(packaged 아니면 mtime 무관 재빌드) + `build_portable.ps1`
+  1단계(산출물 `connect-src` 가 `'self'` 아니면 빌드 실패). 새 배포 경로를 만들 때 이
+  검사를 지나게 한다 — 빌드 로그의 성공은 산출물이 맞다는 증거가 아니다.
 - **배포(포터블)**: `scripts/build/build_portable.ps1` → `dist/MeetingMinutesPortable.zip`.
   사용자는 압축 해제 후 `MeetingMinutes.bat` 실행(임베디드 파이썬 + pythonw). 이것이 **정본 배포 방식**.
   구형 PyInstaller exe(`build_exe.bat`)는 원격 MCP(`/mcp`)가 필요할 때만 쓰는 대체 경로.

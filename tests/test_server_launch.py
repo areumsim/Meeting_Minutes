@@ -591,3 +591,92 @@ class TestKillTargetIdentity:
         assert sl._lock_held(tmp_path) is False          # 아무도 안 쥐고 있다
         assert sl.acquire_instance_lock(tmp_path) is None  # 그래서 우리가 잡을 수 있다
         assert sl._lock_held(tmp_path) is True           # 이제는 잡혀 있다고 보인다
+
+
+# ━━━━━━━━ 프런트 번들 CSP 프로파일 (iOS 빌드와 dist 공유) ━━━━━━━━
+
+class TestDistCspProfile:
+    """PC 웹 UI 는 `dist/` 가 **packaged 프로파일**일 때만 그대로 쓴다.
+
+    왜 필요한가 — `npm run build`(packaged)와 `npm run build:standalone`(iOS 앱 번들)이
+    **같은 dist/ 에 쓴다**(vite 기본 outDir 하나). standalone 의 `connect-src` 는 임의
+    호스트(`http: https: ws: wss:`)를 허용하므로, 아이폰용으로 한 번 빌드한 뒤 PC 웹 UI 를
+    켜면 mtime 비교만으로는 '최신이니 스킵'이 되어 **좁혀 둔 CSP 가 조용히 풀린 채**
+    돌아간다. vite.config.ts 의 프로파일 주석이 경고하는 상황인데 막는 코드가 없었다.
+    """
+
+    def _run_ui(self):
+        return pytest.importorskip(
+            "meeting_minutes_app.meeting_pipeline.run_ui")
+
+    def _write_dist(self, monkeypatch, tmp_path, csp: str):
+        run_ui = self._run_ui()
+        dist = tmp_path / "dist"
+        dist.mkdir()
+        (dist / "index.html").write_text(
+            '<html><head><meta http-equiv="Content-Security-Policy" '
+            f"""content="default-src 'self'; {csp};" /></head></html>""",
+            encoding="utf-8")
+        monkeypatch.setattr(run_ui, "DIST_DIR", dist)
+        return run_ui
+
+    def test_packaged_bundle_is_recognized(self, monkeypatch, tmp_path):
+        run_ui = self._write_dist(monkeypatch, tmp_path, "connect-src 'self'")
+        assert run_ui.dist_csp_profile() == "packaged"
+
+    def test_ios_bundle_is_recognized_as_standalone(self, monkeypatch, tmp_path):
+        run_ui = self._write_dist(
+            monkeypatch, tmp_path,
+            "connect-src 'self' https://api.openai.com wss://api.openai.com "
+            "http: https: ws: wss:")
+        assert run_ui.dist_csp_profile() == "standalone"
+
+    def test_missing_or_cspless_dist_is_unknown(self, monkeypatch, tmp_path):
+        run_ui = self._run_ui()
+        monkeypatch.setattr(run_ui, "DIST_DIR", tmp_path / "nope")
+        assert run_ui.dist_csp_profile() == ""      # 없으면 '알 수 없음'
+        dist = tmp_path / "dist2"
+        dist.mkdir()
+        (dist / "index.html").write_text("<html></html>", encoding="utf-8")
+        monkeypatch.setattr(run_ui, "DIST_DIR", dist)
+        assert run_ui.dist_csp_profile() == ""
+
+    def test_standalone_dist_forces_rebuild_even_if_newer(self, monkeypatch, tmp_path):
+        """mtime 이 최신이어도 standalone 번들이면 다시 빌드한다(핵심 회귀)."""
+        run_ui = self._write_dist(
+            monkeypatch, tmp_path, "connect-src 'self' http: https: ws: wss:")
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "App.tsx").write_text("x", encoding="utf-8")
+        # src 를 **더 오래된** 것으로 만든다 → mtime 만 보면 '스킵' 이 정답인 상황
+        import os
+        old = 1_000_000
+        os.utime(src / "App.tsx", (old, old))
+        monkeypatch.setattr(run_ui, "FRONTEND_DIR", tmp_path)
+        monkeypatch.setattr(run_ui, "check_node_deps", lambda: None)
+        calls = []
+        monkeypatch.setattr(run_ui.subprocess, "check_call",
+                            lambda *a, **k: calls.append(a))
+
+        run_ui.build_frontend()
+
+        assert calls, "standalone 번들인데 다시 빌드하지 않았다"
+
+    def test_packaged_dist_still_skips_when_up_to_date(self, monkeypatch, tmp_path):
+        """반대 방향 — 정상(packaged)일 때 불필요한 재빌드를 만들지 않는다."""
+        run_ui = self._write_dist(monkeypatch, tmp_path, "connect-src 'self'")
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "App.tsx").write_text("x", encoding="utf-8")
+        import os
+        old = 1_000_000
+        os.utime(src / "App.tsx", (old, old))
+        monkeypatch.setattr(run_ui, "FRONTEND_DIR", tmp_path)
+        monkeypatch.setattr(run_ui, "check_node_deps", lambda: None)
+        calls = []
+        monkeypatch.setattr(run_ui.subprocess, "check_call",
+                            lambda *a, **k: calls.append(a))
+
+        run_ui.build_frontend()
+
+        assert calls == []

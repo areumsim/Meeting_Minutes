@@ -18,8 +18,13 @@ if not exist "%~dp0python-embed\python.exe" (
     exit /b 1
 )
 
+rem Starting here also STOPS a server that is already running in the background
+rem (one instance at a time - it takes over port 8501), so the logs below belong
+rem to this run. Exception: if a meeting is in progress it is left alone and the
+rem existing window is opened instead.
 echo Starting server with embedded Python...
-echo (Closing this window stops the server.)
+echo (Ctrl+C stops the server. Closing this window with X may leave it running -
+echo  use [Settings] - [Exit app] in the web page, or just run this file again.)
 echo.
 "%~dp0python-embed\python.exe" "%~dp0app\meeting_minutes_app\meeting_pipeline\run_ui_exe.py"
 echo.

@@ -1,5 +1,6 @@
 import React from "react";
 import type { StatusTone } from "./StatusPill";
+import { useMediaQuery, MD_UP } from "../lib/useMediaQuery";
 
 /**
  * 고밀도 데이터 표 (PRD §5.4 · FR-LIB-1).
@@ -7,7 +8,8 @@ import type { StatusTone } from "./StatusPill";
  * 두 가지를 한 컴포넌트가 함께 책임진다:
  *  1) 넓은 화면 = 표. 좁은 화면(<md) = **카드 리스트**(§4.3). 카드를 별도 렌더 함수로
  *     받지 않고 **같은 columns 정의에서 파생**한다 — 두 벌로 두면 한쪽에만 열이 추가되는
- *     갈라짐이 생긴다.
+ *     갈라짐이 생긴다. 둘을 CSS 로 겹쳐 두지 않고 **하나만 렌더**한다: `hidden md:table` +
+ *     `md:hidden` 은 50행짜리 목록에서 카드 50장을 함께 만들어 노드를 두 배로 늘린다.
  *  2) 행 진입은 **키보드로 도달 가능한 버튼**이다. `<tr onClick>` 만 두면 마우스 전용
  *     기능이 된다 — 첫 열의 제목이 그 버튼이 되고, 행 클릭은 마우스 편의로만 남긴다.
  *
@@ -59,6 +61,7 @@ const CARD_BORDER: Record<string, string> = {
 export function DataTable<T>({
   rows, columns, rowKey, caption, onRowClick, rowLabel, rowTone, actions,
 }: DataTableProps<T>) {
+  const wide = useMediaQuery(MD_UP);
   const first = columns[0];
   const rest = columns.slice(1);
 
@@ -67,11 +70,11 @@ export function DataTable<T>({
     onRowClick?.(row);
   };
 
-  return (
-    <>
-      {/* ── 표 (md 이상) ─────────────────────────────────────────── */}
-      <table className="hidden w-full border-separate border-spacing-0 overflow-hidden
-        rounded-card border border-line bg-surface shadow-card md:table">
+  if (wide) {
+    return (
+      /* ── 표 (md 이상) ─────────────────────────────────────────── */
+      <table className="w-full border-separate border-spacing-0 overflow-hidden
+        rounded-card border border-line bg-surface shadow-card">
         <caption className="sr-only">{caption}</caption>
         <thead>
           <tr>
@@ -126,9 +129,12 @@ export function DataTable<T>({
           })}
         </tbody>
       </table>
+    );
+  }
 
-      {/* ── 카드 (md 미만) — 같은 columns 에서 파생 ────────────────── */}
-      <ul className="flex flex-col gap-2 md:hidden">
+  return (
+    /* ── 카드 (md 미만) — 같은 columns 에서 파생 ────────────────── */
+    <ul className="flex flex-col gap-2">
         {rows.map((row) => {
           const tone = rowTone?.(row);
           return (
@@ -154,8 +160,7 @@ export function DataTable<T>({
             </li>
           );
         })}
-      </ul>
-    </>
+    </ul>
   );
 }
 

@@ -4,13 +4,25 @@ import { cleanup } from "@testing-library/react";
 
 // jsdom 에는 없는데 앱이 쓰는 것들. 없으면 컴포넌트가 렌더 중 죽어 "테스트가 못 도는"
 // 상태가 되고, 그러면 회귀 그물이 아니라 방해물이 된다.
+//
+// matchMedia 는 **항상 false 를 주지 않는다.** 레이아웃이 통째로 갈리는 곳(DataTable 의
+// 표 ↔ 카드)이 이 값을 보므로, 늘 false 면 데스크톱 표는 테스트에서 한 번도 렌더되지
+// 않는다 — 1차 대상이 Windows PC 인데 그쪽이 회귀 그물 밖에 남는다. jsdom 기본 뷰포트가
+// 1024px 이므로 `min-width` 를 실제 폭과 비교해 답한다. 좁은 화면을 검증하려면 테스트에서
+// `window.innerWidth` 를 바꾸고 다시 렌더하면 된다.
 if (!window.matchMedia) {
-  window.matchMedia = ((q: string) => ({
-    matches: false, media: q, onchange: null,
-    addListener: vi.fn(), removeListener: vi.fn(),
-    addEventListener: vi.fn(), removeEventListener: vi.fn(),
-    dispatchEvent: vi.fn(),
-  })) as any;
+  window.matchMedia = ((q: string) => {
+    const min = /min-width:\s*(\d+)px/.exec(q);
+    const max = /max-width:\s*(\d+)px/.exec(q);
+    const w = window.innerWidth || 1024;
+    const matches = min ? w >= Number(min[1]) : max ? w <= Number(max[1]) : false;
+    return {
+      matches, media: q, onchange: null,
+      addListener: vi.fn(), removeListener: vi.fn(),
+      addEventListener: vi.fn(), removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    };
+  }) as any;
 }
 
 // motion/react 의 진입/퇴장 애니메이션이 jsdom 에서 요소를 남기거나 늦게 지우는 것을 막는다.

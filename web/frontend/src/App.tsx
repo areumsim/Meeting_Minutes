@@ -8,7 +8,7 @@ import { Banner, QuietBadge } from "./ui/Banner";
 import { Button } from "./ui/Button";
 import { SegmentedControl } from "./ui/Tabs";
 import Onboarding from "./components/Onboarding";
-import Dashboard from "./components/Dashboard";
+import Library from "./screens/library/Library";
 import {
   type View, type CreateTab, type KnowledgeTab, type PrepareTab, type Destination,
   navKeyOf, VIEW_TITLE, CREATE_TABS, KNOWLEDGE_TABS, PREPARE_TABS,
@@ -227,7 +227,7 @@ export default function App() {
           </div>
         }>
           {view === "library" && (
-            <Dashboard
+            <Library
               onSelectSession={openDetail}
               onNewUpload={() => go({ view: "create", tab: "upload" })}
               onNewRecord={() => go({ view: "create", tab: "record" })}

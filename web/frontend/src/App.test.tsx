@@ -18,7 +18,7 @@ const api = vi.hoisted(() => ({
 }));
 vi.mock("./lib/api", () => api);
 // 대시보드는 자체 조회가 있어 배너 검증과 무관하다.
-vi.mock("./components/Dashboard", () => ({ default: () => <div>대시보드 자리</div> }));
+vi.mock("./screens/library/Library", () => ({ default: () => <div>대시보드 자리</div> }));
 vi.mock("./components/Onboarding", () => ({ default: () => null }));
 
 import App from "./App";

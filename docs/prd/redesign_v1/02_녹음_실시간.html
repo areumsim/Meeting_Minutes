@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI Minutes — 녹음 화면 v0.4 (차분한 기본)</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap');
+:root{
+  --font-sans:"IBM Plex Sans KR","Malgun Gothic",system-ui,"Segoe UI",sans-serif;
+  --font-num:"IBM Plex Mono",ui-monospace,"Consolas",monospace;
+  --bg:#f4f4f4;--surface:#fff;--surface-2:#f4f4f4;--surface-hover:#e8e8e8;
+  --line:#e0e0e0;--line-strong:#c6c6c6;--ink:#161616;--ink-2:#525252;--ink-3:#6f6f6f;
+  --blue:#0f62fe;--blue-weak:#edf5ff;--rec:#da1e28;--rec-bg:#fff1f1;
+  --warnc:#8a5200;--warn-bg:#fdf1de;--ok:#198038;--ok-bg:#defbe6;--persona:#007d79;--persona-bg:#d9fbfb;
+  --r:2px;--r-tag:4px;
+}
+*,*::before,*::after{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{background:var(--bg);color:var(--ink);font-family:var(--font-sans);font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased;overflow:hidden}
+.num{font-family:var(--font-num);font-variant-numeric:tabular-nums}
+button{font:inherit;color:inherit;cursor:pointer;border:0;background:none}button:active{transform:scale(.98)}
+h1,h2,h3,h4,p{margin:0}svg{display:block}
+::-webkit-scrollbar{width:9px;height:9px}::-webkit-scrollbar-thumb{background:#c6c6c6}
+:where(button,input,select):focus-visible{outline:2px solid var(--blue);outline-offset:1px}
+@keyframes blink{50%{opacity:.25}}
+
+.app{display:grid;grid-template-columns:200px 1fr;height:100vh}
+.sidebar{background:var(--surface);border-right:1px solid var(--line);padding:8px 0}
+.brand{display:flex;align-items:center;gap:9px;padding:12px 16px;border-bottom:1px solid var(--line)}
+.brand .logo{width:24px;height:24px;background:var(--ink);color:#fff;display:grid;place-items:center;font-size:11px}
+.brand b{font-size:13.5px;font-weight:600}
+.nav{display:flex;flex-direction:column;padding-top:6px}
+.nav a{display:flex;align-items:center;gap:11px;padding:9px 16px;color:var(--ink-2);font-size:13px;border-left:3px solid transparent}
+.nav a svg{width:16px;height:16px;stroke:currentColor;stroke-width:1.5;fill:none}
+.nav a.on{background:var(--surface-hover);color:var(--ink);border-left-color:var(--rec);font-weight:600}
+.grp{font-size:10px;font-weight:600;color:var(--ink-3);letter-spacing:.08em;padding:12px 16px 5px}
+
+.main{display:flex;flex-direction:column;min-width:0;height:100vh}
+.topbar{height:46px;flex:none;background:var(--surface);border-bottom:1px solid var(--line);display:flex;align-items:center;gap:10px;padding:0 16px}
+.topbar h2{font-size:14px;font-weight:600}.spacer{flex:1}.hint{font-size:11px;color:var(--ink-3)}
+.content{flex:1;min-height:0;overflow:hidden;padding:12px 16px;display:flex;flex-direction:column}
+
+.rec-header{display:flex;align-items:center;gap:12px;background:var(--rec-bg);border:1px solid var(--rec);padding:8px 14px;flex:none}
+.rec-header .live{font-size:14px;font-weight:700;color:var(--rec);display:flex;align-items:center;gap:8px}
+.rec-header .live .dot{width:9px;height:9px;border-radius:50%;background:var(--rec);animation:blink 1s steps(2,start) infinite}
+.vu{width:64px;height:6px;background:#f3c9cb;border-radius:3px;overflow:hidden}.vu i{display:block;height:100%;width:60%;background:var(--rec)}
+.wave{display:flex;align-items:center;gap:2px;height:22px}
+.wave span{width:2.5px;background:var(--rec);opacity:.6;animation:w 1s ease-in-out infinite}
+@keyframes w{0%,100%{height:4px}50%{height:20px}}
+.rec-header .time{font-size:19px;font-weight:600;color:var(--rec)}
+.costmeter{display:flex;flex-direction:column;align-items:flex-end;margin-left:auto}
+.costbtn{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--rec);background:#fff;color:var(--rec);padding:4px 9px;font-size:12px;font-weight:600}
+.costbreak{display:none;margin-top:4px;background:#fff;border:1px solid var(--line);padding:8px 10px;font-size:11px;color:var(--ink-2);width:270px}
+.costbreak.on{display:block}.costbreak .r{display:flex;justify-content:space-between;padding:1px 0}
+.costbreak .tot{border-top:1px solid var(--line);margin-top:4px;padding-top:4px;font-weight:700;color:var(--ink)}
+
+.strip{display:flex;align-items:center;gap:8px;background:var(--surface);border:1px solid var(--line);border-top:0;padding:7px 14px;flex:none}
+.strip .lab{font-size:11px;color:var(--ink-3);font-weight:600}
+.tag{display:inline-flex;align-items:center;gap:5px;padding:2px 8px;font-size:11px;border:1px solid var(--line-strong);color:var(--ink-2);background:#fff;border-radius:var(--r-tag)}
+.linkbtn{font-size:11.5px;color:var(--blue);font-weight:600;margin-left:auto}
+.setpanel{display:none;background:var(--surface);border:1px solid var(--line);border-top:0;padding:12px 14px;flex:none}
+.setpanel.on{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px 18px}
+.setpanel .f{font-size:11.5px}.setpanel .f .k{color:var(--ink-3);margin-bottom:2px}.setpanel .f .v{color:var(--ink);font-weight:500}
+.connbar{display:flex;align-items:center;gap:8px;background:var(--warn-bg);border:1px solid #f0d9a8;border-top:0;padding:5px 14px;font-size:11.5px;color:var(--warnc);flex:none}
+
+.workspace{display:grid;grid-template-columns:1fr 340px;gap:12px;flex:1;min-height:0;margin-top:12px;transition:grid-template-columns .18s}
+.workspace.railed{grid-template-columns:1fr 42px}
+.pane{min-width:0;display:flex;flex-direction:column;min-height:0}
+.tsc-head{display:flex;align-items:center;gap:8px;padding:7px 12px;background:var(--surface);border:1px solid var(--line);border-bottom:0;flex:none}
+.tsc-head .cnt{font-size:11px;color:var(--ink-3);font-weight:600}
+.seg{display:inline-flex;border:1px solid var(--line-strong);overflow:hidden}
+.seg button{padding:3px 9px;font-size:11px;color:var(--ink-2);border-right:1px solid var(--line-strong)}
+.seg button:last-child{border-right:0}.seg button.on{background:var(--ink);color:#fff}
+.chip{display:inline-flex;align-items:center;gap:4px;font-size:10.5px;padding:1px 7px;border-radius:var(--r-tag);font-weight:600}
+.chip.snd{background:var(--ok-bg);color:var(--ok)}.chip.snd .d{width:5px;height:5px;border-radius:50%;background:var(--ok)}
+.chip.room{background:var(--blue-weak);color:var(--blue)}
+.transcript{flex:1;min-height:0;overflow:auto;background:var(--surface);border:1px solid var(--line);padding:10px 14px}
+.line{padding:7px 0;border-bottom:1px solid var(--surface-2)}
+.line .spk{font-size:10.5px;font-weight:600;color:var(--blue);margin-bottom:2px}
+.line .orig{color:var(--ink)}.line .trans{color:var(--ink-2);font-size:12px;margin-top:2px;padding-left:10px;border-left:2px solid var(--line)}
+.line.prov .orig{color:var(--ink-3);font-style:italic}
+.jumppill{position:sticky;bottom:6px;margin:8px auto 0;display:block;width:max-content;background:var(--ink);color:#fff;font-size:11.5px;padding:5px 12px;border-radius:999px}
+.controls{display:flex;align-items:center;gap:9px;padding:10px 0 0;flex:none}
+.btn{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line-strong);background:#fff;padding:7px 13px;font-size:12.5px;font-weight:500;color:var(--ink)}
+.btn:hover{background:var(--surface-hover)}.btn.danger{background:var(--rec);border-color:var(--rec);color:#fff}
+.btn.warn{background:var(--warn-bg);border-color:#f0d9a8;color:var(--warnc)}.btn.sm{padding:4px 9px;font-size:11.5px}
+.btn.link{border:0;color:var(--rec);padding:7px 4px}
+
+/* inspector calm */
+.inspector{background:var(--surface);border:1px solid var(--line);display:flex;flex-direction:column;min-height:0;overflow:hidden}
+.insp-head{display:flex;align-items:center;gap:6px;padding:6px 8px 6px 11px;border-bottom:1px solid var(--line);flex:none}
+.itabs{display:flex;gap:2px}
+.itabs button{padding:6px 10px;font-size:12px;font-weight:600;color:var(--ink-3);border-bottom:2px solid transparent;position:relative}
+.itabs button.on{color:var(--ink);border-bottom-color:var(--blue)}
+.badge-n{background:var(--rec);color:#fff;border-radius:999px;font-size:10px;padding:0 6px;font-weight:700}
+.railbtn{margin-left:auto;color:var(--ink-3);padding:4px}
+.full{display:flex;flex-direction:column;min-height:0;flex:1}
+.ibody{flex:1;min-height:0;overflow:auto;padding:10px}
+.ifoot{flex:none;border-top:1px solid var(--line);padding:8px 10px;background:var(--surface-2)}
+.pinlab{font-size:10.5px;font-weight:700;color:var(--rec);display:flex;align-items:center;gap:5px;margin:2px 0 6px}
+/* collapsed one-line card chip */
+.pchip{display:flex;align-items:center;gap:7px;border:1px solid var(--line);border-left:3px solid var(--line-strong);padding:7px 9px;margin-bottom:6px;cursor:pointer;background:#fff}
+.pchip:hover{background:var(--surface-2)}
+.pchip .pi{font-size:12px}
+.pchip .pl{font-weight:600;font-size:11.5px;white-space:nowrap}
+.pchip .rk{font-size:9.5px;font-weight:700;padding:0 5px;border-radius:var(--r-tag)}
+.rk.info{background:#e5f3ff;color:#0043ce}.rk.view{background:#f6f2ff;color:#8a3ffc}.rk.crit{background:var(--warn-bg);color:var(--warnc)}
+.pchip .one{flex:1;color:var(--ink-2);font-size:11.5px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pchip .cv{color:var(--ink-3);flex:none}
+.pchip.pin{border-color:var(--rec);border-left-color:var(--rec);background:var(--rec-bg)}
+.pchip.pin .pl{color:var(--rec)}
+.pfull{display:none;border:1px solid var(--persona);border-top:0;border-left:3px solid var(--persona);padding:9px 10px;margin:-6px 0 6px;background:var(--persona-bg)}
+.pfull.pin{border-color:var(--rec);border-left-color:var(--rec);background:var(--rec-bg)}
+.pfull.on{display:block}
+.pfull .body{font-size:12px;color:var(--ink)}
+.pfull .cite{margin-top:5px;font-size:11px;color:var(--ink-2);border-left:2px solid var(--line-strong);padding-left:7px}
+.pfull .miss{display:inline-block;margin-top:6px;color:var(--rec);font-size:10px;font-weight:700}
+.pfull h4{font-size:11px;color:var(--ink-3);margin:6px 0 2px;font-weight:600}
+.pfull ul{margin:0;padding-left:15px;font-size:11.5px}
+.pfull .row{display:flex;align-items:center;gap:6px;margin-top:8px;flex-wrap:wrap}
+.pfull .cost{margin-left:auto;font-size:10px;color:var(--ink-3);font-family:var(--font-num)}
+.draftlbl{font-size:9.5px;font-weight:600;color:var(--persona);background:#fff;border:1px solid var(--persona);border-radius:var(--r-tag);padding:0 5px}
+.note{border:1px solid var(--line);padding:8px 10px;margin-bottom:7px}
+.note .h{display:flex;align-items:center;gap:6px;font-weight:600;font-size:12px}
+.note .wl{color:var(--blue)}.note .src{margin-left:auto;font-size:10px;color:var(--ink-3)}
+.note .ev{margin-top:4px;font-size:11.5px;color:var(--ink-2)}
+.note .row{display:flex;gap:6px;margin-top:6px}
+.statuschip{font-size:10.5px;color:var(--warnc);background:var(--warn-bg);border:1px solid #f0d9a8;padding:3px 8px;margin-bottom:8px}
+.ifoot .row{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+/* rail */
+.rail{display:none;flex-direction:column;align-items:center;gap:10px;padding:8px 0;flex:1}
+.workspace.railed .full{display:none}
+.workspace.railed .rail{display:flex}
+.rail button{writing-mode:vertical-rl;font-size:11px;color:var(--ink-2);padding:8px 2px;display:flex;align-items:center;gap:6px}
+.rail .rn{background:var(--rec);color:#fff;border-radius:999px;font-size:9px;padding:1px 4px;font-weight:700;writing-mode:horizontal-tb}
+.rail .rn.blue{background:var(--blue)}
+</style>
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar">
+    <div class="brand"><div class="logo">◈</div><b>AI Minutes</b></div>
+    <nav class="nav">
+      <a><svg viewBox="0 0 16 16"><path d="M2 4h12M2 8h12M2 12h12"/></svg>라이브러리</a>
+      <a class="on"><svg viewBox="0 0 16 16"><path d="M8 3v10M3 8h10"/></svg>새로 만들기</a>
+      <div class="grp">지식</div>
+      <a><svg viewBox="0 0 16 16"><rect x="3" y="2" width="10" height="12"/><path d="M5.5 5.5h5M5.5 8h5M5.5 10.5h3"/></svg>회의 상세</a>
+      <a><svg viewBox="0 0 16 16"><circle cx="4" cy="4" r="2"/><circle cx="12" cy="6" r="2"/><circle cx="7" cy="12" r="2"/><path d="M5.5 5 10.5 5.2"/></svg>지식</a>
+      <div class="grp">운영</div>
+      <a><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/><path d="M8 5v3.2L10 10"/></svg>준비 · 비서</a>
+      <a><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="2.2"/><path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2"/></svg>설정</a>
+    </nav>
+  </aside>
+  <div class="main">
+    <div class="topbar"><h2>녹음 (실시간)</h2><span class="hint">IBM 파트너십 킥오프 · 영어 → 한국어</span><div class="spacer"></div><span class="hint">차분한 기본 · 프리뷰 v0.4</span></div>
+    <div class="content">
+      <div class="rec-header">
+        <span class="live"><span class="dot"></span>녹음 중</span>
+        <div class="vu"><i></i></div>
+        <div class="wave"><span></span><span style="animation-delay:.1s"></span><span style="animation-delay:.2s"></span><span style="animation-delay:.05s"></span><span style="animation-delay:.15s"></span><span style="animation-delay:.25s"></span></div>
+        <span class="time num">02:17</span>
+        <div class="costmeter">
+          <button class="costbtn" onclick="document.getElementById('cb').classList.toggle('on')">💵 ~$0.027 <span style="font-weight:400">(보정 켜짐)</span> ▾</button>
+          <div class="costbreak" id="cb"><div class="r"><span>1차 인식</span><span class="num">$0.006/분</span></div><div class="r"><span>+ 문장 보정</span><span class="num">$0.003/분</span></div><div class="r"><span>+ 번역</span><span class="num">$0.004/분</span></div><div class="r"><span>+ 진행 페르소나</span><span class="num">$0.002/분</span></div><div class="r"><span>+ 개입 2건</span><span class="num">$0.003</span></div><div class="r"><span>+ 완료 시 생성</span><span class="num">$0.012</span></div><div class="r tot"><span>합계 (대략치)</span><span class="num">~$0.027</span></div></div>
+        </div>
+      </div>
+      <div class="strip"><span class="lab">세션 설정</span><span class="tag">영어 → 한국어</span><span class="tag">회의실 마이크</span><span class="tag">화자분리</span>
+        <button class="linkbtn" onclick="var p=document.getElementById('sp');p.classList.toggle('on');this.textContent=p.classList.contains('on')?'설정 숨기기 ▲':'설정 보기 ▾'">설정 보기 ▾</button></div>
+      <div class="setpanel" id="sp">
+        <div class="f"><div class="k">세션 제목</div><div class="v">IBM 파트너십 킥오프</div></div>
+        <div class="f"><div class="k">참석자</div><div class="v">심아름, 김영희, 이철수</div></div>
+        <div class="f"><div class="k">주제 / 맥락</div><div class="v">큐비트 라우팅 · 파트너 협업</div></div>
+        <div class="f"><div class="k">처리 모드</div><div class="v">2. 영어 회의 (→한국어)</div></div>
+        <div class="f"><div class="k">음성 인식</div><div class="v">화자분리 (이번 녹음만)</div></div>
+        <div class="f"><div class="k">소리 잡는 법</div><div class="v">회의실 마이크</div></div>
+        <div class="f" style="grid-column:1/-1;color:var(--ink-3)">녹음 중에는 읽기 전용 — 변경하려면 정지 후 새 세션에서.</div>
+      </div>
+      <div class="connbar">ⓘ 표시가 몇 초 뒤에 나타날 수 있어요 · 연결이 끊겨도 받은 오디오까지는 자동 저장됩니다.</div>
+
+      <div class="workspace" id="ws">
+        <div class="pane">
+          <div class="tsc-head"><span class="cnt">전사 <b>128</b>줄</span>
+            <div class="seg"><button class="on">원문+번역</button><button>원문</button><button>번역</button></div>
+            <span class="chip snd" style="margin-left:auto"><span class="d"></span>소리 감지 중</span><span class="chip room">🏢 회의실</span></div>
+          <div class="transcript">
+            <div class="line"><div class="spk">화자 1</div><div class="orig">The AI race in Korea has begun; the core is a new class of agent technology.</div><div class="trans">한국에서 AI 경쟁이 시작됐고, 핵심은 새로운 종류의 에이전트 기술입니다.</div></div>
+            <div class="line"><div class="spk">화자 2</div><div class="orig">Implementing these qubits doesn't look easy — which technologies are in use now?</div><div class="trans">이 큐비트를 구현하는 게 쉬워 보이지 않는데, 지금 어떤 기술들이 쓰이나요?</div></div>
+            <div class="line"><div class="spk">화자 1</div><div class="orig">Superconducting, trapped-ion, photonic, and neutral-atom — each differs in scalability and gate speed.</div><div class="trans">초전도·이온트랩·광자·중성원자 방식이 있고, 확장성과 게이트 속도에서 각각 다릅니다.</div></div>
+            <div class="line prov"><div class="spk">…</div><div class="orig">Meanwhile SpaceX Q2 revenue rose 12% to 7.8 billion dollars</div><div class="trans">번역 중…</div></div>
+            <button class="jumppill">↓ 최신 전사로 (새 3줄)</button>
+          </div>
+          <div class="controls"><button class="btn warn">⏸ 일시정지</button><button class="btn danger">■ 정지 &amp; 회의록 생성</button><button class="btn link">저장하지 않고 취소</button></div>
+        </div>
+
+        <aside class="inspector">
+          <div class="insp-head">
+            <div class="itabs"><button class="on" onclick="itab(this,0)">관련 노트 3</button><button onclick="itab(this,1)">진행 도우미 <span class="badge-n">2</span></button></div>
+            <button class="railbtn" title="패널 접기" onclick="document.getElementById('ws').classList.add('railed')">»</button>
+          </div>
+
+          <div class="full">
+            <div class="ibody" id="ib0">
+              <div class="note"><div class="h">📄 <span class="wl">[[03_QML_관측량이론]]</span><span class="src">노트</span></div><div class="ev">“큐비트는 블로흐 구 위의 점…” Stage 0</div><div class="row"><button class="btn sm">근거 보기</button><button class="btn sm">이번 회의 끔</button></div></div>
+              <div class="note"><div class="h">🎓 <span class="wl">[[Pozzi 2020 RL큐비트라우팅]]</span><span class="src">논문</span></div><div class="ev">강화학습 기반 큐비트 라우팅 — 주제 매칭.</div><div class="row"><button class="btn sm">근거 보기</button><button class="btn sm">이번 회의 끔</button></div></div>
+              <div class="note"><div class="h">🌐 <span class="wl">중성원자 큐비트 확장성</span><span class="src">웹</span></div><div class="ev">발화 “neutral-atom”에 대한 웹 보완.</div><div class="row"><button class="btn sm">근거 보기</button></div></div>
+            </div>
+
+            <div class="ibody" id="ib1" style="display:none">
+              <div class="pinlab">🔴 확인 필요 1</div>
+              <!-- pinned fact-check, collapsed by default -->
+              <div class="pchip pin" onclick="ex('f1')"><span class="pi">🔍</span><span class="pl">팩트체커</span><span class="rk crit">지적</span><span class="one">SpaceX 78억 달러 — 주제와 무관, 미검증</span><span class="cv">▾</span></div>
+              <div class="pfull pin" id="f1"><div class="body">“SpaceX 2분기 78억 달러”는 회의 주제(양자)와 무관 — 사내·웹 확인이 안 됐습니다.</div><div class="cite">발화: “…SpaceX Q2 revenue rose 12%…”</div><span class="miss">⚠ 미검증(웹 검증 없이 사내 자료만)</span><div class="row"><button class="btn sm">⟲ 발화 보기</button><button class="btn sm">✓ 확인</button><button class="btn sm">✕ 닫기</button><span class="cost">$0.001</span></div></div>
+
+              <div style="font-size:10.5px;color:var(--ink-3);font-weight:700;margin:10px 0 6px">제안</div>
+              <div class="pchip" style="border-left-color:#8a3ffc" onclick="ex('f2')"><span class="pi">🧭</span><span class="pl">도메인 전문가</span><span class="rk view">관점</span><span class="one">로드맵 우선 방식 결정 필요</span><span class="cv">▾</span></div>
+              <div class="pfull" id="f2"><div class="body">4가지 방식을 언급하셨는데, 우리 로드맵은 어느 방식 우선인지 결정이 필요합니다.</div><div class="cite">대조: [[회사_파트너_위키]] — IBM(초전도) 진행 중</div><div class="row"><button class="btn sm">⟲ 발화 보기</button><button class="btn sm">✓ 확인</button><button class="btn sm">✕ 닫기</button><span class="cost">$0.002</span></div></div>
+
+              <div class="pchip" style="border-left-color:var(--persona)" onclick="ex('f3')"><span class="pi">📋</span><span class="pl">중간 요약</span><span class="draftlbl">지금 정리</span><span class="one">논점·결정·미결 3건</span><span class="cv">▾</span></div>
+              <div class="pfull" id="f3"><h4>논점</h4><ul><li>큐비트 구현 4방식의 트레이드오프</li></ul><h4>결정</h4><ul><li>초전도(IBM) 우선 방향 공감대</li></ul><h4>미결 질문</h4><ul><li>중성원자 방식 사내 PoC 여부</li></ul></div>
+            </div>
+
+            <div class="ifoot">
+              <div class="statuschip">⚠ 채널 예산 $0.10 중 $0.03 사용 — 한도 도달 시 개입이 멈춥니다</div>
+              <div class="row"><button class="btn sm">지금 점검 <span class="badge-n">1</span></button><button class="btn sm">지금 정리</button><button class="btn sm" style="margin-left:auto">이번 회의 끔</button></div>
+            </div>
+          </div>
+
+          <!-- railed (collapsed) state -->
+          <div class="rail">
+            <button onclick="document.getElementById('ws').classList.remove('railed')" title="패널 펼치기">«</button>
+            <button onclick="document.getElementById('ws').classList.remove('railed')">관련 노트 <span class="rn blue">3</span></button>
+            <button onclick="document.getElementById('ws').classList.remove('railed')">진행 도우미 <span class="rn">2</span></button>
+          </div>
+        </aside>
+      </div>
+    </div>
+  </div>
+</div>
+<script>
+function itab(b,i){document.querySelectorAll('.itabs button').forEach(x=>x.classList.remove('on'));b.classList.add('on');document.getElementById('ib0').style.display=i===0?'block':'none';document.getElementById('ib1').style.display=i===1?'block':'none';}
+function ex(id){var e=document.getElementById(id);e.classList.toggle('on');var chip=e.previousElementSibling;var cv=chip.querySelector('.cv');if(cv)cv.textContent=e.classList.contains('on')?'▴':'▾';}
+</script>
+</body>
+</html>

@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI Minutes — 설정 + 온보딩 v1</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap');
+:root{
+  --font-sans:"IBM Plex Sans KR","Malgun Gothic",system-ui,"Segoe UI",sans-serif;
+  --font-num:"IBM Plex Mono",ui-monospace,"Consolas",monospace;
+  --bg:#f4f4f4;--surface:#fff;--surface-2:#f4f4f4;--surface-hover:#e8e8e8;
+  --line:#e0e0e0;--line-strong:#c6c6c6;--ink:#161616;--ink-2:#525252;--ink-3:#6f6f6f;
+  --blue:#0f62fe;--blue-weak:#edf5ff;--rec:#da1e28;--rec-bg:#fff1f1;
+  --warnc:#8a5200;--warn-bg:#fdf1de;--ok:#198038;--ok-bg:#defbe6;--persona:#007d79;
+  --r:2px;--r-tag:4px;
+}
+*,*::before,*::after{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{background:var(--bg);color:var(--ink);font-family:var(--font-sans);font-size:13px;line-height:1.45;-webkit-font-smoothing:antialiased;overflow:hidden}
+.num{font-family:var(--font-num)}
+button{font:inherit;color:inherit;cursor:pointer;border:0;background:none}button:active{transform:scale(.98)}
+h1,h2,h3,h4,p{margin:0}svg{display:block}
+::-webkit-scrollbar{width:9px;height:9px}::-webkit-scrollbar-thumb{background:#c6c6c6}
+:where(button,input,select,textarea):focus-visible{outline:2px solid var(--blue);outline-offset:1px}
+
+.app{display:grid;grid-template-columns:200px 1fr;height:100vh}
+.sidebar{background:var(--surface);border-right:1px solid var(--line);padding:8px 0}
+.brand{display:flex;align-items:center;gap:9px;padding:12px 16px;border-bottom:1px solid var(--line)}
+.brand .logo{width:24px;height:24px;background:var(--ink);color:#fff;display:grid;place-items:center;font-size:11px}
+.brand b{font-size:13.5px;font-weight:600}
+.nav{display:flex;flex-direction:column;padding-top:6px}
+.nav a{display:flex;align-items:center;gap:11px;padding:9px 16px;color:var(--ink-2);font-size:13px;border-left:3px solid transparent}
+.nav a svg{width:16px;height:16px;stroke:currentColor;stroke-width:1.5;fill:none}
+.nav a.on{background:var(--surface-hover);color:var(--ink);border-left-color:var(--blue);font-weight:600}
+.grp{font-size:10px;font-weight:600;color:var(--ink-3);letter-spacing:.08em;padding:12px 16px 5px}
+
+.main{display:flex;flex-direction:column;min-width:0;height:100vh}
+.topbar{height:46px;flex:none;background:var(--surface);border-bottom:1px solid var(--line);display:flex;align-items:center;gap:10px;padding:0 16px}
+.topbar h2{font-size:14px;font-weight:600}.spacer{flex:1}.hint{font-size:11px;color:var(--ink-3)}
+.toolrow{flex:none;background:var(--surface);border-bottom:1px solid var(--line);display:flex;align-items:center;gap:8px;padding:8px 16px}
+.search{flex:1;max-width:340px;border:1px solid var(--line-strong);border-bottom:1px solid var(--ink-2);background:#fff;padding:6px 10px;font-size:12.5px}
+.content{flex:1;min-height:0;overflow:auto;padding:14px 16px 80px}
+
+.tierhead{font-size:11px;font-weight:700;color:var(--ink-3);letter-spacing:.04em;margin:14px 0 8px;display:flex;align-items:center;gap:8px}
+.tierhead:first-child{margin-top:0}
+.tierhead .ln{flex:1;height:1px;background:var(--line)}
+.card{background:var(--surface);border:1px solid var(--line);margin-bottom:10px}
+.chead{display:flex;align-items:center;gap:8px;padding:11px 14px;cursor:pointer}
+.chead h3{font-size:13.5px;font-weight:600}
+.chead .desc{font-size:11px;color:var(--ink-3);font-weight:400}
+.chead .cv{margin-left:auto;color:var(--ink-3)}
+.cbody{border-top:1px solid var(--line);padding:8px 14px 12px}
+.cbody.collapsed{display:none}
+.frow{display:grid;grid-template-columns:220px 1fr;gap:12px;padding:9px 0;border-bottom:1px solid var(--surface-2)}
+.frow:last-child{border-bottom:0}
+.frow .lab{font-size:12.5px}.frow .lab .rq{color:var(--rec)}
+.frow .lab .d{font-size:11px;color:var(--ink-3);margin-top:2px}
+.frow .ctl{display:flex;align-items:center;gap:8px}
+.input{border:1px solid var(--line-strong);border-bottom:1px solid var(--ink-2);background:#fff;padding:6px 10px;font-size:12.5px;color:var(--ink);font-family:inherit;width:100%;max-width:340px}
+select.input{max-width:280px}
+.tg{width:38px;height:20px;border-radius:999px;background:var(--line-strong);position:relative;flex:none;transition:background .15s}
+.tg.on{background:var(--blue)}
+.tg i{position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;background:#fff;transition:left .15s}
+.tg.on i{left:20px}
+.btn{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line-strong);background:#fff;padding:6px 11px;font-size:12.5px;font-weight:500;color:var(--ink)}
+.btn:hover{background:var(--surface-hover)}.btn.pri{background:var(--blue);border-color:var(--blue);color:#fff}
+.btn.sm{padding:4px 9px;font-size:11.5px}.btn.ghost{border-color:var(--line)}
+.testrow{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}
+.tag{display:inline-flex;align-items:center;gap:5px;padding:1px 7px;font-size:10.5px;border-radius:var(--r-tag);font-weight:600}
+.tag.core{background:var(--rec-bg);color:var(--rec)}.tag.common{background:var(--blue-weak);color:var(--blue)}.tag.adv{background:var(--surface-2);color:var(--ink-3);border:1px solid var(--line)}
+.savebar{position:fixed;left:200px;right:0;bottom:0;background:var(--surface);border-top:1px solid var(--line);display:flex;align-items:center;gap:10px;padding:9px 16px}
+.savebar .hint{flex:1}
+.persona-tbl{width:100%;border-collapse:collapse;margin-top:4px}
+.persona-tbl td{padding:6px 4px;border-bottom:1px solid var(--surface-2);font-size:12px}
+.lvls{display:inline-flex;border:1px solid var(--line-strong)}
+.lvls button{width:24px;height:22px;font-size:11px;color:var(--ink-2);border-right:1px solid var(--line-strong)}
+.lvls button:last-child{border-right:0}.lvls button.on{background:var(--ink);color:#fff}.lvls button.lock{color:var(--ink-3);background:var(--surface-2);cursor:not-allowed}
+.riskb{font-size:9.5px;font-weight:700;padding:0 5px;border-radius:var(--r-tag)}
+.riskb.lo{background:#e5f3ff;color:#0043ce}.riskb.mi{background:#f6f2ff;color:#8a3ffc}.riskb.hi{background:var(--warn-bg);color:var(--warnc)}
+.preset{display:flex;gap:6px;margin-bottom:8px}
+
+/* onboarding modal */
+.overlay{position:fixed;inset:0;background:rgba(0,0,0,.4);display:none;align-items:center;justify-content:center;z-index:50}
+.overlay.on{display:flex}
+.modal{width:460px;max-width:92vw;background:#fff;border:1px solid var(--line-strong)}
+.mhead{display:flex;align-items:center;gap:9px;padding:14px 16px;border-bottom:1px solid var(--line)}
+.mhead .logo{width:26px;height:26px;background:var(--ink);color:#fff;display:grid;place-items:center}
+.mhead b{font-size:14px}.mhead .step{margin-left:auto;font-size:11px;color:var(--ink-3)}
+.mprog{height:3px;background:var(--surface-hover)}.mprog i{display:block;height:100%;width:20%;background:var(--ok)}
+.mbody{padding:16px}.mbody h4{font-size:13.5px;margin-bottom:8px}
+.mbody p{font-size:12px;color:var(--ink-2);margin-bottom:10px}
+.mfoot{display:flex;align-items:center;gap:8px;padding:12px 16px;border-top:1px solid var(--line)}
+.mfoot .skip{font-size:11.5px;color:var(--ink-3)}
+</style>
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar">
+    <div class="brand"><div class="logo">◈</div><b>AI Minutes</b></div>
+    <nav class="nav">
+      <a><svg viewBox="0 0 16 16"><path d="M2 4h12M2 8h12M2 12h12"/></svg>라이브러리</a>
+      <a><svg viewBox="0 0 16 16"><path d="M8 3v10M3 8h10"/></svg>새로 만들기</a>
+      <div class="grp">지식</div>
+      <a><svg viewBox="0 0 16 16"><rect x="3" y="2" width="10" height="12"/><path d="M5.5 5.5h5M5.5 8h5M5.5 10.5h3"/></svg>회의 상세</a>
+      <a><svg viewBox="0 0 16 16"><circle cx="4" cy="4" r="2"/><circle cx="12" cy="6" r="2"/><circle cx="7" cy="12" r="2"/><path d="M5.5 5 10.5 5.2"/></svg>지식</a>
+      <div class="grp">운영</div>
+      <a><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/><path d="M8 5v3.2L10 10"/></svg>준비 · 비서</a>
+      <a class="on"><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="2.2"/><path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2"/></svg>설정</a>
+    </nav>
+  </aside>
+  <div class="main">
+    <div class="topbar"><h2>설정</h2><div class="spacer"></div><span class="hint">완성형 프리뷰 v1 · Carbon+Linear</span></div>
+    <div class="toolrow">
+      <input class="search" placeholder="🔍 설정 검색 — 예: 노트 폴더, 페르소나, SSL" oninput="filter(this.value)">
+      <div class="spacer"></div>
+      <button class="btn sm ghost" onclick="document.getElementById('ob').classList.add('on')">설정 마법사 다시 열기</button>
+    </div>
+    <div class="content" id="settings">
+
+      <!-- ===== 필수 ===== -->
+      <div class="tierhead"><span>꼭 확인</span><span class="tag core">필수</span><span class="ln"></span></div>
+
+      <div class="card" data-k="api openai anthropic groq ssl 키">
+        <div class="chead" onclick="tog(this)"><h3>API 키</h3><span class="desc">이 PC에만 저장 · ●●● 로 가려짐</span><span class="cv">▾</span></div>
+        <div class="cbody">
+          <div class="frow"><div class="lab">OpenAI API 키 <span class="rq">*</span><div class="d">음성 인식(STT)과 회의록 생성에 사용.</div></div><div class="ctl"><input class="input" type="password" value="●●●●●●●●●●●●" ><button class="btn sm">👁</button></div></div>
+          <div class="frow"><div class="lab">Anthropic(Claude) API 키 <span class="d">(선택)</span><div class="d">회의록 생성 AI를 Claude로 쓸 때.</div></div><div class="ctl"><input class="input" type="password" placeholder="sk-ant-..."></div></div>
+          <div class="frow"><div class="lab">Groq API 키 <span class="d">(선택·STT 폴백)</span><div class="d">OpenAI STT 실패 시 다른 벤더로 자동 백업.</div></div><div class="ctl"><input class="input" type="password" placeholder="gsk_..."></div></div>
+          <div class="frow"><div class="lab">SSL 인증서 검증<div class="d">기본 켜짐(권장). 사내망 인증서 오류 시에만 끄기.</div></div><div class="ctl"><span class="tg on" onclick="this.classList.toggle('on')"><i></i></span></div></div>
+          <div class="testrow"><button class="btn sm">OpenAI 연결 테스트</button><button class="btn sm">Claude 연결 테스트</button></div>
+        </div>
+      </div>
+
+      <div class="card" data-k="모델 llm stt 번역 폴백 groq">
+        <div class="chead" onclick="tog(this)"><h3>모델</h3><span class="desc">회의록 AI · 음성 인식 · 번역</span><span class="cv">▾</span></div>
+        <div class="cbody">
+          <div class="frow"><div class="lab">회의록 생성 AI</div><div class="ctl"><select class="input"><option>GPT (OpenAI)</option><option>Claude (Anthropic)</option></select></div></div>
+          <div class="frow"><div class="lab">음성 인식(STT) 모델<div class="d">평문 라벨: 저렴·빠름 / 고정확 / 화자분리 / 구형·안정</div></div><div class="ctl"><select class="input"><option>고정확 (gpt-4o-transcribe)</option><option>저렴·빠름</option><option>화자분리</option><option>구형·안정</option></select></div></div>
+          <div class="frow"><div class="lab">STT 1차 폴백(OpenAI)</div><div class="ctl"><select class="input"><option>gpt-4o-transcribe — 고정확</option><option>gpt-4o-mini — 저렴</option></select></div></div>
+          <div class="frow"><div class="lab">Groq 대체 전사(다른 벤더)<div class="d">국외 이전·위탁 검토 후 켜기. 기본 꺼짐.</div></div><div class="ctl"><span class="tg" onclick="this.classList.toggle('on')"><i></i></span></div></div>
+          <div class="frow"><div class="lab">번역 모델</div><div class="ctl"><select class="input"><option>gpt-4o-mini — 저렴·빠름 (추천)</option><option>gpt-4o — 고품질</option></select></div></div>
+        </div>
+      </div>
+
+      <div class="card" data-k="저장 폴더 유형 프롬프트">
+        <div class="chead" onclick="tog(this)"><h3>저장 위치 · 회의록 형식</h3><span class="cv">▾</span></div>
+        <div class="cbody">
+          <div class="frow"><div class="lab">결과물 저장 폴더</div><div class="ctl"><input class="input" placeholder="기본값 ./output (예: D:\Minutes)"><button class="btn sm">찾아보기</button></div></div>
+          <div class="frow"><div class="lab">기본 문서 유형</div><div class="ctl"><select class="input"><option>회의</option><option>세미나</option><option>강의</option><option>메모</option></select></div></div>
+          <div class="frow"><div class="lab">AI 프롬프트 폴더 <span class="d">(고급)</span></div><div class="ctl"><input class="input" value="prompts"></div></div>
+        </div>
+      </div>
+
+      <!-- ===== 자주 쓰는 ===== -->
+      <div class="tierhead"><span>자주 쓰는</span><span class="tag common">선택</span><span class="ln"></span></div>
+
+      <div class="card" data-k="지출 한도 비용 캡">
+        <div class="chead" onclick="tog(this)"><h3>지출 한도</h3><span class="desc">월·파일당 상한</span><span class="cv">▸</span></div>
+        <div class="cbody collapsed">
+          <div class="frow"><div class="lab">월 지출 한도 ($)<div class="d">0이면 제한 없음.</div></div><div class="ctl"><input class="input num" style="max-width:120px" value="0"></div></div>
+          <div class="frow"><div class="lab">파일당 지출 한도 ($)</div><div class="ctl"><input class="input num" style="max-width:120px" value="0"></div></div>
+        </div>
+      </div>
+
+      <div class="card" data-k="자동 실행 일시정지">
+        <div class="chead" onclick="tog(this)"><h3>자동 실행</h3><span class="cv">▸</span></div>
+        <div class="cbody collapsed"><div class="frow"><div class="lab">모든 자동 실행 일시 정지<div class="d">자리 비울 때 예상 못 한 비용 방지.</div></div><div class="ctl"><span class="tg" onclick="this.classList.toggle('on')"><i></i></span></div></div></div>
+      </div>
+
+      <div class="card" data-k="이메일 smtp gmail 발송">
+        <div class="chead" onclick="tog(this)"><h3>이메일 자동 발송</h3><span class="desc">선택</span><span class="cv">▸</span></div>
+        <div class="cbody collapsed">
+          <div class="frow"><div class="lab">보내는 메일 주소</div><div class="ctl"><input class="input" placeholder="myid@gmail.com"></div></div>
+          <div class="frow"><div class="lab">받는 메일 주소</div><div class="ctl"><input class="input" placeholder="team@company.com"></div></div>
+          <div class="frow"><div class="lab">SMTP 서버 · 포트 <span class="d">(보통 비움)</span></div><div class="ctl"><input class="input" placeholder="자동 감지" style="max-width:200px"><input class="input num" placeholder="587" style="max-width:80px"></div></div>
+          <div class="frow"><div class="lab">첨부 파일 형식</div><div class="ctl"><select class="input"><option>txt — 텍스트(한글 안전)</option><option>markdown</option></select></div></div>
+          <div class="testrow"><button class="btn sm">메일 연결 테스트 (테스트 메일 발송)</button></div>
+        </div>
+      </div>
+
+      <div class="card" data-k="노트 폴더 obsidian 위키 rest 볼트">
+        <div class="chead" onclick="tog(this)"><h3>노트 폴더 (내부 위키) · Obsidian 연동</h3><span class="desc">위키 질문·그래프·관련 노트의 원천</span><span class="cv">▾</span></div>
+        <div class="cbody">
+          <div class="frow"><div class="lab">노트 폴더(.md)<div class="d">Obsidian 앱은 필요 없음 — 폴더만 지정하면 검색·그래프 동작.</div></div><div class="ctl"><input class="input" value="D:\Obsidian\cc_test"><button class="btn sm">찾아보기</button></div></div>
+          <div class="frow"><div class="lab">회의록 기본 폴더</div><div class="ctl"><input class="input" value="00_Meetings" style="max-width:200px"></div></div>
+          <div class="frow"><div class="lab">전체 전사 저장 방식</div><div class="ctl"><select class="input"><option>separate — 별도 노트</option><option>append — 회의록에 포함</option><option>off — 저장 안 함</option></select></div></div>
+          <div class="frow"><div class="lab">Obsidian REST 저장 <span class="d">(선택)</span><div class="d">대부분 꺼둠. 켜면 실행 중 앱에 실시간 기록.</div></div><div class="ctl"><span class="tg" onclick="this.classList.toggle('on')"><i></i></span></div></div>
+          <div class="testrow"><button class="btn sm">노트 폴더 경로 확인</button><button class="btn sm">검색 인덱스·그래프 재빌드</button><button class="btn sm">Obsidian 전체 진단</button></div>
+        </div>
+      </div>
+
+      <!-- ===== 고급 ===== -->
+      <div class="tierhead"><span>고급</span><span class="tag adv">기본 접힘</span><span class="ln"></span></div>
+
+      <div class="card" data-k="오디오 전처리 음량 무음 번역검수">
+        <div class="chead" onclick="tog(this)"><h3>오디오 전처리 (업로드·배치)</h3><span class="cv">▸</span></div>
+        <div class="cbody collapsed">
+          <div class="frow"><div class="lab">음량 정규화</div><div class="ctl"><span class="tg on" onclick="this.classList.toggle('on')"><i></i></span></div></div>
+          <div class="frow"><div class="lab">무음 구간 제거 <span class="d">(실험)</span></div><div class="ctl"><span class="tg" onclick="this.classList.toggle('on')"><i></i></span></div></div>
+          <div class="frow"><div class="lab">번역 검수 패스</div><div class="ctl"><span class="tg on" onclick="this.classList.toggle('on')"><i></i></span></div></div>
+          <div class="testrow"><button class="btn sm">로컬 백업 모델 준비 <span style="color:var(--ink-3)">· 미준비</span></button></div>
+        </div>
+      </div>
+
+      <div class="card" data-k="실시간 녹취 2패스 vad 노이즈 청크 종료 메일">
+        <div class="chead" onclick="tog(this)"><h3>실시간 녹취</h3><span class="desc">2단계 보정 · VAD · 노이즈 · 종료 후 메일</span><span class="cv">▸</span></div>
+        <div class="cbody collapsed">
+          <div class="frow"><div class="lab">2단계 전사 보정<div class="d">STT 비용 약 2배지만 품질 크게↑.</div></div><div class="ctl"><span class="tg on" onclick="this.classList.toggle('on')"><i></i></span></div></div>
+          <div class="frow"><div class="lab">기본 언어</div><div class="ctl"><select class="input"><option>ko — 한국어(권장)</option><option>en — 영어</option><option>auto — 자동(비권장)</option></select></div></div>
+          <div class="frow"><div class="lab">환각·반복 자동 정화</div><div class="ctl"><span class="tg on" onclick="this.classList.toggle('on')"><i></i></span></div></div>
+          <div class="frow"><div class="lab">종료 후 이메일 자동발송</div><div class="ctl"><span class="tg" onclick="this.classList.toggle('on')"><i></i></span></div></div>
+          <div class="frow"><div class="lab">WS VAD · 노이즈 리덕션</div><div class="ctl"><select class="input" style="max-width:150px"><option>server_vad</option><option>semantic_vad</option></select><select class="input" style="max-width:130px"><option>near_field</option><option>far_field</option></select></div></div>
+          <p class="hint" style="margin-top:6px">청크 길이·보정 구간·무음 임계값 등 세부 항목 8개 더 …</p>
+        </div>
+      </div>
+
+      <div class="card" data-k="기능 토글 그래프 임베딩 준비브리핑 레지스트리 감시 supermemory">
+        <div class="chead" onclick="tog(this)"><h3>기능 토글</h3><span class="desc">켜고 끄는 스위치 모음</span><span class="cv">▸</span></div>
+        <div class="cbody collapsed">
+          <div class="frow"><div class="lab">실시간 관련 노트 검색</div><div class="ctl"><span class="tg on" onclick="this.classList.toggle('on')"><i></i></span></div></div>
+          <div class="frow"><div class="lab">주장 사실 검증</div><div class="ctl"><span class="tg on" onclick="this.classList.toggle('on')"><i></i></span></div></div>
+          <div class="frow"><div class="lab">온라인 검색 보완 <span class="d">(비용 발생)</span></div><div class="ctl"><span class="tg" onclick="this.classList.toggle('on')"><i></i></span></div></div>
+          <div class="frow"><div class="lab">지식 그래프 · 임베딩 의미검색</div><div class="ctl"><span class="tg on" onclick="this.classList.toggle('on')"><i></i></span><span class="tg on" onclick="this.classList.toggle('on')"><i></i></span></div></div>
+          <div class="frow"><div class="lab">회의 준비 브리핑 · 액션/결정 레지스트리</div><div class="ctl"><span class="tg on" onclick="this.classList.toggle('on')"><i></i></span></div></div>
+          <p class="hint" style="margin-top:6px">폴더 자동 감시·계획 자동화 시작·위키 업데이트 제안·섹션 인덱싱 등 토글 더 …</p>
+        </div>
+      </div>
+
+      <div class="card" data-k="회의 진행 페르소나 참견도 팩트체커 매트릭스">
+        <div class="chead" onclick="tog(this)"><h3>회의 진행 페르소나 <span class="tag adv">실험 · 기본 꺼짐</span></h3><span class="cv">▸</span></div>
+        <div class="cbody collapsed">
+          <div class="frow"><div class="lab">회의 진행 페르소나 사용</div><div class="ctl"><span class="tg" onclick="this.classList.toggle('on')"><i></i></span></div></div>
+          <div class="frow"><div class="lab">참견도 전역 상한 · 회의당 비용 캡($)</div><div class="ctl"><input class="input num" value="3" style="max-width:70px"><input class="input num" value="0.5" style="max-width:80px"></div></div>
+          <div style="margin-top:10px"><div style="font-size:11px;font-weight:700;color:var(--ink-3);margin-bottom:6px">페르소나별 참견도</div>
+            <div class="preset"><button class="btn sm">조용히</button><button class="btn sm on" style="background:var(--ink);color:#fff">표준</button><button class="btn sm">적극</button></div>
+            <table class="persona-tbl">
+              <tr><td>🔍 팩트체커 <span class="riskb hi">고</span></td><td><div class="lvls"><button>0</button><button>1</button><button class="on">2</button><button>3</button><button class="lock">4</button><button class="lock">5</button></div></td></tr>
+              <tr><td>🧭 도메인 전문가 <span class="riskb mi">중</span></td><td><div class="lvls"><button>0</button><button>1</button><button class="on">2</button><button>3</button><button class="lock">4</button><button class="lock">5</button></div></td></tr>
+              <tr><td>🧭 진행(facilitator) <span class="riskb lo">저</span></td><td><div class="lvls"><button>0</button><button>1</button><button>2</button><button class="on">3</button><button class="lock">4</button><button class="lock">5</button></div></td></tr>
+              <tr><td>📋 중간 요약 <span class="riskb lo">저</span></td><td><div class="lvls"><button>0</button><button>1</button><button class="on">2</button><button>3</button><button class="lock">4</button><button class="lock">5</button></div></td></tr>
+            </table>
+            <p class="hint" style="margin-top:6px">0 금지 · 1 관찰 · 2 모아보기 · 3 옆 카드 자동 · 4·5(알림음·음성)는 관리자 개방. 서기·주니어·시니어·비평가·악마의 대변인 등 페르소나 더 …</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" data-k="서버 네트워크 lan 알림 slack teams 인덱스 위키세부 supermemory">
+        <div class="chead" onclick="tog(this)"><h3>그 밖의 고급</h3><span class="desc">서버/네트워크 · 알림(Slack·Teams) · 검색 인덱스 · 위키/검증 세부 · Supermemory</span><span class="cv">▸</span></div>
+        <div class="cbody collapsed">
+          <div class="frow"><div class="lab">LAN 접속 허용 (모바일 연결용)</div><div class="ctl"><span class="tg" onclick="this.classList.toggle('on')"><i></i></span></div></div>
+          <div class="frow"><div class="lab">완료 알림 채널</div><div class="ctl"><select class="input"><option>none — 끔</option><option>email</option><option>slack</option><option>teams</option></select></div></div>
+          <div class="testrow"><button class="btn sm">Slack 테스트</button><button class="btn sm">Teams 테스트</button></div>
+          <p class="hint" style="margin-top:8px">검색 인덱스(경로·자동 재빌드) · 위키/검증 세부(출처 필수·최대 노트 수·실시간 검색 간격·웹검색 간격 등 20+) · Supermemory(API 키·주소) — 각 그룹 접기.</p>
+        </div>
+      </div>
+
+      <div class="card" data-k="json 전체 설정 편집 폴더 감시 워처 프로필 앱 종료 위험 휴지통">
+        <div class="chead" onclick="tog(this)"><h3>도구 · 위험 구역</h3><span class="desc">JSON 직접 편집 · 폴더 자동 감시 · 처리 프로필 · 앱 종료 · 전체 휴지통</span><span class="cv">▸</span></div>
+        <div class="cbody collapsed">
+          <div class="testrow"><button class="btn sm">전체 설정(JSON) 직접 편집</button><button class="btn sm">폴더 자동 감시 관리</button><button class="btn sm">처리 프로필 관리</button><button class="btn sm">앱 종료</button></div>
+          <div class="testrow"><button class="btn sm" style="border-color:var(--rec);color:var(--rec)">모든 기록 휴지통으로 보내기</button></div>
+        </div>
+      </div>
+
+    </div>
+    <div class="savebar"><span class="hint">테스트·진단·재인덱스는 자동 저장 후 실행됩니다.</span><button class="btn">되돌리기</button><button class="btn pri">설정 저장</button></div>
+  </div>
+</div>
+
+<!-- Onboarding -->
+<div class="overlay" id="ob">
+  <div class="modal">
+    <div class="mhead"><div class="logo">◈</div><b>AI Minutes 시작하기</b><span class="step">1 / 5 단계</span></div>
+    <div class="mprog"><i></i></div>
+    <div class="mbody">
+      <h4>OpenAI API 키 <span style="color:var(--rec)">(필수)</span></h4>
+      <p>시작에 꼭 필요한 건 <b>OpenAI 키 하나</b>뿐입니다. 이것만 넣으면 회의록·요약·액션아이템이 자동으로 만들어져요. 키는 이 PC에만 저장되고 ●●● 로 가려집니다.</p>
+      <input class="input" type="password" placeholder="sk-proj-..." style="max-width:none">
+      <div style="margin-top:8px"><button class="btn sm">연결 테스트</button> <span class="hint">platform.openai.com/api-keys 에서 발급</span></div>
+    </div>
+    <div class="mfoot"><button class="btn sm" onclick="document.getElementById('ob').classList.remove('on')">나중에 하기</button><span class="skip">건너뛰기</span><div class="spacer"></div><button class="btn sm">이전</button><button class="btn pri sm">다음</button></div>
+  </div>
+</div>
+
+<script>
+function tog(h){const b=h.nextElementSibling;b.classList.toggle('collapsed');const cv=h.querySelector('.cv');cv.textContent=b.classList.contains('collapsed')?'▸':'▾';}
+function filter(q){q=q.trim().toLowerCase();document.querySelectorAll('#settings .card').forEach(c=>{const hay=(c.dataset.k+' '+c.textContent).toLowerCase();c.style.display=(!q||hay.includes(q))?'block':'none';});
+  document.querySelectorAll('.tierhead').forEach(t=>t.style.display=q?'none':'flex');}
+</script>
+</body>
+</html>

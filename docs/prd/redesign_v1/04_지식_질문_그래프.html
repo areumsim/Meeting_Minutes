@@ -1,0 +1,227 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI Minutes — 지식 (질문 + 그래프) v1</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans+KR:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap');
+:root{
+  --font-sans:"IBM Plex Sans KR","Malgun Gothic",system-ui,"Segoe UI",sans-serif;
+  --font-num:"IBM Plex Mono",ui-monospace,"Consolas",monospace;
+  --bg:#f4f4f4;--surface:#fff;--surface-2:#f4f4f4;--surface-hover:#e8e8e8;
+  --line:#e0e0e0;--line-strong:#c6c6c6;--ink:#161616;--ink-2:#525252;--ink-3:#6f6f6f;
+  --blue:#0f62fe;--blue-weak:#edf5ff;--warnc:#8a5200;--warn-bg:#fdf1de;--ok:#198038;--ok-bg:#defbe6;
+  --person:#0f62fe;--org:#c02677;--topic:#8a5200;--proj:#8a3ffc;--doc:#6f6f6f;--meet:#198038;
+  --r:2px;--r-tag:4px;
+}
+*,*::before,*::after{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{background:var(--bg);color:var(--ink);font-family:var(--font-sans);font-size:13px;line-height:1.5;-webkit-font-smoothing:antialiased;overflow:hidden}
+.num{font-family:var(--font-num)}
+button{font:inherit;color:inherit;cursor:pointer;border:0;background:none}button:active{transform:scale(.98)}
+h1,h2,h3,h4,p{margin:0}svg{display:block}
+::-webkit-scrollbar{width:9px;height:9px}::-webkit-scrollbar-thumb{background:#c6c6c6}
+:where(button,input,select,textarea):focus-visible{outline:2px solid var(--blue);outline-offset:1px}
+
+.app{display:grid;grid-template-columns:200px 1fr;height:100vh}
+.sidebar{background:var(--surface);border-right:1px solid var(--line);padding:8px 0}
+.brand{display:flex;align-items:center;gap:9px;padding:12px 16px;border-bottom:1px solid var(--line)}
+.brand .logo{width:24px;height:24px;background:var(--ink);color:#fff;display:grid;place-items:center;font-size:11px}
+.brand b{font-size:13.5px;font-weight:600}
+.nav{display:flex;flex-direction:column;padding-top:6px}
+.nav a{display:flex;align-items:center;gap:11px;padding:9px 16px;color:var(--ink-2);font-size:13px;border-left:3px solid transparent}
+.nav a svg{width:16px;height:16px;stroke:currentColor;stroke-width:1.5;fill:none}
+.nav a.on{background:var(--surface-hover);color:var(--ink);border-left-color:var(--blue);font-weight:600}
+.grp{font-size:10px;font-weight:600;color:var(--ink-3);letter-spacing:.08em;padding:12px 16px 5px}
+
+.main{display:flex;flex-direction:column;min-width:0;height:100vh}
+.topbar{height:46px;flex:none;background:var(--surface);border-bottom:1px solid var(--line);display:flex;align-items:center;gap:12px;padding:0 16px}
+.topbar h2{font-size:14px;font-weight:600}.spacer{flex:1}.hint{font-size:11px;color:var(--ink-3)}
+.cseg{display:inline-flex;border:1px solid var(--line-strong)}
+.cseg button{padding:5px 14px;font-size:12.5px;font-weight:600;color:var(--ink-2);border-right:1px solid var(--line-strong)}
+.cseg button:last-child{border-right:0}.cseg button.on{background:var(--ink);color:#fff}
+.content{flex:1;min-height:0;overflow:hidden;padding:12px 16px;display:flex;flex-direction:column}
+
+.tag{display:inline-flex;align-items:center;gap:5px;padding:1px 7px;font-size:11px;border:1px solid var(--line-strong);color:var(--ink-2);background:#fff;border-radius:var(--r-tag)}
+.btn{display:inline-flex;align-items:center;gap:6px;border:1px solid var(--line-strong);background:#fff;padding:6px 11px;font-size:12.5px;font-weight:500;color:var(--ink)}
+.btn:hover{background:var(--surface-hover)}.btn.pri{background:var(--blue);border-color:var(--blue);color:#fff}.btn.sm{padding:4px 9px;font-size:11.5px}
+.input{border:1px solid var(--line-strong);border-bottom:1px solid var(--ink-2);background:#fff;padding:8px 10px;font-size:13px;color:var(--ink);font-family:inherit;width:100%}
+.screen{display:none;flex:1;min-height:0;flex-direction:column}.screen.on{display:flex}
+
+/* ASK */
+.askbar{display:flex;gap:8px;flex:none;margin-bottom:10px}
+.askbar textarea{flex:1;resize:none;height:44px}
+.hist{flex:1;min-height:0;overflow:auto}
+.qa{background:var(--surface);border:1px solid var(--line);margin-bottom:10px}
+.qa .q{padding:10px 14px;border-bottom:1px solid var(--line);font-weight:600;display:flex;gap:8px;align-items:flex-start}
+.qa .q .qi{color:var(--ink-3)}
+.qa .a{padding:12px 14px}
+.qa .a p{margin:0 0 8px;color:var(--ink-2)}
+.qa .badges{display:flex;gap:6px;margin-bottom:8px;flex-wrap:wrap}
+.b-warn{background:var(--warn-bg);color:var(--warnc);font-size:11px;font-weight:600;padding:2px 8px;border-radius:var(--r-tag)}
+.b-ok{background:var(--ok-bg);color:var(--ok);font-size:11px;font-weight:600;padding:2px 8px;border-radius:var(--r-tag)}
+.ctxhead{font-size:10.5px;color:var(--ink-3);font-weight:700;margin:6px 0 5px;border-top:1px solid var(--surface-2);padding-top:8px}
+.ctx{display:flex;align-items:center;gap:8px;padding:4px 0;font-size:12px}
+.ctx .ti{color:var(--blue);cursor:pointer}.ctx .hd{color:var(--ink-3)}.ctx .sc{margin-left:auto;font-family:var(--font-num);font-size:11px;color:var(--ink-3)}
+
+/* GRAPH */
+.gtool{display:flex;align-items:center;gap:8px;flex:none;margin-bottom:10px;flex-wrap:wrap}
+.gtool .input{max-width:340px}
+.legend{display:flex;gap:10px;flex-wrap:wrap;font-size:10.5px;color:var(--ink-3);margin-left:auto}
+.legend span{display:inline-flex;align-items:center;gap:4px}.legend .d{width:8px;height:8px;border-radius:50%}
+.gwork{display:grid;grid-template-columns:1fr 280px;gap:12px;flex:1;min-height:0}
+.gcanvas{background:var(--surface);border:1px solid var(--line);display:flex;flex-direction:column;min-height:0;overflow:hidden}
+.gcanvas .cvs{flex:1;min-height:0;display:flex;align-items:center;justify-content:center;overflow:auto}
+.gcanvas .list{flex:none;border-top:1px solid var(--line);padding:8px 10px;max-height:120px;overflow:auto}
+.nodechip{display:inline-flex;align-items:center;gap:5px;border:1px solid var(--line-strong);border-radius:999px;padding:2px 10px;font-size:11.5px;margin:2px 4px 2px 0;cursor:pointer}
+.nodechip .d{width:7px;height:7px;border-radius:50%}
+.nodechip:hover{background:var(--surface-2)}
+.gdetail{background:var(--surface);border:1px solid var(--line);display:flex;flex-direction:column;min-height:0;overflow:hidden}
+.gdhead{padding:10px 12px;border-bottom:1px solid var(--line);display:flex;align-items:center;gap:7px}
+.gdhead .nm{font-weight:600;font-size:13px}
+.gdbody{flex:1;min-height:0;overflow:auto;padding:11px}
+.attr{font-size:11.5px;color:var(--ink-2);padding:2px 0;display:flex;gap:8px}.attr .k{color:var(--ink-3);width:70px;flex:none}
+.relhead{font-size:10.5px;color:var(--ink-3);font-weight:700;margin:12px 0 5px}
+g circle{cursor:pointer} g text{pointer-events:none}
+.typeb{font-size:9.5px;font-weight:700;padding:0 5px;border-radius:var(--r-tag);color:#fff}
+</style>
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar">
+    <div class="brand"><div class="logo">◈</div><b>AI Minutes</b></div>
+    <nav class="nav">
+      <a><svg viewBox="0 0 16 16"><path d="M2 4h12M2 8h12M2 12h12"/></svg>라이브러리</a>
+      <a><svg viewBox="0 0 16 16"><path d="M8 3v10M3 8h10"/></svg>새로 만들기</a>
+      <div class="grp">지식</div>
+      <a><svg viewBox="0 0 16 16"><rect x="3" y="2" width="10" height="12"/><path d="M5.5 5.5h5M5.5 8h5M5.5 10.5h3"/></svg>회의 상세</a>
+      <a class="on"><svg viewBox="0 0 16 16"><circle cx="4" cy="4" r="2"/><circle cx="12" cy="6" r="2"/><circle cx="7" cy="12" r="2"/><path d="M5.5 5 10.5 5.2M5.5 5.5 6.5 10"/></svg>지식</a>
+      <div class="grp">운영</div>
+      <a><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/><path d="M8 5v3.2L10 10"/></svg>준비 · 비서</a>
+      <a><svg viewBox="0 0 16 16"><circle cx="8" cy="8" r="2.2"/><path d="M8 1.5v2M8 12.5v2M1.5 8h2M12.5 8h2"/></svg>설정</a>
+    </nav>
+  </aside>
+  <div class="main">
+    <div class="topbar"><h2>지식</h2>
+      <div class="cseg"><button class="on" onclick="kv(this,'ask')">질문</button><button onclick="kv(this,'graph')">그래프</button></div>
+      <div class="spacer"></div><span class="hint">완성형 프리뷰 v1 · 노트 폴더 기반 RAG</span></div>
+    <div class="content">
+
+      <!-- ASK -->
+      <section class="screen on" id="k-ask">
+        <div class="askbar"><textarea class="input" placeholder="노트 폴더에 쌓인 회의·세미나 기록을 근거로 질문하세요 — Enter 전송, Shift+Enter 줄바꿈"></textarea><button class="btn pri">질문</button></div>
+        <div class="hist">
+          <div class="qa">
+            <div class="q"><span class="qi">?</span> 큐비트랑 비트의 차이가 뭐야</div>
+            <div class="a">
+              <div class="badges"><span class="b-ok">출처 4건</span></div>
+              <p>큐비트는 양자 상태의 중첩을 표현하는 정보 단위로 복소수 계수를 가지며 블로흐 구 위의 점으로 표현됩니다. 반면 비트는 0 또는 1의 확정값만 가집니다. 큐비트는 α|0⟩+β|1⟩ 형태로, |α|²+|β|²=1을 만족합니다.</p>
+              <div class="ctxhead">컨텍스트 노트 4개</div>
+              <div class="ctx"><span class="ti">08_얽힘_심화노트</span><span class="hd">— 큐비트 물리 vs 논리</span><span class="sc">0.78</span></div>
+              <div class="ctx"><span class="ti">03_QML_관측량이론</span><span class="hd">— Stage 0: 큐비트와 양자 상태</span><span class="sc">0.53</span></div>
+              <div class="ctx"><span class="ti">06_결합과_분리도</span><span class="hd">— 2. 수학적 기초</span><span class="sc">0.51</span></div>
+              <div class="ctx"><span class="ti">Pozzi 2020 RL큐비트라우팅</span><span class="hd">— 큐비트 라우팅</span><span class="sc">0.40</span></div>
+            </div>
+          </div>
+          <div class="qa">
+            <div class="q"><span class="qi">?</span> IBM 파트너십은 어느 방식으로 가기로 했지?</div>
+            <div class="a">
+              <div class="badges"><span class="b-warn">⚠ 충돌 정보 있음</span><span class="b-warn">확인 불가 항목 있음</span></div>
+              <p>가장 최근 회의(250912 IBM)에서는 <b>초전도 방식 우선</b>으로 공감대가 형성됐습니다. 다만 250807 노트에는 이온트랩 우선 검토 언급이 있어 시점에 따라 방향이 다릅니다 — 최신 결정 기준 초전도 우선입니다.</p>
+              <div class="ctxhead">컨텍스트 노트 2개</div>
+              <div class="ctx"><span class="ti">회사_파트너_위키</span><span class="hd">— IBM</span><span class="sc">0.81</span></div>
+              <div class="ctx"><span class="ti">250807 양자컴퓨팅 Qunova</span><span class="hd">— 파트너 검토</span><span class="sc">0.55</span></div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- GRAPH -->
+      <section class="screen" id="k-graph">
+        <div class="gtool">
+          <input class="input" placeholder="이름/키워드로 노드 검색 (비우면 상위 노드)">
+          <button class="btn">검색</button>
+          <div class="legend">
+            <span><span class="d" style="background:var(--org)"></span>조직</span>
+            <span><span class="d" style="background:var(--person)"></span>인물</span>
+            <span><span class="d" style="background:var(--topic)"></span>주제</span>
+            <span><span class="d" style="background:var(--meet)"></span>회의</span>
+            <span><span class="d" style="background:var(--doc)"></span>노트</span>
+          </div>
+        </div>
+        <div class="gwork">
+          <div class="gcanvas">
+            <div class="cvs">
+              <svg width="560" height="360" viewBox="0 0 560 360">
+                <g stroke="#d0d0d0">
+                  <line x1="280" y1="180" x2="150" y2="90"/><line x1="280" y1="180" x2="420" y2="90"/>
+                  <line x1="280" y1="180" x2="110" y2="200"/><line x1="280" y1="180" x2="460" y2="200"/>
+                  <line x1="280" y1="180" x2="180" y2="290"/><line x1="280" y1="180" x2="390" y2="290"/>
+                  <line x1="150" y1="90" x2="90" y2="60"/><line x1="420" y1="90" x2="480" y2="55"/>
+                </g>
+                <g>
+                  <circle cx="280" cy="180" r="34" fill="#fce4ef" stroke="var(--org)" stroke-width="2" onclick="pick('IBM')"/><text x="280" y="184" font-size="13" text-anchor="middle" fill="var(--org)" font-weight="700">IBM</text>
+                  <circle cx="150" cy="90" r="22" fill="#fff" stroke="var(--org)" onclick="pick('Qunova')"/><text x="150" y="94" font-size="9" text-anchor="middle">Qunova</text>
+                  <circle cx="420" cy="90" r="22" fill="#fff" stroke="var(--org)" onclick="pick('LG CNS')"/><text x="420" y="94" font-size="9" text-anchor="middle">LG CNS</text>
+                  <circle cx="110" cy="200" r="22" fill="#fff" stroke="var(--doc)" onclick="pick('회사_파트너_위키')"/><text x="110" y="204" font-size="8" text-anchor="middle">파트너위키</text>
+                  <circle cx="460" cy="200" r="22" fill="#fff" stroke="var(--topic)" onclick="pick('초전도')"/><text x="460" y="204" font-size="9" text-anchor="middle">초전도</text>
+                  <circle cx="180" cy="290" r="22" fill="#fff" stroke="var(--person)" onclick="pick('심아름')"/><text x="180" y="294" font-size="9" text-anchor="middle">심아름</text>
+                  <circle cx="390" cy="290" r="22" fill="#fff" stroke="var(--meet)" onclick="pick('250912 IBM')"/><text x="390" y="294" font-size="8" text-anchor="middle">250912</text>
+                  <circle cx="90" cy="60" r="17" fill="#fff" stroke="var(--org)" onclick="pick('Classiq')"/><text x="90" y="63" font-size="8" text-anchor="middle">Classiq</text>
+                  <circle cx="480" cy="55" r="17" fill="#fff" stroke="var(--org)" onclick="pick('Pasqal')"/><text x="480" y="58" font-size="8" text-anchor="middle">Pasqal</text>
+                </g>
+              </svg>
+            </div>
+            <div class="list">
+              <span class="nodechip" onclick="pick('IBM')"><span class="d" style="background:var(--org)"></span>IBM</span>
+              <span class="nodechip" onclick="pick('Qunova')"><span class="d" style="background:var(--org)"></span>Qunova</span>
+              <span class="nodechip" onclick="pick('LG CNS')"><span class="d" style="background:var(--org)"></span>LG CNS</span>
+              <span class="nodechip" onclick="pick('초전도')"><span class="d" style="background:var(--topic)"></span>초전도</span>
+              <span class="nodechip" onclick="pick('심아름')"><span class="d" style="background:var(--person)"></span>심아름</span>
+              <span class="nodechip" onclick="pick('250912 IBM')"><span class="d" style="background:var(--meet)"></span>250912 IBM</span>
+              <span class="nodechip" onclick="pick('회사_파트너_위키')"><span class="d" style="background:var(--doc)"></span>회사_파트너_위키</span>
+              <span class="hint">+23개 더</span>
+            </div>
+          </div>
+          <aside class="gdetail">
+            <div class="gdhead"><span class="typeb" style="background:var(--org)" id="dtype">조직</span><span class="nm" id="dname">IBM</span><button class="btn sm" style="margin-left:auto">✕</button></div>
+            <div class="gdbody" id="dbody">
+              <div class="attr"><span class="k">유형</span><span>조직 (파트너)</span></div>
+              <div class="attr"><span class="k">방식</span><span>초전도 큐비트</span></div>
+              <div class="attr"><span class="k">회의</span><span>3건 연결</span></div>
+              <div class="relhead">파트너십 (2)</div>
+              <span class="nodechip" onclick="pick('회사_파트너_위키')"><span class="d" style="background:var(--doc)"></span>회사_파트너_위키</span>
+              <span class="nodechip" onclick="pick('초전도')"><span class="d" style="background:var(--topic)"></span>초전도</span>
+              <div class="relhead">논의된 회의 (1)</div>
+              <span class="nodechip" onclick="pick('250912 IBM')"><span class="d" style="background:var(--meet)"></span>250912 IBM</span>
+              <div class="relhead">인물 (1)</div>
+              <span class="nodechip" onclick="pick('심아름')"><span class="d" style="background:var(--person)"></span>심아름</span>
+            </div>
+          </aside>
+        </div>
+      </section>
+
+    </div>
+  </div>
+</div>
+<script>
+function kv(b,v){document.querySelectorAll('.cseg button').forEach(x=>x.classList.remove('on'));b.classList.add('on');
+  document.getElementById('k-ask').classList.toggle('on',v==='ask');document.getElementById('k-graph').classList.toggle('on',v==='graph');}
+const DB={
+ 'IBM':{t:'조직',c:'var(--org)',rows:['유형|조직 (파트너)','방식|초전도 큐비트','회의|3건 연결']},
+ 'Qunova':{t:'조직',c:'var(--org)',rows:['유형|조직 (국내 양자SW)','회의|2건 연결']},
+ 'LG CNS':{t:'조직',c:'var(--org)',rows:['유형|조직 (SI)','회의|1건']},
+ '초전도':{t:'주제',c:'var(--topic)',rows:['유형|주제','언급 회의|4건']},
+ '심아름':{t:'인물',c:'var(--person)',rows:['유형|인물','미완료 액션|1건']},
+ '250912 IBM':{t:'회의',c:'var(--meet)',rows:['유형|회의','날짜|2025-09-12','참석|5명']},
+ '회사_파트너_위키':{t:'노트',c:'var(--doc)',rows:['유형|노트','참조|4개 회의']},
+ 'Classiq':{t:'조직',c:'var(--org)',rows:['유형|조직']},'Pasqal':{t:'조직',c:'var(--org)',rows:['유형|조직 (중성원자)']},
+};
+function pick(n){const d=DB[n];if(!d)return;document.getElementById('dname').textContent=n;const tb=document.getElementById('dtype');tb.textContent=d.t;tb.style.background=d.c;
+  let h=d.rows.map(r=>{const p=r.split('|');return '<div class="attr"><span class="k">'+p[0]+'</span><span>'+p[1]+'</span></div>';}).join('');
+  h+='<div class="relhead">연결된 이웃</div><span class="hint">노드를 클릭해 이동하세요.</span>';
+  document.getElementById('dbody').innerHTML=h;}
+</script>
+</body>
+</html>

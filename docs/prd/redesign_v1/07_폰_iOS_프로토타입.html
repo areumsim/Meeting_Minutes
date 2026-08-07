@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="ko" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI 회의록 — 폰 버전 (iOS)</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Pretendard:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap');
+:root{
+  --font-sans:"Pretendard","Malgun Gothic",system-ui,sans-serif;--font-num:"IBM Plex Mono",monospace;
+  --bg:#f7f6f3;--surface:#fff;--surface-2:#f4f2ee;--hover:#f0ede7;--line:#eae7e1;--line-strong:#d8d3ca;
+  --ink:#1c1a17;--ink-2:#57534e;--ink-3:#8a8279;--accent:#0d9488;--accent-weak:color-mix(in srgb,var(--accent) 14%,var(--surface));
+  --rec:#dc2626;--rec-bg:#fef2f2;--proc:#7c3aed;--proc-bg:#f5f3ff;--ok:#0f766e;--ok-bg:#e0f2f1;--warn:#a16207;--warn-bg:#fefce8;--idle:#8a8279;--idle-bg:#f4f2ee;
+  --r:14px;--r-sm:10px;--pill:999px;--shadow:0 1px 2px rgba(28,26,23,.05),0 8px 20px -12px rgba(28,26,23,.2);
+}
+html[data-theme="dark"]{--bg:#0f1011;--surface:#17181a;--surface-2:#1d1f22;--hover:#212327;--line:#2a2e33;--line-strong:#3a3f46;--ink:#f2f3f4;--ink-2:#c3c8d0;--ink-3:#8a8f98;--accent:#2dd4bf;--rec:#ff6b6b;--rec-bg:#3a1e22;--proc:#b794ff;--proc-bg:#2a2340;--ok:#5eead4;--ok-bg:#12312e;--warn:#fbbf24;--warn-bg:#33290f;--idle:#8a8f98;--idle-bg:#1d1f22;--shadow:none}
+*{box-sizing:border-box;-webkit-font-smoothing:antialiased}
+body{margin:0;background:#d9d8dc;font-family:var(--font-sans);min-height:100vh;display:flex;flex-direction:column;align-items:center;gap:14px;padding:22px 10px}
+.num{font-family:var(--font-num);font-variant-numeric:tabular-nums}
+button{font:inherit;color:inherit;border:0;background:none;cursor:pointer}
+h1,h2,h3,p{margin:0}svg{display:block}
+.top{display:flex;gap:10px;align-items:center;color:#333;font-size:13px}
+.top button{border:1px solid #bbb;border-radius:8px;padding:6px 12px;background:#fff;font-size:12px;font-weight:600}
+.top button.on{background:#1c1a17;color:#fff;border-color:#1c1a17}
+
+/* device frame */
+.phone{width:390px;height:800px;background:var(--bg);border-radius:44px;border:12px solid #111;box-shadow:0 20px 60px -20px rgba(0,0,0,.5);position:relative;overflow:hidden;display:flex;flex-direction:column;color:var(--ink);transition:background .2s,color .2s}
+.notch{position:absolute;top:0;left:50%;transform:translateX(-50%);width:150px;height:26px;background:#111;border-radius:0 0 16px 16px;z-index:30}
+.statusbar{height:44px;flex:none;display:flex;align-items:flex-end;justify-content:space-between;padding:0 26px 5px;font-size:12px;font-weight:600}
+.scr{flex:1;min-height:0;overflow:auto;display:none;flex-direction:column}
+.scr.on{display:flex}
+.appbar{position:sticky;top:0;background:color-mix(in srgb,var(--bg) 88%,transparent);backdrop-filter:blur(8px);z-index:5;padding:8px 16px 10px;display:flex;align-items:center;gap:10px;border-bottom:1px solid var(--line)}
+.appbar h2{font-size:18px;font-weight:700;letter-spacing:-.3px}.appbar .sub{font-size:11px;color:var(--ink-3)}
+.spacer{flex:1}
+.ic{width:34px;height:34px;border-radius:var(--pill);display:grid;place-items:center;color:var(--ink-2)}.ic:active{background:var(--hover)}
+.body{padding:12px 14px 90px}
+
+.tag{display:inline-flex;align-items:center;gap:4px;padding:2px 9px;font-size:11px;border:1px solid var(--line-strong);color:var(--ink-2);background:var(--surface);border-radius:var(--pill)}
+.st{display:inline-flex;align-items:center;gap:5px;padding:2px 9px;font-size:11px;font-weight:600;border-radius:var(--pill)}
+.st .d{width:6px;height:6px;border-radius:50%}
+.st.rec{background:var(--rec-bg);color:var(--rec)}.st.rec .d{background:var(--rec);animation:blink 1s steps(2) infinite}
+.st.proc{background:var(--proc-bg);color:var(--proc)}.st.proc .d{background:var(--proc)}
+.st.ok{background:var(--ok-bg);color:var(--ok)}.st.ok .d{background:var(--ok)}
+.st.err{background:var(--rec-bg);color:var(--rec)}.st.idle{background:var(--idle-bg);color:var(--idle)}.st.idle .d{background:var(--idle)}
+.st.amber{background:var(--warn-bg);color:var(--warn)}
+@keyframes blink{50%{opacity:.3}}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;border:1px solid var(--line-strong);background:var(--surface);color:var(--ink);border-radius:var(--r-sm);padding:11px 14px;font-size:13px;font-weight:600;box-shadow:var(--shadow)}
+.btn.pri{background:var(--accent);border-color:var(--accent);color:#fff}
+.btn.danger{background:var(--rec);border-color:var(--rec);color:#fff}
+.btn.ghost{box-shadow:none;border-color:transparent;background:transparent;color:var(--ink-2)}
+.btn.block{width:100%}
+.input{width:100%;border:1px solid var(--line-strong);background:var(--surface);color:var(--ink);border-radius:var(--r-sm);padding:11px 13px;font-size:13px;font-family:inherit}
+
+/* cost strip */
+.coststrip{display:flex;gap:10px;margin-bottom:12px}
+.mc{flex:1;background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:12px 13px;box-shadow:var(--shadow)}
+.mc .k{font-size:11px;color:var(--ink-3)}.mc .b{font-size:20px;font-weight:700;margin-top:3px}
+/* library card */
+.lcard{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:13px 14px;margin-bottom:10px;box-shadow:var(--shadow);position:relative}
+.lcard.rec{border-left:4px solid var(--rec)}.lcard.proc{border-left:4px solid var(--proc)}.lcard.err{border-left:4px solid var(--rec)}
+.lcard .tt{font-weight:700;font-size:14px}.lcard .mt{font-size:11px;color:var(--ink-3);margin-top:2px}
+.lcard .rowb{display:flex;align-items:center;gap:8px;margin-top:9px}
+.lcard .cost{margin-left:auto;font-size:12px;color:var(--ink-2)}
+
+/* recording */
+.rechead{background:var(--rec-bg);border:1px solid var(--rec);border-radius:var(--r);padding:11px 14px;margin-bottom:10px;display:flex;align-items:center;gap:10px}
+.rechead .live{font-weight:700;color:var(--rec);display:flex;align-items:center;gap:7px;font-size:14px}.rechead .live .d{width:9px;height:9px;border-radius:50%;background:var(--rec);animation:blink 1s steps(2) infinite}
+.rechead .t{margin-left:auto;font-size:19px;font-weight:700;color:var(--rec)}
+.ln{padding:9px 0;border-bottom:1px solid var(--surface-2)}.ln .sp{font-size:11px;font-weight:600;color:var(--accent);margin-bottom:2px}.ln .o{font-size:13px}.ln .e{font-size:12.5px;color:var(--ink-2);margin-top:3px;padding-left:9px;border-left:2px solid var(--line)}.ln.prov .o{color:var(--ink-3);font-style:italic}
+
+/* doc */
+.dtabs{display:flex;gap:6px;overflow-x:auto;padding:2px 0 10px}
+.dtabs button{white-space:nowrap;padding:7px 13px;border-radius:var(--pill);font-size:12.5px;font-weight:600;color:var(--ink-3);background:var(--surface-2)}
+.dtabs button.on{background:var(--accent);color:#fff}
+.doc h3{font-size:14px;font-weight:700;margin:14px 0 6px}.doc h3:first-child{margin-top:0}.doc p{color:var(--ink-2);font-size:13px;margin-bottom:9px}.doc ul{margin:0 0 10px;padding-left:18px;color:var(--ink-2);font-size:13px}.doc li{margin:4px 0}.wl{color:var(--accent);font-weight:500}
+.chk{display:flex;gap:9px;padding:6px 0;font-size:13px}.chk input{margin-top:3px;accent-color:var(--accent)}
+
+/* bottom sheet trigger + sheet */
+.sheetbar{position:absolute;left:12px;right:12px;bottom:76px;background:var(--surface);border:1px solid var(--line);border-radius:var(--pill);box-shadow:var(--shadow);padding:11px 16px;display:flex;align-items:center;gap:8px;font-size:12.5px;font-weight:600;z-index:8}
+.sheetbar .pin{color:var(--rec)}
+.sheet{position:absolute;left:0;right:0;bottom:0;height:66%;background:var(--surface);border-radius:20px 20px 0 0;box-shadow:0 -12px 40px -12px rgba(0,0,0,.35);z-index:25;transform:translateY(102%);transition:transform .25s;display:flex;flex-direction:column;border-top:1px solid var(--line)}
+.sheet.on{transform:translateY(0)}
+.grip{width:40px;height:4px;border-radius:2px;background:var(--line-strong);margin:9px auto}
+.sheet .sh{display:flex;border-bottom:1px solid var(--line)}.sheet .sh button{flex:1;padding:11px;font-size:13px;font-weight:600;color:var(--ink-3);border-bottom:2px solid transparent}.sheet .sh button.on{color:var(--accent);border-bottom-color:var(--accent)}
+.sheet .sb{flex:1;overflow:auto;padding:12px 14px}
+.note{border:1px solid var(--line);border-radius:var(--r-sm);padding:10px 12px;margin-bottom:8px}.note .h{display:flex;gap:6px;font-weight:600;font-size:12.5px;align-items:center}.note .wl{color:var(--accent)}.note .src{margin-left:auto;font-size:10px;color:var(--ink-3)}.note .ev{font-size:12px;color:var(--ink-2);margin-top:4px}
+.pchip{display:flex;align-items:center;gap:7px;border:1px solid var(--line);border-left:3px solid var(--line-strong);border-radius:var(--r-sm);padding:10px 11px;margin-bottom:8px}.pchip.pin{border-color:var(--rec);border-left-color:var(--rec);background:var(--rec-bg)}.pchip .pl{font-weight:600;font-size:12.5px}.pchip .pl.red{color:var(--rec)}.pchip .rk{font-size:9.5px;font-weight:700;padding:0 5px;border-radius:6px;background:var(--warn-bg);color:var(--warn)}.pchip .one{flex:1;color:var(--ink-2);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+/* segmented */
+.seg{display:flex;background:var(--surface-2);border-radius:var(--r-sm);padding:3px;margin-bottom:12px}
+.seg button{flex:1;padding:8px;border-radius:8px;font-size:13px;font-weight:600;color:var(--ink-2)}.seg button.on{background:var(--surface);color:var(--accent);box-shadow:var(--shadow)}
+.qa{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow);margin-bottom:10px}.qa .q{padding:11px 14px;border-bottom:1px solid var(--line);font-weight:700;font-size:13px}.qa .a{padding:12px 14px;font-size:13px}.qa .a p{color:var(--ink-2);margin-bottom:8px}
+.ctx{display:flex;gap:8px;font-size:12px;padding:3px 0}.ctx .ti{color:var(--accent)}.ctx .sc{margin-left:auto;font-family:var(--font-num);color:var(--ink-3);font-size:11px}
+.listitem{display:flex;align-items:center;gap:12px;background:var(--surface);border:1px solid var(--line);border-radius:var(--r);padding:14px;margin-bottom:9px;box-shadow:var(--shadow);font-size:14px;font-weight:600}
+.listitem .chev{margin-left:auto;color:var(--ink-3)}
+.pccard{background:var(--accent-weak);border:1px solid var(--accent);border-radius:var(--r);padding:14px;margin-bottom:12px}
+.pccard .h{font-weight:700;font-size:13px;color:var(--accent);margin-bottom:4px}.pccard p{font-size:12px;color:var(--ink-2)}
+
+/* tab bar + FAB */
+.tabbar{position:absolute;left:0;right:0;bottom:0;height:76px;background:color-mix(in srgb,var(--surface) 92%,transparent);backdrop-filter:blur(12px);border-top:1px solid var(--line);display:flex;align-items:flex-start;padding:8px 6px 0;z-index:20}
+.tabbar .tab{flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;color:var(--ink-3);font-size:10px;font-weight:600;padding-top:4px}
+.tabbar .tab svg{width:22px;height:22px;stroke:currentColor;stroke-width:1.7;fill:none}
+.tabbar .tab.on{color:var(--accent)}
+.fabwrap{flex:1;display:flex;justify-content:center}
+.fab{width:52px;height:52px;border-radius:var(--pill);background:var(--accent);color:#fff;display:grid;place-items:center;box-shadow:0 6px 16px -4px color-mix(in srgb,var(--accent) 60%,transparent);margin-top:-14px;font-size:24px}
+.homebar{position:absolute;bottom:6px;left:50%;transform:translateX(-50%);width:130px;height:5px;border-radius:3px;background:var(--ink);opacity:.28;z-index:30}
+.hintlbl{font-size:11px;color:#555;text-align:center;max-width:390px}
+</style>
+</head>
+<body>
+<div class="top">
+  <b style="color:#333">AI 회의록 · 폰(iOS)</b>
+  <button onclick="dk(this)">☾ 다크</button>
+  <span style="font-size:11px;color:#666">탭바·FAB·카드 탭으로 이동</span>
+</div>
+
+<div class="phone" id="phone">
+  <div class="notch"></div>
+  <div class="statusbar"><span class="num">9:41</span><span>●●● 🔋</span></div>
+
+  <!-- 라이브러리 -->
+  <section class="scr on" id="m-library">
+    <div class="appbar"><h2>라이브러리</h2><div class="spacer"></div><button class="ic" onclick="go('search')">🔍</button></div>
+    <div class="body">
+      <div class="coststrip"><div class="mc"><div class="k">이번 달 예상</div><div class="b num">$0.34</div></div><div class="mc"><div class="k">회의</div><div class="b num">29</div></div></div>
+      <div class="lcard rec" onclick="go('recording')"><div class="tt">IBM 파트너십 킥오프</div><div class="mt">큐비트 라우팅 · 3명</div><div class="rowb"><span class="st rec"><span class="d"></span>녹음 중</span><span class="tag">회의</span><span class="cost num">02:17</span></div></div>
+      <div class="lcard proc"><div class="tt">nvidia</div><div class="mt">처리 중 · 회의록 생성</div><div class="rowb"><span class="st proc"><span class="d"></span>처리 중</span><span class="tag">회의</span><span class="cost num">~$0.03</span></div></div>
+      <div class="lcard" onclick="go('detail')"><div class="tt">250912 IBM</div><div class="mt">양자 SW 스택 로드맵 · 5명</div><div class="rowb"><span class="st ok"><span class="d"></span>완료</span><span class="tag">회의</span><span class="cost num">$0.31 · 8/3</span></div></div>
+      <div class="lcard"><div class="tt">양자컴퓨팅SG 스터디그룹</div><div class="mt">세미나 · 8명</div><div class="rowb"><span class="st ok"><span class="d"></span>완료</span><span class="tag">세미나</span><span class="cost num">$0.54 · 7/15</span></div></div>
+      <div class="lcard err"><div class="tt">250709 양자-메가존 설명회</div><div class="mt">업로드 · m4a</div><div class="rowb"><span class="st err">✕ STT 실패</span><button class="btn ghost" style="margin-left:auto;color:var(--accent);padding:4px 8px">↻ 재시도</button></div></div>
+    </div>
+  </section>
+
+  <!-- 회의 상세 -->
+  <section class="scr" id="m-detail">
+    <div class="appbar"><button class="ic" onclick="go('library')">‹</button><div><h2 style="font-size:16px">250912 IBM</h2><div class="sub">회의 · 완료 · 41:20</div></div><div class="spacer"></div><button class="ic">⋯</button></div>
+    <div class="body" style="padding-bottom:150px">
+      <div class="dtabs"><button class="on">회의록</button><button>요약</button><button>사실확인</button><button>스크립트</button><button>액션</button><button>그래프</button></div>
+      <div class="doc">
+        <h3>1. 회의 개요</h3><p>IBM 파트너십 킥오프. 양자 SW 스택 로드맵과 큐비트 라우팅 협업 범위를 검토했다.</p>
+        <h3>2. 주요 논의</h3><ul><li>큐비트 4방식(초전도·이온트랩·광자·중성원자) 트레이드오프.</li><li>초전도(IBM) 우선 — 근거 <span class="wl">[[회사_파트너_위키]]</span>.</li></ul>
+        <h3>3. 결정</h3><ul><li>Q3 내 초전도 우선 로드맵 확정.</li></ul>
+        <h3>4. 액션</h3><div class="chk"><input type="checkbox"><span>Pozzi 2020 PoC 재현 — 심아름, ~8/20</span></div><div class="chk"><input type="checkbox" checked><span>IBM NDA 검토 — 완료</span></div>
+      </div>
+    </div>
+    <div class="sheetbar" onclick="sheet('sheet-d',true)">📎 관련 노트 5<span class="spacer"></span>▲</div>
+    <div class="sheet" id="sheet-d">
+      <div class="grip" onclick="sheet('sheet-d',false)"></div>
+      <div class="sh"><button class="on">참조된 관련 노트 5</button></div>
+      <div class="sb">
+        <div class="note"><div class="h">📄 <span class="wl">회사_파트너_위키</span><span class="src num">0.81</span></div><div class="ev">IBM·Qunova·Classiq 파트너 현황.</div></div>
+        <div class="note"><div class="h">🎓 <span class="wl">Pozzi 2020 RL큐비트라우팅</span><span class="src num">0.60</span></div></div>
+        <div class="note"><div class="h">📄 <span class="wl">03_QML_관측량이론</span><span class="src num">0.53</span></div></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- 녹음 -->
+  <section class="scr" id="m-recording">
+    <div class="appbar"><button class="ic" onclick="go('library')">‹</button><h2 style="font-size:16px">녹음</h2><div class="spacer"></div></div>
+    <div class="body" style="padding-bottom:230px">
+      <div class="rechead"><span class="live"><span class="d"></span>녹음 중</span><span class="t num">02:17</span></div>
+      <div style="display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap"><span class="tag">영어→한국어</span><span class="tag">회의실 마이크</span><span class="tag num">~$0.027</span></div>
+      <div class="ln"><div class="sp">화자 1</div><div class="o">The AI race in Korea has begun.</div><div class="e">한국에서 AI 경쟁이 시작됐습니다.</div></div>
+      <div class="ln"><div class="sp">화자 2</div><div class="o">Which technologies are in use now?</div><div class="e">지금 어떤 기술들이 쓰이나요?</div></div>
+      <div class="ln"><div class="sp">화자 1</div><div class="o">Superconducting, trapped-ion, photonic, neutral-atom.</div><div class="e">초전도·이온트랩·광자·중성원자.</div></div>
+      <div class="ln prov"><div class="sp">…</div><div class="o">Meanwhile SpaceX Q2 revenue…</div><div class="e">번역 중…</div></div>
+    </div>
+    <div class="sheetbar" onclick="sheet('sheet-r',true)"><span class="pin">🔴 확인 필요 1</span> · 관련 노트 3<span class="spacer"></span>▲</div>
+    <div class="sheet" id="sheet-r">
+      <div class="grip" onclick="sheet('sheet-r',false)"></div>
+      <div class="sh"><button class="on" onclick="stab(this,0)">관련 노트 3</button><button onclick="stab(this,1)">진행 도우미 2</button></div>
+      <div class="sb" id="sb0">
+        <div class="note"><div class="h">📄 <span class="wl">[[03_QML_관측량이론]]</span><span class="src">노트</span></div><div class="ev">“큐비트는 블로흐 구 위의 점…”</div></div>
+        <div class="note"><div class="h">🎓 <span class="wl">[[Pozzi 2020 RL큐비트라우팅]]</span><span class="src">논문</span></div></div>
+        <div class="note"><div class="h">🌐 <span class="wl">중성원자 큐비트 확장성</span><span class="src">웹</span></div></div>
+      </div>
+      <div class="sb" id="sb1" style="display:none">
+        <div style="font-size:11px;font-weight:700;color:var(--rec);margin-bottom:6px">🔴 확인 필요 1</div>
+        <div class="pchip pin"><span>🔍</span><span class="pl red">팩트체커</span><span class="rk">지적</span><span class="one">SpaceX 78억 — 주제 무관, 미검증</span></div>
+        <div style="font-size:11px;font-weight:700;color:var(--ink-3);margin:8px 0 6px">제안</div>
+        <div class="pchip" style="border-left-color:var(--proc)"><span>🧭</span><span class="pl">도메인 전문가</span><span class="one">로드맵 우선 방식 결정 필요</span></div>
+        <div style="display:flex;gap:6px;margin-top:8px"><button class="btn" style="flex:1;padding:8px">지금 점검 1</button><button class="btn" style="flex:1;padding:8px">이번 회의 끔</button></div>
+      </div>
+    </div>
+    <div style="position:absolute;left:12px;right:12px;bottom:12px;display:flex;gap:8px;z-index:9"><button class="btn" style="flex:1">⏸</button><button class="btn danger" style="flex:2" onclick="go('detail')">■ 정지 &amp; 생성</button></div>
+  </section>
+
+  <!-- 지식 -->
+  <section class="scr" id="m-knowledge">
+    <div class="appbar"><h2>지식</h2><div class="spacer"></div></div>
+    <div class="body">
+      <div class="seg"><button class="on" onclick="kseg(this,0)">질문</button><button onclick="kseg(this,1)">그래프</button></div>
+      <div id="mk0">
+        <div class="qa"><div class="q">큐비트랑 비트의 차이가 뭐야</div><div class="a"><p>큐비트는 중첩(α|0⟩+β|1⟩)을 표현하는 정보 단위로 블로흐 구 위의 점으로 나타냅니다. 비트는 0/1 확정값만 가집니다.</p><div style="font-size:10.5px;color:var(--ink-3);font-weight:700;margin:6px 0 4px">컨텍스트 노트 4</div><div class="ctx"><span class="ti">08_얽힘_심화노트</span><span class="sc">0.78</span></div><div class="ctx"><span class="ti">03_QML_관측량이론</span><span class="sc">0.53</span></div></div></div>
+        <input class="input" placeholder="노트 기록으로 무엇이든 물어보세요">
+      </div>
+      <div id="mk1" style="display:none;text-align:center;color:var(--ink-3);padding-top:30px">
+        <svg width="200" height="150" viewBox="0 0 200 150" style="margin:0 auto"><g stroke="var(--line-strong)"><line x1="100" y1="75" x2="45" y2="35"/><line x1="100" y1="75" x2="155" y2="40"/><line x1="100" y1="75" x2="60" y2="120"/></g><circle cx="100" cy="75" r="24" fill="var(--accent-weak)" stroke="var(--accent)" stroke-width="2"/><text x="100" y="79" font-size="11" text-anchor="middle" fill="var(--accent)">IBM</text><circle cx="45" cy="35" r="16" fill="var(--surface)" stroke="var(--line-strong)"/><text x="45" y="38" font-size="8" text-anchor="middle" fill="var(--ink)">Qunova</text><circle cx="155" cy="40" r="16" fill="var(--surface)" stroke="var(--line-strong)"/><text x="155" y="43" font-size="8" text-anchor="middle" fill="var(--ink)">초전도</text><circle cx="60" cy="120" r="16" fill="var(--surface)" stroke="var(--line-strong)"/><text x="60" y="123" font-size="8" text-anchor="middle" fill="var(--ink)">심아름</text></svg>
+        <p style="font-size:12px;margin-top:8px">노드를 눌러 연결을 탐색하세요</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- 더보기/설정 -->
+  <section class="scr" id="m-more">
+    <div class="appbar"><h2>더보기</h2><div class="spacer"></div></div>
+    <div class="body">
+      <div class="pccard"><div class="h">🖥 PC 서버 연결 — 단독 모드</div><p>PC의 회의록 앱에 연결하면 노트 검색·페르소나·회의록 생성을 함께 씁니다. 미연결 시 OpenAI 직접 전사만 됩니다.</p><button class="btn pri" style="margin-top:10px;width:100%">PC 주소 입력</button></div>
+      <div class="listitem" onclick="go('assist')">준비 · 비서<span class="chev">›</span></div>
+      <div class="listitem">설정<span class="chev">›</span></div>
+      <div class="listitem" onclick="dk()">다크 모드<span class="chev" id="dkstate">끔 ›</span></div>
+      <div class="listitem">도움말<span class="chev">›</span></div>
+    </div>
+  </section>
+
+  <!-- 준비·비서(간략) -->
+  <section class="scr" id="m-assist">
+    <div class="appbar"><button class="ic" onclick="go('more')">‹</button><h2 style="font-size:16px">준비 · 비서</h2></div>
+    <div class="body">
+      <div class="seg"><button class="on">회의 준비</button><button>비서</button></div>
+      <input class="input" value="IBM 파트너십 킥오프" style="margin-bottom:10px"><button class="btn pri block">브리핑 생성</button>
+      <div style="margin-top:12px;display:flex;gap:6px;flex-wrap:wrap"><span class="tag">관련 노트 5</span><span class="tag">미완료 액션 3</span></div>
+    </div>
+  </section>
+
+  <!-- 새 회의 시트 (FAB) -->
+  <div class="sheet" id="sheet-new">
+    <div class="grip" onclick="sheet('sheet-new',false)"></div>
+    <div style="padding:6px 16px 14px"><h3 style="font-size:16px;font-weight:700;margin-bottom:12px">새 회의</h3>
+      <div class="seg"><button class="on" onclick="nseg(this,0)">실시간 녹음</button><button onclick="nseg(this,1)">업로드</button><button onclick="nseg(this,2)">텍스트</button></div>
+      <div id="ns0"><input class="input" placeholder="세션 제목" style="margin-bottom:10px"><select class="input" style="margin-bottom:14px"><option>회의실 마이크</option><option>내 마이크만</option></select><button class="btn danger block" onclick="sheet('sheet-new',false);go('recording')">● 녹음 시작</button></div>
+      <div id="ns1" style="display:none"><div style="border:1px dashed var(--line-strong);border-radius:var(--r);padding:28px;text-align:center;color:var(--ink-3);margin-bottom:14px">오디오 파일 선택<br><small>mp3·m4a·wav·mp4</small></div><button class="btn pri block">분석 &amp; 생성</button></div>
+      <div id="ns2" style="display:none"><textarea class="input" style="height:120px;margin-bottom:14px" placeholder="회의 메모 붙여넣기"></textarea><button class="btn pri block">분석 &amp; 생성</button></div>
+    </div>
+  </div>
+
+  <!-- tab bar -->
+  <div class="tabbar">
+    <button class="tab on" data-t="library" onclick="go('library')"><svg viewBox="0 0 24 24"><path d="M3 6h18M3 12h18M3 18h18"/></svg>라이브러리</button>
+    <button class="tab" data-t="knowledge" onclick="go('knowledge')"><svg viewBox="0 0 24 24"><circle cx="6" cy="6" r="3"/><circle cx="18" cy="9" r="3"/><circle cx="10" cy="18" r="3"/><path d="M8.5 7.5 15 8M8 9l1.5 6"/></svg>지식</button>
+    <div class="fabwrap"><button class="fab" onclick="sheet('sheet-new',true)">＋</button></div>
+    <button class="tab" data-t="assist" onclick="go('assist')"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>준비</button>
+    <button class="tab" data-t="more" onclick="go('more')"><svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.6"/><circle cx="12" cy="12" r="1.6"/><circle cx="19" cy="12" r="1.6"/></svg>더보기</button>
+  </div>
+  <div class="homebar"></div>
+</div>
+
+<p class="hintlbl">iOS(Capacitor) 기준 — 노치·safe-area·하단 홈바 반영. 우측 인스펙터는 <b>바텀시트</b>로, 테이블은 <b>카드 리스트</b>로, 새 회의는 <b>중앙 FAB → 시트</b>로. StatusBar·배경색은 테마 따라 전환.</p>
+
+<script>
+const TABS={library:0,knowledge:1,assist:3,more:4};
+function go(v){document.querySelectorAll('.scr').forEach(s=>s.classList.remove('on'));
+  const id='m-'+(v==='search'?'library':v);const el=document.getElementById(id);if(el)el.classList.add('on');
+  document.querySelectorAll('.tabbar .tab').forEach(t=>t.classList.remove('on'));
+  const base=(v==='detail'||v==='recording')?'library':v;const tb=document.querySelector('.tabbar .tab[data-t="'+base+'"]');if(tb)tb.classList.add('on');
+  document.querySelectorAll('.sheet').forEach(s=>s.classList.remove('on'));}
+function sheet(id,open){document.getElementById(id).classList.toggle('on',open);}
+function stab(b,i){document.querySelectorAll('#sheet-r .sh button').forEach(x=>x.classList.remove('on'));b.classList.add('on');document.getElementById('sb0').style.display=i===0?'block':'none';document.getElementById('sb1').style.display=i===1?'block':'none';}
+function kseg(b,i){b.parentElement.querySelectorAll('button').forEach(x=>x.classList.remove('on'));b.classList.add('on');document.getElementById('mk0').style.display=i===0?'block':'none';document.getElementById('mk1').style.display=i===1?'block':'none';}
+function nseg(b,i){b.parentElement.querySelectorAll('button').forEach(x=>x.classList.remove('on'));b.classList.add('on');for(let k=0;k<3;k++)document.getElementById('ns'+k).style.display=k===i?'block':'none';}
+function dk(btn){const h=document.documentElement;const d=h.getAttribute('data-theme')==='dark';h.setAttribute('data-theme',d?'light':'dark');const s=document.getElementById('dkstate');if(s)s.textContent=(d?'끔':'켬')+' ›';}
+</script>
+</body>
+</html>
